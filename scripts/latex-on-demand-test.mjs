@@ -49,7 +49,8 @@ const frameEval = (expression) => frame.evaluate(expression);
 
 async function enableAndCompile() {
   await evaluate(`(async () => {
-    if (await window.__TAURI_INTERNALS__.invoke("latex_status")) return "already on";
+    const status = await window.__TAURI_INTERNALS__.invoke("latex_engine_status");
+    if (status.bundledEnabled && status.previewInstalled) return "already on";
     const open = document.getElementById("btn-prefs");
     open?.click();
     await new Promise((r) => setTimeout(r, 500));

@@ -1,0 +1,57 @@
+import { Token } from './latex-tokenizer.js';
+import { FileSymbols } from './types.js';
+/** Shared classification for source consumers; argument-taking macros need no fi. */
+export declare function isConditionalOpener(name: string): boolean;
+/**
+ * Spans of source that are not interpretable LaTeX code: comments, inline
+ * `\verb`, verbatim environment bodies, and false conditional branches. Other
+ * consumers (e.g. the linter) use these to skip non-code regions.
+ */
+export declare function maskSpans(content: string): Array<[number, number]>;
+/** Like {@link maskSpans} but reuses already-computed tokens — so a caller that already
+ *  tokenized (e.g. the linter) doesn't tokenize the same source a second time. */
+export declare function maskSpansFromTokens(tokens: Token[]): Array<[number, number]>;
+export interface UserMacroDefinition {
+    argCount: number;
+    body: string;
+    /** Default value of the leading optional argument (`\newcommand{\m}[n][default]{…}`),
+     *  or undefined when the macro has no optional argument. When set, `#1` is optional. */
+    optional?: string | undefined;
+}
+export interface UserMacroArgument {
+    index: number;
+    kind: 'required' | 'optional';
+    value: string;
+    inputStart: number;
+    inputEnd: number;
+}
+/** Reuses the owning token stream to ignore comments and verbatim text. */
+export declare function macroDefinitionSpansFromTokens(content: string, tokens: readonly Token[]): Array<[number, number]>;
+export interface UserMacroExpansion {
+    name: string;
+    inputStart: number;
+    inputEnd: number;
+    surface: string;
+    arguments: readonly UserMacroArgument[];
+}
+export declare function collectUserMacroDefinitions(sources: readonly string[]): ReadonlyMap<string, UserMacroDefinition>;
+/**
+ * Expand every concrete user-macro invocation in a document.
+ *
+ * This is the structural handoff used by semantic consumers. It deliberately
+ * returns source ranges alongside generated text: diagnostics and edits remain
+ * anchored to the invocation, never to synthetic expansion text.
+ */
+export declare function expandUserMacroCalls(source: string, projectDefinitions?: ReadonlyMap<string, UserMacroDefinition>): readonly UserMacroExpansion[];
+/**
+ * Parse a LaTeX file into a flat {@link FileSymbols} record.
+ *
+ * Tokenizes the source, masks regions that must not be interpreted (comments,
+ * inline `\verb`, verbatim environments, false `\iffalse`/`\iftrue` branches),
+ * then extracts labels, refs, citations, sections, command/environment
+ * definitions, includes, packages, and bib items over the whole (masked) text —
+ * so multi-line arguments work and commented/verbatim content is ignored.
+ * User macros that wrap `\label`/`\ref`/`\cite` are shallow-expanded so the
+ * symbols they generate are indexed at their call sites.
+ */
+export declare function parseLatexFile(content: string, filePath: string, tokens?: readonly Token[]): FileSymbols;

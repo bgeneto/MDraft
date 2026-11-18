@@ -2,7 +2,7 @@
 //
 // Serves directories under URL prefixes with the object layout and headers the
 // bucket will have, so the application differs between this server and
-// production by one string: `texpresso.origin` in src-tauri/latex-engine.json.
+// production by one string: `texpresso.origin` in src-tauri/texpresso.json.
 //
 //   node scripts/texpresso-origin-server.mjs \
 //     --mount /texlive/tt2026-2026-11/=<mirror> \

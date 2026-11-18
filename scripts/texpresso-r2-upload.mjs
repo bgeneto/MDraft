@@ -22,7 +22,7 @@
 //     [--engine <dir with ocaml.js, *.wasm, vendor/…>] \
 //     [--snapshot tt2026-2026-11] [--release release-0-133-g454f1bc] \
 //     [--concurrency 32] [--dry-run] [--verify] [--force] [--digests-only]
-//     [--archives-only]
+//     [--archives-only] [--phitex <archive>]
 //
 //   --dry-run      list what would be uploaded; needs no credentials
 //   --verify       upload nothing; compare the bucket with the local files
@@ -31,6 +31,8 @@
 //                  bucket built before the table existed is missing)
 //   --archives-only upload just the pinned install archives found under the
 //                  `install/` folder of --engine and/or --data
+//   --phitex       upload one pinned PhiTeX archive to phitex/<archive.path>;
+//                  hashes it against src-tauri/phitex.json before sending
 //   --self-test    check the request signer against AWS's published example
 //
 // Resumable: it lists the bucket first and skips keys already there with the
@@ -124,6 +126,7 @@ const options = {
   bucket: null,
   data: null,
   engine: null,
+  phitex: null,
   snapshot: "tt2026-2026-11",
   release: "release-0-133-g454f1bc",
   concurrency: 32,
@@ -139,8 +142,8 @@ for (let i = 0; i < args.length; i += 1) {
 }
 if (flags.has("self-test")) selfTest();
 if (!options.bucket) throw new Error("--bucket is required.");
-if (!options.data && !options.engine)
-  throw new Error("Give --data <mirror>, --engine <dir>, or both.");
+if (!options.data && !options.engine && !options.phitex)
+  throw new Error("Give --data <mirror>, --engine <dir>, or --phitex <archive>.");
 const concurrency = Math.max(1, Number(options.concurrency) || 32);
 const home = (value) =>
   value?.startsWith("~/") ? path.join(process.env.HOME ?? "", value.slice(2)) : value;
@@ -207,6 +210,16 @@ async function archiveItems(pins) {
 /** What to upload: { key, file, sha256? } for every object. */
 async function plan() {
   const items = [];
+  if (options.phitex) {
+    const archive = path.resolve(home(options.phitex));
+    const pins = JSON.parse(
+      await readFile(new URL("../src-tauri/phitex.json", import.meta.url), "utf8"),
+    );
+    const bytes = await readFile(archive);
+    if (bytes.length !== pins.archive.bytes || sha256(bytes) !== pins.archive.sha256)
+      throw new Error(`${archive} does not match its pin in src-tauri/phitex.json.`);
+    return [{ key: `phitex/${pins.archive.path}`, file: archive, sha256: pins.archive.sha256 }];
+  }
   if (flags.has("archives-only")) {
     if (!dataRoot && !engineRoot) throw new Error("--archives-only needs --engine and/or --data.");
     const pins = JSON.parse(
@@ -371,6 +384,9 @@ async function listBucket(prefix) {
 }
 
 const megabytes = (bytes) => (bytes / 1048576).toFixed(1) + " MB";
+/** A PhiTeX object is one key under phitex/; the other layouts are two levels. */
+const prefixOf = (key) =>
+  key.startsWith("phitex/") ? "phitex/" : key.split("/").slice(0, 2).join("/") + "/";
 
 const items = await plan();
 const sizes = new Map();
@@ -389,7 +405,7 @@ let total = 0;
   );
 }
 console.log(`local: ${items.length} objects, ${megabytes(total)}`);
-for (const prefix of new Set(items.map((item) => item.key.split("/").slice(0, 2).join("/") + "/")))
+for (const prefix of new Set(items.map((item) => prefixOf(item.key))))
   console.log(`  ${prefix}  ${items.filter((item) => item.key.startsWith(prefix)).length} objects`);
 if (dry) {
   for (const item of items.slice(0, 5)) console.log(`  e.g. ${item.key}`);
@@ -398,7 +414,7 @@ if (dry) {
 }
 
 const remote = new Map();
-for (const prefix of new Set(items.map((item) => item.key.split("/").slice(0, 2).join("/") + "/")))
+for (const prefix of new Set(items.map((item) => prefixOf(item.key))))
   for (const [key, size] of await listBucket(prefix)) remote.set(key, size);
 
 if (flags.has("verify")) {
@@ -410,7 +426,7 @@ if (flags.has("verify")) {
   // A digests-only or archives-only run touches a few keys; the rest of the
   // prefix is expected.
   const extra =
-    flags.has("digests-only") || flags.has("archives-only")
+    flags.has("digests-only") || flags.has("archives-only") || options.phitex
       ? []
       : [...remote.keys()].filter((key) => !wanted.has(key));
   console.log(`bucket: ${remote.size} objects under these prefixes`);

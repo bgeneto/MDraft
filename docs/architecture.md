@@ -21,8 +21,8 @@ are committed only after confirming that they still own the current view.
 While the pane shows nothing of the active document, a centred waiting surface
 names the file and what is being done; once something readable is on screen,
 progress belongs to the compiled toolbar. Ownership is not the test for
-"something readable": the TeXpresso frame owns the pane before it has drawn a
-page, so the surface stays over it until the first page.
+"something readable": the LaTeX preview frame owns the pane before it has drawn
+a page, so the surface stays over it until the first page.
 
 ## Rendering and correspondence
 
@@ -42,14 +42,17 @@ selection, zoom and viewport ownership must be coordinated; PDF text positions
 are bound to the same source revision as the compiled output.
 
 LaTeX projects resolve a root, includes, bibliography and local libraries through
-Rust validation. Engine selection supports the configured browser engine and
-explicitly selected native distributions. TeXpresso runs in a separate frame
-served by Rust from the application origin; downloaded engine bytes are pinned
-by SHA-256. A bounded project manifest lets the engine fetch a file it actually
-opens through a per-frame capability on the same origin, without predicting
-every package's file names; native builds copy that manifest into a session
-workspace, reuse its auxiliary files and caches, and decide another pass or a
-bibliography tool from the generated file state. Project files are copied, never
+Rust validation. Engine selection supports the configured browser capability and
+explicitly selected native distributions: TeXpresso where JSPI exists, and the
+single-threaded PhiTeX compatibility engine on Linux WebKitGTK without it. Both
+run in a separate frame served by Rust from the application origin; downloaded
+engine bytes are pinned by SHA-256, and PhiTeX's frame keeps `connect-src
+'self'` while Rust fetches its package packs. The TeXpresso frame's bounded
+project manifest lets the engine fetch a file it actually opens through a
+per-frame capability on the same origin, without predicting every package's file
+names; PhiTeX receives the bounded project snapshot directly. Native builds copy
+that manifest into a session workspace, reuse its auxiliary files and caches,
+and decide another pass or a bibliography tool from the generated file state. Project files are copied, never
 hard-linked. Shell escape and project executables remain disabled. Native tools
 are external programs running with the user's permissions.
 

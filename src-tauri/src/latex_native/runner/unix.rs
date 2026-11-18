@@ -4,11 +4,10 @@
 //! Cancel reaches the engine and every helper it started. `setsid` through
 //! `process_group(0)` gives the tree one group, and a negative `kill` signals it.
 
-use std::ffi::OsString;
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};

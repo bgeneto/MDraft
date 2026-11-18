@@ -1,13 +1,15 @@
 {
   "name": "mdraft",
   "private": true,
-  "version": "0.9.4",
+  "version": "0.9.5",
   "type": "module",
   "description": "A native Markdown, AsciiDoc, Typst, LaTeX and HTML editor with live preview and an optional AI assistant",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:phitex": "node scripts/build-phitex-frame.mjs",
+    "phitex:frame": "node scripts/phitex-frame-test.mjs",
     "format": "prettier --write \"src/**/*.{ts,js,css}\" \"site/**/*.{html,css,js}\" \"scripts/**/*.mjs\" \"*.{json,ts,html}\"",
     "format:check": "prettier --check \"src/**/*.{ts,js,css}\" \"site/**/*.{html,css,js}\" \"scripts/**/*.mjs\" \"*.{json,ts,html}\"",
     "format:staged": "node scripts/format-staged.mjs",
@@ -44,11 +46,9 @@
     "pdf:map:perf": "node scripts/pdf-map-performance.mjs",
     "pdf:map:webview": "node scripts/pdf-webview-performance.mjs",
     "test:harness:unit": "node scripts/test-harness-ownership-unit.mjs",
-    "latex:sdk:unit": "node scripts/latex-sdk-unit.mjs",
     "texpresso:unit": "node scripts/texpresso-unit.mjs",
     "latex:texmf:unit": "node scripts/latex-texmf-unit.mjs",
     "latex:correspondence:unit": "node scripts/latex-correspondence-unit.mjs",
-    "latex:preview": "node scripts/latex-preview-test.mjs",
     "latex:perf": "node scripts/latex-performance-test.mjs",
     "latex:perf:baseline": "node scripts/latex-perf-baseline.mjs",
     "latex:perf:book": "node scripts/latex-perf-book.mjs",
@@ -76,7 +76,6 @@
     "tabs:restore:unit": "node scripts/tabs-restore-unit.mjs",
     "typst:map:unit": "node scripts/typst-page-map-unit.mjs",
     "latex:sync:unit": "node scripts/latex-sync-unit.mjs",
-    "latex:project": "node scripts/latex-project-test.mjs",
     "latex:native": "node scripts/latex-native-test.mjs",
     "html:map:unit": "node scripts/html-source-map-unit.mjs",
     "block:map:unit": "node scripts/block-map-unit.mjs",
@@ -164,13 +163,7 @@
     "parse5": "8.1.1",
     "pdfjs-dist": "6.4.299",
     "prettier": "3.10.0",
-    "tex-fmt": "0.5.7-npm.1",
-    "wasmtex": "https://github.com/corca-ai/wasmtex/releases/download/snapshot-f85a1d3cec1c0598/wasmtex-optional-monaco-d6a39bc.tgz"
-  },
-  "overrides": {
-    "wasmtex": {
-      "pdfjs-dist": "$pdfjs-dist"
-    }
+    "tex-fmt": "0.5.7-npm.1"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

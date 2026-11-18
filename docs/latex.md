@@ -3,44 +3,36 @@
 MDraft edits `.tex` documents as a first-class language: syntax colouring, `%`
 comments, an outline read from the sectioning commands, LaTeX-aware spelling
 skips, `\includegraphics` on image paste, and the compiled PDF in the preview.
-Compilation runs either in the **bundled TeX distribution** (XeLaTeX, or LuaLaTeX
-on request, compiled to WebAssembly), which needs no TeX installation, or in a TeX distribution the reader has already installed and
-explicitly selected.
+Compilation runs either in the **bundled TeX distribution** (a WebAssembly
+preview frame), which needs no TeX installation, or in a TeX distribution the
+reader has already installed and explicitly selected.
+
+The bundled preview has **two engines behind one frame protocol**:
+
+- **TeXpresso** on Windows, macOS, and Linux with WebKitGTK 2.54 or newer. It
+  is the incremental JSPI engine, with LuaLaTeX and XeLaTeX.
+- **PhiTeX** on Linux webviews that lack JSPI, including Ubuntu 26.04 LTS and
+  26.10 with WebKitGTK 2.52.6. It is a single-threaded WebAssembly incremental
+  engine and compiles **XeLaTeX** documents. LuaLaTeX is the one named gap.
+
+The application chooses by webview capability, never by a preference, and the
+reader sees the same toolbar, status, page gestures, source mapping, links,
+logs and PDF export either way. The only product difference is the LuaLaTeX
+sentence: a Lua document in the compatibility preview says so and offers the
+installed-TeX route.
 
 LaTeX is **opt-in**. Open a saved `.tex` file and choose **Enable bundled TeX** in
 the preview, or tick the switch in *Preferences › LaTeX*. That action downloads
-about 25 MB: the TeX Live 2026 engine files and the XeLaTeX and LuaLaTeX format
-files (about 80 MB unpacked), in two compressed archives. Each file is verified
-against its own pinned SHA-256 digest before it is kept. If an archive cannot be
-used, the same files are fetched one by one instead, a few at a time. The TeX
-packages and fonts a document needs are fetched on demand from a
-pinned TeX Live 2026 package snapshot and cached locally, in a folder named for
-that snapshot. Nothing about your document or bibliography leaves this device.
+about 15 MB for TeXpresso or 33 MB for PhiTeX: the pinned engine, its formats,
+the TeX Live 2026 kernel, fonts and the package index. Every file is verified
+against its pinned SHA-256 before it is kept. The TeX packages and fonts a
+document needs are fetched on demand from the pinned origin and cached locally.
+Nothing about your document or bibliography leaves this device.
 
-An engine installed by an earlier MDraft (TeX Live 2025) is not replaced
-automatically. The preview and *Preferences › LaTeX* report it as missing or out
-of date; press **Retry setup**, or turn the switch off and on, to download the
-2026 files. Only the files that changed are fetched. Packages cached for 2025 are
-never read by the 2026 engine. They still count toward the cache limit, are
-evicted first, and are removed by *Clear package cache*.
-
-**Switching the bundled engine's TeX Live year (developers).** The year is one line,
-`"active"`, in `src-tauri/latex-engine.json`, which holds a profile for 2025 and for
-2026: the engine release, the package-mirror revision and the SHA-256 and size of each
-file. Rust and TypeScript both read it, and everything else is derived from it: the
-asset URL, the mirror, the download size in the messages, and the shim folder
-`public/wasmtex/<year>/`, whose worker files are identical in every year and read their
-year from their own URL. After changing the line, `npm run tauri dev` (or a build)
-picks it up; the engine then reads as out of date until you press **Retry setup**,
-which fetches only the files whose digest differs. Each year keeps its own package
-cache, so switching back finds the earlier one warm. The 2025 profile is the exact
-pin MDraft shipped before TeX Live 2026, not a newer 2025 snapshot. To add a year,
-add a profile and a `public/wasmtex/<year>/` folder with copies of the two shims;
-`cargo test --lib latex::` and `node scripts/latex-sdk-unit.mjs` fail if either is
-missing, if a profile ships a different set of files, or if a derived value disagrees
-with its year. The README, the site and this page describe the shipped default
-(2026, about 20 MiB).
-
+An engine installed by an earlier MDraft is reported as missing or out of date;
+press **Retry setup**, or turn the switch off and on, to download the files the
+selected engine needs. The package cache is shared by both engines and is never
+read by a different engine revision.
 An installed distribution is a second, independent choice. It is off by default
 and never chosen automatically, because it runs a program outside the bundled
 engine's WebAssembly environment. *Preferences › LaTeX* finds one (metadata
@@ -177,9 +169,9 @@ while the distribution's own packages are untouched.
 ## Choosing the engine
 
 The bundled distribution compiles with **XeLaTeX** unless a project asks for
-another engine; XeLaTeX starts faster and its format is smaller. It can also
-compile with **LuaLaTeX**. Settings from before XeLaTeX became the default
-keep LuaLaTeX. The first rule that applies decides:
+another engine; XeLaTeX starts faster and its format is smaller. TeXpresso can
+also compile with **LuaLaTeX**; the PhiTeX compatibility preview cannot. The
+first rule that applies decides:
 
 1. A magic comment in the main file, such as `% !TeX program = pdflatex`.
    TeXstudio and LaTeX Workshop read the same line.
@@ -193,23 +185,17 @@ keep LuaLaTeX. The first rule that applies decides:
    - anything else → XeLaTeX.
 
    A document that asks for pdfLaTeX compiles with XeLaTeX, and the chip says
-   so: the bundled preview has no pdfTeX.
+   so: neither bundled preview has pdfTeX. A document that asks for LuaLaTeX on
+   a compatibility-preview host says that it needs an installed distribution.
 
 The status-bar chip always names the engine in use and, in its tooltip, why.
 When a magic comment decided, the chip offers no choice; if the engine it
 names has not been downloaded yet, the chip offers that download.
 
-XeLaTeX and LuaLaTeX arrive together with the bundled TeX download, so
-switching between them downloads nothing more. MDraft never compiles with an
-engine other than the one shown. If the document needs something the chosen
-engine lacks, such as Lua code under XeLaTeX, the status line says so.
-
-**TikZ figures.** A document that calls `\tikzexternalize` has its figures
-rendered once and reused while you edit the text. To get the same for a
-document that loads TikZ without calling it, add
-`% !WASMTEX tikz-externalization = auto` near the top. Each text edit is then
-about 0.1 s faster. The cost is a slower first compile and several hundred MB
-more memory, which is why this is not the default.
+TeXpresso ships XeLaTeX and LuaLaTeX together; the PhiTeX download ships
+XeLaTeX only. MDraft never compiles with an engine other than the one shown. If
+the document needs something the chosen engine lacks, such as Lua code under
+XeLaTeX or LuaLaTeX in the compatibility preview, the status line says so.
 
 ## Installed TeX distributions
 
@@ -348,7 +334,7 @@ How each engine sees them — you set no `TEXMFHOME` or `TEXINPUTS` yourself:
 
 | Engine | How the folders are passed | Verified |
 | --- | --- | --- |
-| Bundled TeX (TeXpresso preview) | Copied into the preview's project under a reserved `.mdraft-texmf` folder, with a manifest of the names each file answers; the preview resolves a name after the project and before TeX Live, case-insensitively as a fallback | classes and their packages (LuaLaTeX); the preview runs no BibTeX |
+| Bundled TeX (preview frame) | Copied into the preview's project under a reserved `.mdraft-texmf` folder, with a manifest of the names each file answers; the frame resolves a name after the project and before TeX Live, case-insensitively as a fallback | classes and their packages for the selected engine; TeXpresso runs no BibTeX, PhiTeX runs BibTeX inside the build |
 | TeX Live (Linux, macOS, Windows, WSL) | A private `TEXMFHOME` list in the job | TeX Live 2025: LuaLaTeX, pdfLaTeX; BibTeX |
 | MiKTeX | Private `TEXINPUTS`/`BSTINPUTS`/`BIBINPUTS`/`LUAINPUTS`/font paths in the job | MiKTeX 23.1: LuaLaTeX, pdfLaTeX, XeLaTeX; BibTeX |
 
@@ -359,10 +345,10 @@ unreadable or too large stops the compile with a message; turn it off to
 compile without it. Limits: 8 folders, 4,096 files and 64 MiB together, 32 MiB
 per file, 16 levels.
 
-The bundled preview runs no BibTeX, so a library `.bst` or `.bib` is not used
-there; an installed distribution runs BibTeX with them. The disabled WasmTex
-backend found them when the document or a class named them literally
-(`\bibliographystyle{house}`).
+TeXpresso's preview runs no BibTeX, so a library `.bst` or `.bib` is not used
+there; PhiTeX runs BibTeX inside its build, and an installed distribution runs
+BibTeX with them. A library `.bib` or `.bst` is found when the document or a
+class names it literally (`\bibliographystyle{house}`).
 
 Changing the list, or editing a library file in another program, marks the
 preview out of date when MDraft regains focus; auto-compile rebuilds, manual
@@ -536,17 +522,18 @@ more than the ceiling, the preview says so and suggests raising it.
 
 ### Missing fonts and runaway downloads
 
-With LuaLaTeX, a font that cannot be found used to make luaotfload rebuild its
-font index by reading every font in TeX Live: about 3,300 downloads and 1 GB,
-repeated on every compile. The preview turns that rebuild off (it adds a
-`luaotfload.conf` with `update-live = false` to its own copy of the project,
+On the **TeXpresso path**, a missing LuaLaTeX font used to make luaotfload
+rebuild its font index by reading every font in TeX Live: about 3,300 downloads
+and 1 GB, repeated on every compile. The preview turns that rebuild off (it adds
+a `luaotfload.conf` with `update-live = false` to its own copy of the project,
 unless the project has one), so a missing font now fails at once with
-fontspec's "cannot be found" error. Fonts that are part of TeX Live are still
+fontspec's "cannot be found" error. The PhiTeX compatibility preview has no Lua
+font loader; a missing XeLaTeX font fails at the font/package lookup. Fonts that are part of TeX Live are still
 found by family name. Fonts of your own are found by file name, from a local
 library or the project.
 
-As a backstop, the preview pauses a download that would pass 100 font files,
-1,500 files or 750 MB in one session and asks whether to continue. Continue
+On TeXpresso, as a backstop, the preview pauses a download that would pass 100
+font files, 1,500 files or 750 MB in one session and asks whether to continue. Continue
 lets it go on (and asks again only after twice as much); *Stop downloads* ends
 this preview session's downloads, and the status line says so until the
 preview restarts.
@@ -563,93 +550,96 @@ compiles with the same engine the preview uses.
 
 ## The incremental preview (developer note)
 
-The bundled preview is **TeXpresso**, an incremental engine that typesets to
-its own canvases in a frame of its own on the `mdraft-tex` scheme and reports a
-source map. Its own `xdvipdfmx` export is the authoritative PDF for Export ›
-PDF, Save PDF, Print, the menu state and the Problems list. The default is the
-constant `DEFAULT_LATEX_PREVIEW_BACKEND` in `src/latex-backend.ts` and the
-hidden `view.latexBackend.texpresso` / `.wasmtex` menu events, not a Preference.
-WasmTex is disabled, not deleted: its code and hidden tests remain, but no
-reader-facing path installs or selects it. The decisions are recorded in
-[the production ADR](architecture.md) and
-[the earlier two-backend ADR](architecture.md); the work
-is in [the plan](architecture.md).
+The bundled preview is **one frame protocol with two engines**:
 
-An acknowledgement from the frame says a change arrived, not that it was
-typeset. The bridge reports `busy` before it acknowledges and clears it at its
-canvas-based paint signal, so `TexpressoSession.exportPdf()` waits until nothing
-is unacknowledged and the frame reports idle (`whenTypeset`, bounded above the
-bridge's own compile budget). That signal can precede the final page; the
-frame's own export waits for the ongoing compile. Renders that arrive while the
-frame is busy wait in the same place, and only the latest waiter requests a PDF.
+- **TeXpresso** is the production engine on Windows, macOS and Linux with
+  WebKitGTK 2.54+. It is a JSPI build: the frame's glue wraps its asynchronous
+  imports and exports in `WebAssembly.Suspending` and `WebAssembly.promising`.
+- **PhiTeX** is the Linux compatibility engine for WebKitGTK without JSPI
+  (Ubuntu 26.04/26.10 ship 2.52.6). It runs `core1.wasm` (the single-threaded
+  `wasm32-wasip1` build) in a worker. Its host uses JSPI only when the webview
+  has it; without JSPI a build runs to its end and remains incremental.
 
-Every engine file and every TeX Live byte is pinned in
-`src-tauri/texpresso.json` and verified on download and on every serve;
-`src-tauri/src/latex_texpresso.rs` is the handler and cache. The production
-origin is `https://mdraft.webonly.app/`; `scripts/texpresso-origin-server.mjs`
-serves the reader's mirror during development, and the test runner points a
-launch at it with `MDRAFT_TEXPRESSO_ORIGIN`.
+Both engines are drawn in an iframe on `mdraft-tex://localhost`
+(`/texpresso/` or `/phitex/`) and speak the same `TexpressoSession` protocol:
+project, edits, selection, reveal, zoom, theme, export and dispose go in;
+acknowledgements, status, paint, source, links and viewport come out. The host's
+preview UI, wait surface, source gestures, export and print do not fork. The
+engine is selected by `latexPreviewBackend()` in `src/latex-backend.ts` from
+`WebAssembly.Suspending` + `promising`, the Linux user agent and the presence of
+the frame capabilities; there is no reader-facing backend control.
 
-The pinned app resolves every file the engine opens by name — the project's
-files, then the TeX Live bundle — and has no search path to configure. MDraft
-therefore serves a **patched `ocaml-worker.js`**: `scripts/texpresso-patch-worker.mjs`
-turns the release's upstream file into the pinned one. Three edits put the
-on-demand project manifest, then the local library, between the project table
-and the bundle, in both the exact and the case-insensitive lookup; a manifest
-hit is fetched through the frame's capability and inserted into the project
-table, so later lookups answer synchronously. The library index itself is
-`src/texpresso/library.ts` (TeX Live's per-engine `TEXINPUTS`/`LUAINPUTS` order,
-roots in order, project files first) and travels as `.mdraft-texmf/index.json`;
-the frame's own `worker.js` reads it and reports a library file loaded in place
-of a bundle file. A fourth edit serves the export: `xdvipdfmx` shares the
-engine's lookup but never asks for the case-insensitive one, so a picture named
-`FIGURES/x.pdf` for a folder `figures/` was drawn in the preview and missing from
-Export › PDF. When a name it asks for matches nothing exactly, the export now
-takes the engine's case-insensitive answer, as MiKTeX does on NTFS; an exact
-match still wins. A new TeXpresso release means re-anchoring the four edits in
-the patch script, regenerating the file, re-pinning it and uploading it to the
-origin. `scripts/texpresso-origin-check.mjs` proves an origin serves exactly
-the pinned engine, bundle and digest table before a release.
+**TeXpresso's** engine and TeX Live data are pinned in `src-tauri/texpresso.json`
+and served by `src-tauri/src/latex_texpresso.rs`; the production origin is
+`https://mdraft.webonly.app/`. Every file is verified on download and on every
+serve. The frame resolves every file the engine opens by name — the project's
+files, then the local library, then the TeX Live bundle — through the patched
+`ocaml-worker.js` described in the previous section. The Linux JSPI row
+(Debian 13, WebKitGTK 2.54) is the tested TeXpresso path.
 
-The preview's renderer draws PNG and JPEG images itself, but a **PDF image goes
-through PDF.js**, loaded from `vendor/pdfjs/` next to `ocaml.js`. The release
-ships only `pdf.min.mjs`. Without the worker and the `cmaps/`, `standard_fonts/`,
-`wasm/` and `iccs/` data, every PDF figure showed its file name in a frame (the
-export never did: `xdvipdfmx` reads the PDF itself). That `pdf.min.mjs` is
-byte for byte `pdfjs-dist` 6.4.299, so `scripts/texpresso-pdfjs-assets.mjs` takes
-the rest from that package and pins it. Because the install downloads every
-pinned file, upload a changed `vendor/pdfjs/` to the origin and check it before
-the pins merge. Otherwise no build can install the engine. The opt-in
-`latex-pdf-image` layer proves the figure is drawn and exported, also under
-a name in the wrong letter case.
+**PhiTeX** is pinned as one archive in `src-tauri/phitex.json`: `core1.wasm`,
+the XeLaTeX format, the TeX Live kernel files, fonts, shims, the `minted`
+Pyodide runtime and wheels, the Shelf index and release table. `src-tauri/src/latex_phitex.rs` downloads the archive once,
+verifies the whole SHA-256, extracts it under the app data directory and serves
+`/phitex/` from the same origin. The shell (`src-tauri/phitex-shell/`) is
+embedded: `index.html`, the bridge `main.js` and the single-thread
+`engine-worker.js`. The worker's Shelf host is the frame's own origin, so the
+frame policy stays `connect-src 'self'`; Rust fetches and caches the packs from
+the pinned Shelf release, and the core checks each against the release's pack
+table again. The archive's SHA-256 is the trust root.
 
-The preview has no second bundled engine to fall back to. A WebView without
-JSPI, a project with a non-UTF-8 text file, a project file inside the reserved
-`.mdraft-texmf` folder, and a frame that stops responding each stop the frame
-and name the reason in the status line; pdfLaTeX is not offered for the bundled
-preview at all. An installed TeX distribution keeps its own compiler and keeps
-pdfLaTeX.
+**Selection.** `latexPreviewBackend()` returns `texpresso` when JSPI is
+present. On Linux without JSPI it returns `phitex` when the frame can compile
+wasm, run a module worker and gunzip a format (all true on WebKitGTK 2.52);
+otherwise the status line names the missing capability. The frame's `ready`
+message carries `backend`, and the host only applies the TeXpresso JSPI check to
+a TeXpresso frame. On PhiTeX, a LuaLaTeX document gets the `lua` reason; a
+project that is not UTF-8 or that uses the reserved `.mdraft-texmf` folder gets
+the same named reasons as TeXpresso.
+
+**Install and cache.** Enabling bundled TeX runs `install_texpresso` or
+`install_phitex` according to the same selection, and downloads only that
+engine. `latex_engine_status` reports both installations; the host reads the one
+the webview can run. The package cache is shared by the two engines' transports,
+is bounded by *Preferences › LaTeX › Cache limit* and is cleared by **Clear
+package cache**. The PhiTeX archive is `phitex-1.0.1-engine870e9ac-minted.zip`
+(release `2026`); the pinned viewer source is the public frontends revision in
+`src-tauri/phitex-shell/vendor/README.md`, and the engine source is the pinned
+PhiTeX revision recorded in the plan and ADR. The source offer and the PhiTeX
+AGPL notices are in *Licences and source*.
+
+**What the fallback does not do.** LuaLaTeX is absent from the compatibility
+engine, and `biber`/`xindy` are not available. A document that needs one fails
+with a named message, never a silently wrong PDF; an installed TeX
+distribution is the route. `minted` is available through the bundled Pyodide
+runner, and XeLaTeX colour and microtype run in the engine. TeXpresso keeps
+its full engine and remains the default wherever JSPI exists.
 
 To exercise it:
 
 ```powershell
-npm run texpresso:unit        # the pure half: protocol, fallbacks, pins
+npm run texpresso:unit        # the pure half: selection, fallbacks, protocol, pins
 $env:MDRAFT_TEXPRESSO_MIRROR = "T:\texpresso-mirror-2026"
 $env:MDRAFT_TEXPRESSO_ENGINE = "T:\texpresso-engine"
 node scripts/test-all.mjs --only latex-texpresso --allow-installed
 ```
 
-The CDP layer starts the local origin itself and skips with one line when the
-two variables are missing. The comparison harness takes a backend parameter:
+The TeXpresso CDP layer starts the local origin itself and skips with one line
+when the two variables are missing. The performance harness measures the frame:
 
 ```powershell
-$env:MDRAFT_LATEX_PERF_BACKEND = "texpresso"
 node scripts/test-all.mjs --only latex-perf-texpresso-book --allow-installed
 ```
 
-**Linux.** WebKitGTK 2.54 has been run on Debian 13 under WSLg: the application
-starts, opens a project and the frame typesets there — the status bar reads
-`LuaLaTeX` and the exported PDF is current — so `mdraft-tex://localhost` works
-as a secure frame origin on WebKitGTK. The CDP layer and the pointer/scroll
-correspondence are WebView2 only; the Linux result is a visual check, recorded
-in the handoff.
+**Linux matrix.** The bundled preview is tested on:
+
+| Webview | Result |
+|---|---|
+| Debian 13 / WebKitGTK 2.54 | TeXpresso: starts, typesets, click/selection/links, export; JSPI present |
+| Ubuntu 26.04 LTS / WebKitGTK 2.52.6 | PhiTeX: installs, typesets (single-thread), pages, click/double-click/selection, logs and export; JSPI and `SharedArrayBuffer` absent |
+| Ubuntu 26.10 / WebKitGTK 2.52.6 | Same as 26.04; the package is the 2.52 security line |
+
+The Linux run is a real WebKitGTK run (WSLg or native), not a Chromium
+substitute: the PhiTeX engine's single-thread path is the point of the matrix.
+The CDP pointer/scroll suite is WebView2-only; the Linux check uses the frame
+harness and the visual/export checks recorded in the plan.

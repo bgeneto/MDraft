@@ -20,7 +20,6 @@
 //   9. another tab hides the frame instead of restarting the engine;
 //  10. a click on a link follows it, never the source map: a destination scrolls
 //      the preview, a web address goes to the (stubbed) system opener;
-//  11. switching back to WasmTex disposes the frame and restores its preview.
 
 import { openPage, emitMenu, sleep } from "./cdp-page.mjs";
 
@@ -116,7 +115,8 @@ async function openFile(relative) {
 const enableAndCompile = () => {
   // The switch is a Preferences row, which also updates the frontend's copy.
   return evaluate(`(async () => {
-    if (await window.__TAURI_INTERNALS__.invoke("latex_status")) return "already on";
+    const status = await window.__TAURI_INTERNALS__.invoke("latex_engine_status");
+    if (status.bundledEnabled && status.previewInstalled) return "already on";
     const open = document.getElementById("btn-prefs");
     open?.click();
     await new Promise((r) => setTimeout(r, 500));
@@ -1281,10 +1281,10 @@ try {
           headers: { "Tauri-Response": "ok", "Content-Type": "application/json" },
         }));
       }
-      if (url.includes("latex_status")) seen.push(url);
+      if (url.includes("latex_engine_status")) seen.push(url);
       return realFetch.call(this, input, init);
     };
-    await window.__TAURI_INTERNALS__.invoke("latex_status");
+    await window.__TAURI_INTERNALS__.invoke("latex_engine_status");
     return seen.length > 0;
   })()`);
   const web = await markFor("LinkProbeWeb", true);
@@ -1386,23 +1386,6 @@ try {
     "the bundled engine menu offers no pdfLaTeX",
     JSON.stringify(labels),
   );
-
-  console.log("=== the switch back restores WasmTex ===");
-  await emitMenu(page, "view.latexBackend.wasmtex");
-  check(
-    await waitFor(`!document.querySelector(".texpresso-frame")`, 15_000, "the frame's removal"),
-    "switching back disposes the frame",
-  );
-  if (await invoke("latex_status")) {
-    check(
-      await waitFor(
-        `document.querySelectorAll(".typst-page").length > 0`,
-        300_000,
-        "the WasmTex preview",
-      ),
-      "the WasmTex preview returns",
-    );
-  } else console.log("  SKIP  the WasmTex preview is not installed");
 } catch (error) {
   check(false, `uncaught: ${error.message}`);
 } finally {

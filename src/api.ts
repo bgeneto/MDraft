@@ -1215,17 +1215,17 @@ export const latexNativeWslLook = (distro: string) =>
 export const latexNativeWslValidate = (distro: string, bin: string) =>
   invoke<LatexNativeCapabilities>("latex_native_wsl_validate", { distro, bin });
 
-export const latexStatus = () => invoke<boolean>("latex_status");
 /** Whether the production preview's engine and digest table are installed. */
 export const texpressoStatus = () => invoke<boolean>("texpresso_status");
 /** Download and verify the production preview engine. */
 export const installTexpresso = () => invoke<void>("install_texpresso");
+/** Whether the compatibility preview's engine and digest table are installed. */
+export const phitexStatus = () => invoke<boolean>("phitex_status");
+/** Download and verify the compatibility preview engine. */
+export const installPhitex = () => invoke<void>("install_phitex");
 
 /** Aggregate LaTeX transport counters since start; no paths or content. */
 export interface LatexStats {
-  assetRequests: number;
-  cacheHits: number;
-  cacheMisses: number;
   texpressoHits: number;
   /** TeXpresso bundle files downloaded rather than served from the cache. */
   texpressoMisses: number;
@@ -1235,6 +1235,12 @@ export interface LatexStats {
   /** Bytes that came from the origin. */
   texpressoDownloadedBytes: number;
   texpressoGuard: TexpressoGuardReport;
+  /** The compatibility preview's transport counters. */
+  phitexHits: number;
+  phitexMisses: number;
+  phitexVerifiedBytes: number;
+  phitexRefusals: number;
+  phitexDownloadedBytes: number;
 }
 export const latexStats = () => invoke<LatexStats>("latex_stats");
 
@@ -1256,13 +1262,6 @@ export interface TexpressoGuardReport {
  */
 export const texpressoDownloadDecision = (allow: boolean) =>
   invoke<boolean>("texpresso_download_decision", { allow });
-/** Whether the bundled engine can compile with `engine` now (stage 6.2). */
-export const latexEngineAvailable = (engine: string) =>
-  invoke<boolean>("latex_engine_available", { engine });
-/** Download one optional engine's verified files; the reader chose that engine. */
-export const installLatexEngine = (engine: string) =>
-  invoke<void>("install_latex_engine", { engine });
-export const installLatex = () => invoke<void>("install_latex");
 export const latexProjectSnapshot = (
   path: string,
   overlays: Array<{
@@ -1280,10 +1279,14 @@ export interface LatexCacheInfo {
   bytes: number;
   limitMb: number;
   enabled: boolean;
-  /** The hidden WasmTex assets or the production preview are present. */
+  /** Either bundled preview is present. */
   installed: boolean;
-  /** The production preview engine and digest table are present. */
+  /** The selected preview engine and digest table are present. */
   previewInstalled: boolean;
+  /** TeXpresso's engine and digest table are present. */
+  texpressoInstalled: boolean;
+  /** PhiTeX's engine and digest table are present. */
+  phitexInstalled: boolean;
 }
 
 export const latexCacheInfo = () => invoke<LatexCacheInfo>("latex_cache_info");
@@ -1296,9 +1299,11 @@ export const latexClearCache = () => invoke<number>("latex_clear_cache");
 export interface LatexEngineStatus {
   backend: "native" | "bundled" | "none";
   bundledEnabled: boolean;
-  /** The hidden WasmTex backend's assets (legacy; tests only). */
-  bundledInstalled: boolean;
-  /** The production preview engine and digest table are present. */
+  /** TeXpresso's engine and digest table are present. */
+  texpressoInstalled: boolean;
+  /** PhiTeX's engine and digest table are present. */
+  phitexInstalled: boolean;
+  /** Either bundled preview engine is present. */
   previewInstalled: boolean;
   nativeEnabled: boolean;
   nativeRoot: string | null;

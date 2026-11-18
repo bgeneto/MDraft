@@ -10,6 +10,7 @@ import {
   type FrameMessage,
   type HostMessage,
   type TexpressoEngine,
+  type TexpressoBackend,
 } from "./protocol";
 
 /** `mdraft-tex` on this platform, as src/latex.ts builds it for the SDK. */
@@ -23,6 +24,8 @@ export interface ReadyInfo {
   engine: TexpressoEngine;
   jspi: boolean;
   missing: string[];
+  /** Absent on the pinned TeXpresso shell, which predates the field. */
+  backend?: TexpressoBackend;
 }
 
 type Reply = Extract<FrameMessage, { seq: number }>;
@@ -39,6 +42,7 @@ export class TexpressoFrame {
   constructor(
     host: HTMLElement,
     readonly engine: TexpressoEngine,
+    readonly backend: TexpressoBackend,
     private readonly onMessage: (message: FrameMessage) => void,
     bootTimeoutMs = 45_000,
   ) {
@@ -47,7 +51,7 @@ export class TexpressoFrame {
     frame.title = "LaTeX preview";
     frame.referrerPolicy = "no-referrer";
     const query = new URLSearchParams({ engine, host: location.origin });
-    frame.src = `${this.origin}/texpresso/index.html?${query}`;
+    frame.src = `${this.origin}/${backend}/index.html?${query}`;
     this.element = frame;
     let resolveReady: (info: ReadyInfo) => void = () => {};
     let rejectReady: (error: Error) => void = () => {};

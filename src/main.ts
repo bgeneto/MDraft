@@ -220,24 +220,11 @@ import {
 import { annotateTypstLines } from "./typst-map";
 import { paragraphRangeAt } from "./typst-page-map";
 import { externalUrl, pdfPageTexts, TypstPdfPreview, type TypstPageContext } from "./typst-pdf";
-import {
-  cancelLatex as cancelBundledLatex,
-  compileFresh,
-  compileLatex,
-  distrustWarmEngine,
-  interactiveLaneWorthwhile,
-  LatexBuildError,
-  latexEngineInfo,
-  previewLatexPages,
-  RECYCLE_AFTER_COMPILES,
-  recycleWarmEngine,
-  SupersededError,
-  type LatexDiagnostic,
-  type LatexResult,
-} from "./latex";
+import { LatexBuildError, type LatexDiagnostic, type LatexResult } from "./latex";
 import {
   KeyRhythm,
   LatestWinsGate,
+  SupersededError,
   adaptiveDelay,
   nativeDelay,
   staleBeyondCap,
@@ -245,24 +232,22 @@ import {
 import { resolveMainDocument } from "./latex-root";
 import {
   ENGINE_LABELS,
-  engineMismatch,
   isTexEngine,
   resolveTexEngine,
   type EngineChoice,
   type TexEngine,
 } from "./latex-engine-choice";
 import { projectLatexOutline, type ProjectHeading } from "./latex-outline";
-import { LATEX_ENGINE_YEAR, optionalEngineBytes } from "./latex-engine";
 import { nativeSources, nativeToLatex } from "./latex-native";
 import {
+  BUNDLED_TEXLIVE_YEAR,
   latexPreviewBackend,
-  setLatexPreviewBackend,
-  TEXPRESSO_ENGINE_MIB,
-  TEXPRESSO_TEXLIVE_YEAR,
-  texpressoEngineFor,
+  phitexCapable,
+  previewEngineFor,
+  previewEngineMib,
   texpressoFallback,
   texpressoFallbackText,
-  type LatexPreviewBackend,
+  webAssemblyJspi,
   type TexpressoFallback,
 } from "./latex-backend";
 import { normaliseText, prepareProject, TexpressoSession } from "./texpresso/session";
@@ -2696,10 +2681,9 @@ let latexPreview: LatexPreview | null = null;
  * The project the LaTeX preview is showing: its main document and the files
  * the last build read, relative to its directory.
  *
- * Both preview backends write it. WasmTex writes it with every result it puts on
- * screen; TeXpresso writes it from the snapshot it syncs, before any PDF exists.
- * The navigation pin reads it, so a chapter tab finds its main document under
- * either backend without waiting for a compile.
+ * The preview frame writes it from the snapshot it syncs, before any PDF exists.
+ * The navigation pin reads it, so a chapter tab finds its main document without
+ * waiting for a compile.
  */
 interface LatexProjectRecord {
   rootId: string;
@@ -2812,10 +2796,19 @@ let latexEngine: api.LatexEngineStatus | null = null;
  * this function — cancelling must not wait for the process to die.
  */
 function cancelLatex(): void {
-  cancelBundledLatex();
   const job = latexJob;
   latexJob = null;
   if (job) void api.latexNativeCancel(job);
+}
+
+/** Whether the preview engine this webview can run is installed. */
+function previewInstalled(status: api.LatexEngineStatus): boolean {
+  return latexPreviewBackend() === "phitex" ? status.phitexInstalled : status.texpressoInstalled;
+}
+
+/** Download the preview engine this webview can run. */
+function installBundledPreview(): Promise<void> {
+  return latexPreviewBackend() === "phitex" ? api.installPhitex() : api.installTexpresso();
 }
 
 async function installLatexProgressListener(): Promise<void> {
@@ -2918,11 +2911,10 @@ function compileCurrentLatex(clean = false): void {
  * Recompile from scratch: Compile, but on engines that remember nothing.
  *
  * The reader's folder holds no build files (every backend compiles a snapshot),
- * so the state that outlives a build lives here: the TeXpresso frame keeps its
- * auxiliary files and checkpoints between runs, and the hidden WasmTex engine
- * does the same. Dropping both, with the kept results and the logs that
- * described them, makes the next build start from the sources alone. The
- * downloaded TeX Live and font caches are not build state and stay.
+ * so the state that outlives a build lives in the preview frame's engine.
+ * Dropping it, with the kept results and the logs that described them, makes the
+ * next build start from the sources alone. The downloaded TeX Live and font
+ * caches are not build state and stay.
  */
 function compileCurrentLatexClean(): void {
   if (doc.language !== "latex") return;
@@ -3059,18 +3051,6 @@ function showLatexWarnings(result: LatexResult, root: { path: string; directory:
   compiledUi.outputReady();
 }
 
-/**
- * The caret as a project-relative path and UTF-16 offset, for checkpoint
- * placement; undefined when the active file is not a .tex inside the project.
- */
-function latexEditPoint(directory: string): { path: string; offset: number } | undefined {
-  if (!doc.path || !/\.tex$/i.test(doc.path)) return undefined;
-  const prefix = pathKey(directory) + "/";
-  if (!pathKey(doc.path).startsWith(prefix)) return undefined;
-  const path = doc.path.slice(directory.length + 1).replace(/\\/g, "/");
-  return { path, offset: editor.view.state.selection.main.head };
-}
-
 /** Every open project text file, so a compile sees unsaved edits. */
 function latexOverlays(directory: string): Parameters<typeof api.latexProjectSnapshot>[1] {
   const rootPrefix = pathKey(directory) + "/";
@@ -3089,20 +3069,6 @@ function latexOverlays(directory: string): Parameters<typeof api.latexProjectSna
       hadBom: session.hadBom,
       lineEnding: session.lineEnding,
     }));
-}
-
-/** The warm engine's identity: the project, the engine year and its local libraries. */
-function latexProjectKey(
-  rootPath: string,
-  snapshot: api.LatexProjectSnapshot,
-  engine: TexEngine = "lualatex",
-): string {
-  return JSON.stringify([
-    pathKey(rootPath),
-    LATEX_ENGINE_YEAR,
-    snapshot.texmf?.revision ?? null,
-    engine,
-  ]);
 }
 
 /* ---------- Per-project TeX engine (stage 6.2) ---------- */
@@ -3136,29 +3102,26 @@ function showEngineChip(choice: EngineChoice, main: string): void {
 }
 
 /**
- * Whether the current backend can typeset with `engine`. The production
- * preview ships LuaTeX and XeTeX together; the hidden WasmTex backend still
- * downloads its optional engines on first use.
+ * Whether the current preview can typeset with `engine`. TeXpresso ships
+ * LuaTeX and XeTeX; the PhiTeX compatibility preview ships XeLaTeX only. An
+ * installed distribution keeps its own engine choice and needs no download.
  */
 async function engineAvailable(engine: TexEngine): Promise<boolean> {
-  if (latexPreviewBackend() === "texpresso") return engine === "lualatex" || engine === "xelatex";
-  return engine === "lualatex" || (await api.latexEngineAvailable(engine));
+  if (latexEngine?.backend !== "bundled") return true;
+  if (engine === "xelatex") return true;
+  return engine === "lualatex" && latexPreviewBackend() === "texpresso";
 }
 
 /** Remember (or forget, with null) the project's engine and compile again. */
-/** Download an optional engine the reader asked for; false when it failed. */
 async function ensureEngine(engine: TexEngine): Promise<boolean> {
   if (await engineAvailable(engine)) return true;
   const label = ENGINE_LABELS[engine];
-  setLatexStatus(`Downloading ${label}…`);
-  try {
-    await api.installLatexEngine(engine);
-    return true;
-  } catch (error) {
-    setLatexStatus(`${label} could not be downloaded.`);
-    toast(`${label} could not be downloaded: ${String(error)}`, 6000);
-    return false;
-  }
+  toast(
+    `${label} is not available in the compatibility preview. Use an installed TeX distribution for a document that needs it.`,
+    6500,
+  );
+  setLatexStatus(`${label} is not available in the compatibility preview.`);
+  return false;
 }
 
 async function setProjectEngine(main: string, engine: TexEngine | null): Promise<void> {
@@ -3176,30 +3139,15 @@ async function openEngineMenu(): Promise<void> {
   if (!choice) return;
   const entries: Array<[string, () => void]> = [];
   if (choice.source === "magic") {
-    // The magic comment decides, so there is nothing to choose; but an engine
-    // it names that is not downloaded yet must be obtainable from here, or the
-    // preview's "download it from the chip" would point at a dead control.
+    // The magic comment decides; the chip only explains it.
     const label = ENGINE_LABELS[choice.engine];
-    const available = await engineAvailable(choice.engine);
-    const size = (optionalEngineBytes(choice.engine) / 1048576).toFixed(1);
     const why = choice.reason === "magic comment" ? "" : `; ${choice.reason}`;
-    entries.push(
-      available
-        ? [`Set by % !TeX program in the main file (${label}${why})`, () => {}]
-        : [
-            `Download ${label} (${size} MB), named by % !TeX program`,
-            () =>
-              void ensureEngine(choice.engine).then((ok) => {
-                if (ok && doc.language === "latex") scheduleRender(true);
-              }),
-          ],
-    );
+    entries.push([`Set by % !TeX program in the main file (${label}${why})`, () => {}]);
   } else {
     for (const engine of ["lualatex", "xelatex"] as const) {
       const mark = engine === choice.engine ? "✓ " : "";
       const available = await engineAvailable(engine);
-      const size = optionalEngineBytes(engine);
-      const note = available || !size ? "" : ` — download ${(size / 1048576).toFixed(1)} MB`;
+      const note = available ? "" : " — not available in this preview";
       entries.push([
         `${mark}${ENGINE_LABELS[engine]}${note}`,
         () => void setProjectEngine(choice.main, engine),
@@ -3212,129 +3160,14 @@ async function openEngineMenu(): Promise<void> {
   openRowMenu(entries, bounds.left, bounds.top - 4 - entries.length * 30, statusEngine);
 }
 
-/** Current bundled compiles since the last re-anchoring compare. */
-let commitsSinceAnchor = 0;
-let reanchorTimer = 0;
-let reanchoring = false;
-/** Compare after this many compiles, once the reader has been idle for a moment. */
-const REANCHOR_EVERY = 25;
-const REANCHOR_IDLE_MS = 3000;
-
-let recycleTimer = 0;
-const RECYCLE_IDLE_MS = 5000;
-
-/** Recycle the warm engine at idle once it has done enough compiles (Phase 4.1). */
-function scheduleRecycle(): void {
-  if (latexEngineInfo().compiles < RECYCLE_AFTER_COMPILES) return;
-  window.clearTimeout(recycleTimer);
-  recycleTimer = window.setTimeout(() => void recycleLatexEngine(), RECYCLE_IDLE_MS);
-}
-
-async function recycleLatexEngine(): Promise<void> {
-  const value = latexPreview;
-  if (doc.language !== "latex" || !value || !latexCurrent(value)) return;
-  const root = sessions.byId(value.rootId);
-  if (!root?.path || !root.directory) return;
-  try {
-    const snapshot = await api.latexProjectSnapshot(root.path, latexOverlays(root.directory));
-    if (!latexCurrent(value)) return;
-    await recycleWarmEngine(
-      snapshot,
-      latexProjectKey(root.path, snapshot, latexEngineInfo().engine ?? "lualatex"),
-      renderToken,
-    );
-  } catch {
-    // The old engine keeps working; the next idle moment tries again.
-  }
-}
-
-function scheduleReanchor(): void {
-  commitsSinceAnchor += 1;
-  if (commitsSinceAnchor < REANCHOR_EVERY) return;
-  window.clearTimeout(reanchorTimer);
-  reanchorTimer = window.setTimeout(() => void reanchorLatex("idle"), REANCHOR_IDLE_MS);
-}
-
-/**
- * Re-anchoring (stage 3.4 of docs/architecture.md).
- *
- * The warm engine resumes from heap checkpoints and keeps auxiliary files, so
- * its output is periodically compared, page text by page text, with a fresh
- * full compile of the same inputs. A difference stops incremental builds for
- * the project (the circuit breaker) and recompiles from scratch: speed never
- * buys a wrong preview. Runs at idle, or on the hidden `view.latexReanchor`
- * command the differential test uses; the outcome is a `reanchor` measure.
- */
-async function reanchorLatex(reason: "idle" | "command"): Promise<void> {
-  window.clearTimeout(reanchorTimer);
-  const value = latexPreview;
-  if (reanchoring || doc.language !== "latex" || !value || !latexCurrent(value)) {
-    perfMark("reanchor-skipped", { reason, why: reanchoring ? "busy" : "no current result" });
-    return;
-  }
-  if (latexEngine?.backend !== "bundled") {
-    perfMark("reanchor-skipped", { reason, why: "not the bundled engine" });
-    return;
-  }
-  const root = sessions.byId(value.rootId);
-  if (!root?.path || !root.directory) return;
-  reanchoring = true;
-  const started = perfMark("reanchor-start", { reason });
-  try {
-    const snapshot = await api.latexProjectSnapshot(root.path, latexOverlays(root.directory));
-    const fresh = latexCurrent(value)
-      ? await compileFresh(snapshot, renderToken, latexEngineInfo().engine ?? "lualatex")
-      : null;
-    if (!fresh || !latexCurrent(value)) {
-      perfMark("reanchor-skipped", {
-        reason,
-        why: fresh ? "edited meanwhile" : "fresh build failed",
-      });
-      return;
-    }
-    const [warmText, freshText] = await Promise.all([
-      pdfPageTexts(value.result.pdf),
-      pdfPageTexts(fresh),
-    ]);
-    const firstDifference = freshText.findIndex((text, index) => text !== warmText[index]);
-    const equal = warmText.length === freshText.length && firstDifference < 0;
-    perfMeasure("reanchor", started, {
-      reason,
-      equal,
-      pages: [warmText.length, freshText.length],
-      firstDifferentPage: equal
-        ? null
-        : firstDifference < 0
-          ? freshText.length + 1
-          : firstDifference + 1,
-    });
-    commitsSinceAnchor = 0;
-    if (!equal) {
-      distrustWarmEngine(
-        latexProjectKey(root.path, snapshot, latexEngineInfo().engine ?? "lualatex"),
-      );
-      toast(
-        "An incremental LaTeX build differed from a full build. This project now compiles from scratch.",
-        6500,
-      );
-      forceNextBuild = true;
-      scheduleRender(true);
-    }
-  } catch (error) {
-    perfMark("reanchor-skipped", { reason, why: String(error) });
-  } finally {
-    reanchoring = false;
-  }
-}
-
 /** The render token of the LaTeX PDF on screen, current or out of date. */
 let latexShownToken = 0;
 /** One installed-TeX process at a time; the newest waiting revision runs next. */
 const nativeGate = new LatestWinsGate();
 
-/** True while a LaTeX compile holds the engine (bundled or installed). */
+/** True while a LaTeX compile holds the engine (installed or the frame). */
 function latexBusy(): boolean {
-  return latexEngineInfo().busy || nativeGate.holder !== null;
+  return nativeGate.holder !== null || texpresso?.busy === true;
 }
 
 /**
@@ -4053,7 +3886,7 @@ function latexEnableNote(status?: api.LatexEngineStatus | null): void {
   const text = document.createElement("span");
   text.className = "typst-note-text";
   text.textContent = status?.bundledEnabled
-    ? `Bundled TeX is on, but its preview files are missing or out of date. Press Retry setup to download the TeX Live ${TEXPRESSO_TEXLIVE_YEAR} preview engine (about ${TEXPRESSO_ENGINE_MIB} MiB); packages and fonts follow on demand.`
+    ? `Bundled TeX is on, but its preview files are missing or out of date. Press Retry setup to download the TeX Live ${BUNDLED_TEXLIVE_YEAR} preview engine (about ${previewEngineMib(latexPreviewBackend())} MiB); packages and fonts follow on demand.`
     : "LaTeX compiles .tex documents locally. Enable bundled TeX, or choose a TeX distribution already on this computer in Preferences › LaTeX.";
   const button = document.createElement("button");
   button.type = "button";
@@ -4164,11 +3997,12 @@ async function renderLatexPreview(
   const build = await resolveLatexBuild(source, token, activeId, storeOnly);
   if (!build) return;
   const { engineStatus, root, revisions, overlays, engineChoice } = build;
-  // TeXpresso is the only bundled preview. WasmTex is disabled: its code and
-  // hidden test backend remain, but no build falls back to it.
+  // The bundled preview is drawn by its frame: TeXpresso with JSPI, PhiTeX on
+  // a Linux webview without it. A bundled build the frame cannot draw never
+  // falls back to a second compiler; texpressoPrepare names the reason.
   // Recompile from scratch and a clean build are asked to rebuild: never covered.
   const shadow = texpressoPrepare(build, storeOnly, !force && options.clean !== true);
-  if (latexPreviewBackend() === "texpresso" && engineStatus.backend === "bundled" && !shadow) {
+  if (engineStatus.backend === "bundled" && !shadow) {
     if (storeOnly) latexInFlight = false;
     return;
   }
@@ -4301,89 +4135,12 @@ async function renderLatexPreview(
         release();
       }
     } else {
-      // The project, not the revision: the warm engine is reused across edits
-      // and chapter tabs and replaced when the project or the engine's inputs
-      // (year, local libraries) change.
-      const texEngine = engineChoice?.engine ?? "lualatex";
-      const projectKey = latexProjectKey(root.path, snapshot, texEngine);
-      // A missing optional engine is never replaced by another one silently:
-      // the reader is told how to get it, or to pick another.
-      if (texEngine !== "lualatex" && !(await api.latexEngineAvailable(texEngine))) {
-        if (token !== renderToken || doc.id !== activeId) return;
-        const label = ENGINE_LABELS[texEngine];
-        const megabytes = (optionalEngineBytes(texEngine) / 1048576).toFixed(1);
-        latexInFlight = false;
-        await latexFailure(
-          `${label} is chosen for this project (${engineChoice?.reason}) but is not downloaded yet. Click the ${label} engine chip in the status bar to download it (${megabytes} MB), or choose another engine there.`,
-        );
-        if (token === renderToken && doc.id === activeId)
-          setLatexStatus(`${label} is not downloaded yet.`);
-        return;
-      }
-      const mismatch = engineMismatch(textOf(root), texEngine);
-      // The interactive lane (stage 2.2): when a full result of this project is
-      // on screen, typeset only up to the last visible page first and splice it
-      // in, then run the exact compile. Display only; skipped when previews have
-      // not been clearly cheaper than full compiles for this project.
-      const shown = typstPdf;
-      if (
-        !force &&
-        !shadow &&
-        shown &&
-        // A reader following the end of the document gets new pages, which a
-        // splice into existing slots cannot show; the exact result follows the tail.
-        !shown.atEnd() &&
-        latexPreview?.rootId === root.id &&
-        latexPreview.activeId === activeId &&
-        interactiveLaneWorthwhile(projectKey)
-      ) {
-        const pageLimit = shown.lastVisiblePage() + 1;
-        const span =
-          pageLimit > 1
-            ? await previewLatexPages(snapshot, { key: projectKey, token, pageLimit })
-            : null;
-        if (span && typstPdf === shown && doc.id === activeId && token > latexShownToken) {
-          const replaced = await shown.splice(span.pdf, span.firstPage);
-          if (replaced > 0) {
-            perfMark("interactive", { firstPage: span.firstPage, pages: replaced, token });
-            if (token === renderToken)
-              setLatexStatus("Preview updated · finishing the exact build…");
-          }
-        }
-      }
-      setLatexStatus(
-        latexBusy()
-          ? "Waiting for the previous LaTeX compile…"
-          : mismatch
-            ? `Compiling with ${ENGINE_LABELS[texEngine]} · ${mismatch}`
-            : "Compiling LaTeX…",
-      );
-      countCompile();
-      result = await compileLatex(
-        snapshot,
-        (phase, count) => {
-          if (token === renderToken && doc.id === activeId) {
-            setLatexStatus(
-              phase === "downloading"
-                ? `Downloading LaTeX packages${count ? ` (${count})` : ""}…`
-                : phase === "loading"
-                  ? "Loading the TeX engine…"
-                  : "Compiling LaTeX…",
-            );
-          }
-        },
-        {
-          // The project, not the revision: the warm engine is reused across
-          // edits and chapter tabs and replaced when the project or the
-          // engine's inputs (year, local libraries) change.
-          key: projectKey,
-          token,
-          // Where the reader is working, project-relative: the engine places a
-          // heap checkpoint before that paragraph during this pass (stage 3.3).
-          edit: latexEditPoint(root.directory),
-          engine: texEngine,
-        },
-      );
+      // The bundled backend is drawn by its frame and returned above. Reaching
+      // here means the frame could not start; never compile a second bundled
+      // engine behind it.
+      latexInFlight = false;
+      setLatexStatus("The bundled preview is unavailable.");
+      return;
     }
     perfMeasure("compile-call", compileCallStarted, {
       stored: Boolean(stored),
@@ -4509,10 +4266,6 @@ async function renderLatexPreview(
       return;
     }
     latexInFlight = false;
-    if (!stored && engineStatus.backend === "bundled") {
-      scheduleReanchor();
-      scheduleRecycle();
-    }
     // A project outline is built from this result's sources.
     if (outlineScope === "project" && settings.sidebarTab === "outline") refreshOutline();
     const clean = latexCleanBuildToken === token;
@@ -4616,11 +4369,7 @@ async function resolveLatexBuild(
   // document requires LuaLaTeX", and every optional engine reads as "not
   // downloaded yet" because they all require the core set. The setup note's
   // Retry downloads only the missing or mismatched files.
-  const bundledMissing =
-    engineStatus.backend === "bundled" &&
-    !(latexPreviewBackend() === "texpresso"
-      ? engineStatus.previewInstalled
-      : engineStatus.bundledInstalled);
+  const bundledMissing = engineStatus.backend === "bundled" && !previewInstalled(engineStatus);
   if (storeOnly && (engineStatus.backend === "none" || bundledMissing || engineStatus.problem))
     return null;
   if (engineStatus.backend === "none" || bundledMissing) {
@@ -4906,11 +4655,15 @@ function texpressoWatchFetches(): void {
   const tick = async (): Promise<void> => {
     const stats = await api.latexStats().catch(() => null);
     const now = performance.now();
-    if (stats) void texpressoGuardCheck(stats.texpressoGuard);
+    const backend = latexPreviewBackend();
+    const misses = backend === "phitex" ? stats?.phitexMisses : stats?.texpressoMisses;
+    const downloaded =
+      backend === "phitex" ? stats?.phitexDownloadedBytes : stats?.texpressoDownloadedBytes;
+    if (stats && backend === "texpresso") void texpressoGuardCheck(stats.texpressoGuard);
     if (stats && !texpressoFetch) {
       texpressoFetch = {
-        baseFiles: stats.texpressoMisses,
-        baseBytes: stats.texpressoDownloadedBytes,
+        baseFiles: misses ?? 0,
+        baseBytes: downloaded ?? 0,
         files: 0,
         bytes: 0,
         started: now,
@@ -4919,10 +4672,10 @@ function texpressoWatchFetches(): void {
       };
     } else if (stats && texpressoFetch) {
       const fetch = texpressoFetch;
-      const files = stats.texpressoMisses - fetch.baseFiles;
+      const files = (misses ?? 0) - fetch.baseFiles;
       if (files !== fetch.files) {
         fetch.files = files;
-        fetch.bytes = stats.texpressoDownloadedBytes - fetch.baseBytes;
+        fetch.bytes = (downloaded ?? 0) - fetch.baseBytes;
         if (files - fetch.loggedFiles >= 25 || now - fetch.loggedAt >= 5000) {
           texpressoLogLine(`Downloading TeX files: ${files} so far, ${megabytes(fetch.bytes)}`);
           fetch.loggedFiles = files;
@@ -5017,7 +4770,6 @@ function texpressoFollowTab(): void {
   const member =
     session !== null &&
     doc.language === "latex" &&
-    latexPreviewBackend() === "texpresso" &&
     projectRelativePath(session.rootDirectory, doc.path, pathKey) !== null;
   texpressoShow(member && settings.viewMode !== "source");
 }
@@ -5037,7 +4789,7 @@ function texpressoSetPages(on: boolean): void {
 }
 
 /**
- * Stop the frame and say why. There is no second bundled engine: the pane keeps
+ * Stop the frame and say why. There is no silent third engine: the pane keeps
  * the reader's document and the status line names the reason.
  */
 function texpressoFallbackTo(reason: TexpressoFallback, file: string | null = null): void {
@@ -5072,7 +4824,7 @@ function texpressoFallbackTo(reason: TexpressoFallback, file: string | null = nu
 
 /** The chip names the engine, never the backend's product name. */
 function texpressoChip(): void {
-  if (latexPreviewBackend() !== "texpresso" || !engineChipChoice) {
+  if (!engineChipChoice) {
     delete statusEngine.dataset.previewBackend;
     return;
   }
@@ -5084,11 +4836,11 @@ function texpressoChip(): void {
     const why = texpressoFallbackText(fallback.reason, fallback);
     statusEngine.textContent = label;
     statusEngine.title = `${base} Preview unavailable: ${why}.`;
-    statusEngine.dataset.previewBackend = `texpresso:${fallback.reason}`;
+    statusEngine.dataset.previewBackend = `${latexPreviewBackend()}:${fallback.reason}`;
   } else {
     statusEngine.textContent = label;
     statusEngine.title = `${base} Preview: typeset as you type; export uses the same PDF.`;
-    statusEngine.dataset.previewBackend = "texpresso";
+    statusEngine.dataset.previewBackend = latexPreviewBackend();
   }
 }
 
@@ -5104,11 +4856,6 @@ function texpressoPrepare(
 ): boolean {
   texpressoFallbackReason = null;
   delete statusEngine.dataset.baseTitle;
-  if (latexPreviewBackend() !== "texpresso") {
-    texpressoRelease();
-    texpressoChip();
-    return false;
-  }
   // An installed distribution is a backend, not a TeXpresso fallback. Naming it
   // as one produced a warning status on every native build, before the native
   // compile even started.
@@ -5119,16 +4866,19 @@ function texpressoPrepare(
   }
   const engine = build.engineChoice?.engine ?? "xelatex";
   const rootKey = pathKey(build.root.path);
+  const previewBackend = latexPreviewBackend();
   const reason = texpressoFallback({
     backend: build.engineStatus.backend,
+    preview: previewBackend,
     engine,
-    year: TEXPRESSO_TEXLIVE_YEAR,
-    jspi: typeof (WebAssembly as { Suspending?: unknown }).Suspending === "function",
+    year: BUNDLED_TEXLIVE_YEAR,
+    jspi: webAssemblyJspi(),
+    phitex: phitexCapable(),
     nonUtf8: null,
     libraryConflict: null,
     failed: texpressoFailed.has(rootKey),
   });
-  const frameEngine = texpressoEngineFor(engine);
+  const frameEngine = previewEngineFor(previewBackend, engine);
   if (reason || !frameEngine) {
     texpressoFallbackTo(reason ?? "failed");
     return false;
@@ -5145,7 +4895,7 @@ function texpressoPrepare(
     texpressoRelease();
     texpresso = new TexpressoSession(
       texpressoHostElement(),
-      { rootPath: build.root.path, engine: frameEngine },
+      { rootPath: build.root.path, engine: frameEngine, backend: previewBackend },
       build.root.directory,
       texpressoHandlers,
     );
@@ -5398,15 +5148,6 @@ function commitLatexShadow(
   }
   previewStale = false;
   latexInFlight = false;
-  // The warm-engine checks compare WasmTex builds; TeXpresso has no such engine.
-  if (
-    !build.stored &&
-    build.backend?.backend === "bundled" &&
-    latexPreviewBackend() === "wasmtex"
-  ) {
-    scheduleReanchor();
-    scheduleRecycle();
-  }
   if (outlineScope === "project" && settings.sidebarTab === "outline") refreshOutline();
   const seconds = ((result.elapsedMs ?? performance.now() - build.started) / 1000).toFixed(1);
   const warnings = result.warnings.length
@@ -5561,14 +5302,19 @@ function texpressoFailureNote(): HTMLElement {
 }
 
 const texpressoHandlers = {
-  onReady(session: TexpressoSession, info: { missing: string[]; jspi: boolean }): void {
+  onReady(
+    session: TexpressoSession,
+    info: { missing: string[]; jspi: boolean; backend?: "texpresso" | "phitex" },
+  ): void {
     if (session !== texpresso) return;
     if (info.missing.length) {
       // A member the bridge needs is gone: the pinned app changed. Its feature
       // is off, and the reader is told rather than left with dead gestures.
       toast(`The preview lacks ${info.missing.join(", ")}; those features are off.`, 6200);
     }
-    if (!info.jspi) {
+    // TeXpresso needs JSPI; PhiTeX's single-thread host is the reason this
+    // webview can run at all, so its `jspi: false` is expected, not a failure.
+    if (!info.jspi && info.backend !== "phitex") {
       texpressoFallbackTo("jspi");
       scheduleRender(true);
       return;
@@ -5694,7 +5440,7 @@ function texpressoMessage(session: TexpressoSession, message: FrameMessage): voi
 /** The editor's transactions, straight to the frame: no debounce, no snapshot. */
 function texpressoEdit(changes: Array<[number, number, string]>, base: number, text: string): void {
   const session = texpresso;
-  if (!session || doc.language !== "latex" || latexPreviewBackend() !== "texpresso") {
+  if (!session || doc.language !== "latex") {
     delete preview.dataset.texpressoEdit;
     return;
   }
@@ -5965,24 +5711,6 @@ async function measureTexpressoExport(): Promise<void> {
   };
   perfMark("texpresso-export", outcome);
   preview.dataset.texpressoExport = JSON.stringify(outcome);
-}
-
-/**
- * The hidden backend switch. Not a Preference: tests and the comparison use it
- * (`view.latexBackend.texpresso`, `view.latexBackend.wasmtex`).
- */
-function switchLatexBackend(next: LatexPreviewBackend): void {
-  if (!setLatexPreviewBackend(next)) return;
-  texpressoFailed.clear();
-  texpressoFallbackReason = null;
-  latexShadowKey = null;
-  texpressoRelease();
-  toast(next === "texpresso" ? "LaTeX preview: incremental" : "LaTeX preview: PDF", 2600);
-  if (doc.language !== "latex") return;
-  // The pane's content belongs to the other backend: a PDF view, or nothing.
-  retirePreview();
-  invalidateLatexBuild("The preview backend changed; select Compile to update the preview.");
-  scheduleRender(true);
 }
 
 /** Decode the base64 PDF the Rust command returns. */
@@ -10129,13 +9857,6 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "view.split": () => setViewMode("split"),
   "view.latexCompile": compileCurrentLatex,
   "view.latexCompileClean": compileCurrentLatexClean,
-  // No menu item: the differential test triggers a re-anchoring compare.
-  "view.latexReanchor": () => reanchorLatex("command"),
-  // No menu item either: tests force a blue/green engine swap.
-  "view.latexRecycle": () => recycleLatexEngine(),
-  // No menu items: the preview backend switch for tests and the comparison.
-  "view.latexBackend.texpresso": () => switchLatexBackend("texpresso"),
-  "view.latexBackend.wasmtex": () => switchLatexBackend("wasmtex"),
   "view.latexTexpressoExport": () => measureTexpressoExport(),
   "view.preview": () => setViewMode("preview"),
   "view.sidebar": () => setSidebarVisible(!settings.sidebarVisible),
@@ -14538,8 +14259,6 @@ async function boot(): Promise<void> {
       typstEditSeq = typstScheduler.recordEdit(lastEditAt);
     }
     if (doc.language === "latex") {
-      window.clearTimeout(reanchorTimer);
-      window.clearTimeout(recycleTimer);
       latexRhythm.record(lastEditAt);
       latexUnrenderedSince ??= lastEditAt;
     }
@@ -14691,7 +14410,7 @@ async function boot(): Promise<void> {
     installLatex: async () => {
       const notice = toast("Downloading bundled TeX…", 0);
       try {
-        await api.installTexpresso();
+        await installBundledPreview();
         settings.latexEnabled = true;
         persist();
         notice.dismiss();
@@ -15013,7 +14732,11 @@ async function boot(): Promise<void> {
       pandocCache = pandoc;
       typstCache = typst;
       await syncExportAvailability();
-      return { pandoc, typst, latex };
+      return {
+        pandoc,
+        typst,
+        latex: { ...latex, previewInstalled: previewInstalled(latex) },
+      };
     },
     install: async (tool) => {
       if (tool === "pandoc") {
@@ -15034,7 +14757,7 @@ async function boot(): Promise<void> {
         if (doc.language === "typst") scheduleRender(true);
         return;
       }
-      await api.installTexpresso();
+      await installBundledPreview();
       settings.latexEnabled = true;
       persist();
       await refreshLatexCacheInfo();

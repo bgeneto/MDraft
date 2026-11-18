@@ -19,7 +19,7 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { emitMenu, openPage, sleep, useWasmTex } from "./cdp-page.mjs";
+import { emitMenu, openPage, sleep } from "./cdp-page.mjs";
 
 const port = Number(process.argv[2] ?? 9222);
 const checks = [];
@@ -123,7 +123,6 @@ async function screenshot(name) {
 try {
   if (!(await waitFor('!!document.querySelector(".cm-content")', 30000)))
     throw new Error("Editor did not open.");
-  await useWasmTex(page);
   const defaults = await invoke("latex_texmf_list");
   check(
     defaults.ok &&
@@ -366,7 +365,7 @@ try {
   );
   await page.evaluate(`document.getElementById("btn-prefs")?.click()`);
 
-  if ((await invoke("latex_status")).value !== true) {
+  if ((await invoke("latex_engine_status")).previewInstalled !== true) {
     // Installation can exceed CDP's per-request deadline on a cold cache.
     await page.evaluate(`(() => {
       window.__texmfInstall = { done: false, error: null };

@@ -441,7 +441,7 @@ fn fetch(
     deadline: Option<Instant>,
     on_bytes: impl FnMut(u64),
 ) -> Result<Vec<u8>, String> {
-    if std::env::var_os("MDRAFT_WASMTEX_OFFLINE").is_some() {
+    if std::env::var_os("MDRAFT_TEX_OFFLINE").is_some() {
         return Err("The LaTeX network is disabled.".into());
     }
     static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
@@ -971,16 +971,6 @@ pub fn serve(root: &Path, path: &str) -> Option<Answer> {
     Some(serve_data(root, relative))
 }
 
-/// Download and verify what the backend needs: the engine files, the digest
-/// table, the list and the format files of both engines.
-///
-/// A file already present and intact is not downloaded again, so this is also
-/// the repair. The bundle files follow on demand, through `serve`; so do the
-/// formats again after Clear cache, which removes them.
-pub fn install(root: &Path) -> Result<(), String> {
-    install_with_progress(root, |_, _| {})
-}
-
 /// The same install, reporting cumulative bytes as they arrive.
 ///
 /// The overall deadline is threaded into every request, so a stalled
@@ -1368,7 +1358,7 @@ pub fn cache_bytes(root: &Path) -> u64 {
 }
 
 /// Delete the downloaded TeX Live data, of this snapshot and of older ones.
-/// The engine files and the digest table stay, like the WasmTex engine does.
+/// The engine files and the digest table stay, like the other preview engine does.
 pub fn clear(root: &Path) -> Result<u64, String> {
     let _writer = crate::backup::gate::writer()?;
     // The next frame deletes texpresso-luatex-caches before the app starts.
@@ -1791,7 +1781,7 @@ mod tests {
                 "{path}"
             );
         }
-        assert!(serve(&dir, "/wasmtex/2026/wasmtex-luatex.js").is_none());
+        assert!(serve(&dir, "/other/2026/file.js").is_none());
         assert!(serve(&dir, "/mirror/texpresso/a").is_none());
         let (bytes, kind) = serve(&dir, "/texpresso/index.html").unwrap().unwrap();
         assert!(kind.starts_with("text/html"));
@@ -1869,7 +1859,7 @@ mod tests {
     fn the_local_origin_installs_and_serves() {
         let root = scratch("origin");
         assert!(!available(&root));
-        install(&root).unwrap();
+        install_with_progress(&root, |_, _| {}).unwrap();
         assert!(available(&root));
         let list = &config().bundle.list;
         let (bytes, kind) = serve(&root, &format!("/texpresso-data/{}", list.path))
@@ -1933,7 +1923,7 @@ mod tests {
         }
         // Installed: the repair downloads nothing.
         let before = downloaded_bytes();
-        install(&root).unwrap();
+        install_with_progress(&root, |_, _| {}).unwrap();
         assert_eq!(downloaded_bytes(), before);
         fs::remove_dir_all(root).unwrap();
     }

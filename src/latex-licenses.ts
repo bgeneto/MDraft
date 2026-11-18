@@ -1,39 +1,52 @@
-//! Notices distributed with the pinned preview engine, the TeX Live data it
-//! reads, and the hidden WasmTex backend that remains in the source.
-import sdkLicense from "./assets/wasmtex-licenses/WasmTex-MIT.txt?raw";
-import thirdParty from "./assets/wasmtex-licenses/THIRD_PARTY_NOTICES.md?raw";
-
-const notices = import.meta.glob("./assets/wasmtex-licenses/LICENSES/*.txt", {
-  query: "?raw",
-  import: "default",
-  eager: true,
-}) as Record<string, string>;
+//! Notices distributed with the two pinned preview engines, the TeX Live data
+//! they read, and the fonts. The full AGPL text is the repository's `LICENSE`;
+//! this page is the reader-facing summary and the source offer.
 
 export const LATEX_LICENSES = [
   "# LaTeX preview: licences and source",
   "",
-  "The incremental preview engine (TeXpresso) is MIT licensed; Its LuaTeX and XeTeX engines and `xdvipdfmx` are GPL (version 2 or later), and the TeX Live files keep their own terms.",
+  "MDraft itself is free software under the **GNU Affero General Public License",
+  "v3.0 only** (AGPL-3.0-only). The full text is in the repository's `LICENSE`.",
   "",
-  "The hidden WasmTex backend remains in the source for its regression layer; its SDK and engine notices are included below.",
+  "## TeXpresso",
+  "",
+  "The JSPI preview engine (TeXpresso) is MIT licensed. Its LuaTeX and XeTeX",
+  "engines and `xdvipdfmx` are GPL (version 2 or later), and the TeX Live files",
+  "keep their own terms.",
   "",
   "[TeXpresso source](https://github.com/let-def/texpresso)",
   "",
-  "## WasmTex manifest (hidden backend)",
+  "## PhiTeX",
   "",
-  "[Engine manifest (2026-f5d94438a7c75a23)](https://corca-ai.github.io/wasmtex/wasmtex/2026/manifest.json)",
+  "The Linux compatibility preview engine (PhiTeX) is free software under the",
+  "**GNU Affero General Public License v3.0 only** (AGPL-3.0-only), by Ammar",
+  "Seliaman and the KAUST ACCL. Its source is public at:",
   "",
-  "[Corresponding engine source archive](https://github.com/corca-ai/wasmtex/releases/download/engine-2026-f5d94438a7c75a23/wasmtex-2026-f5d94438a7c75a23-source.tar.xz)",
+  "[PhiTeX engine](https://github.com/accl-kaust/PhiTeX) ·",
+  "[PhiTeX frontends](https://github.com/accl-kaust/PhiTeX-frontends)",
   "",
-  "Source archive SHA-256: `e6a1f9b8ad84c7127368bb521217af381407fcc0d5c5518114345d55b470d637`.",
+  "MDraft pins the engine and viewer commits in `src-tauri/phitex.json` and",
+  "`src-tauri/phitex-shell/`; the corresponding source is the upstream revision",
+  "named there, plus the shell sources in this repository. The full PhiTeX",
+  "notices travel in `src-tauri/phitex-shell/vendor/NOTICE`.",
   "",
-  "## WasmTex SDK",
+  "**minted.** The `minted` path runs Pyodide and the `latexminted` wheel",
+  "inside the preview frame, together with Pygments. Those components keep",
+  "their own licenses (Pyodide MPL-2.0; Pygments BSD-2-Clause; the minted",
+  "Python wheels their stated licenses); their notices and source links travel",
+  "with the pinned archive and upstream.",
   "",
-  sdkLicense,
+  "## TeX Live and fonts",
   "",
-  "## WasmTex third-party notices",
+  "The preview reads TeX Live 2026's LaTeX kernel, packages, hyphenation",
+  "patterns, metrics and fonts. Each file keeps its own licence (LPPL, OFL, GPL",
+  "with the font exception, or another free licence). The downloaded package",
+  "cache is a copy of those files, unmodified. The Latin Modern and Latin Modern",
+  "Math fonts are under the GUST Font License.",
   "",
-  thirdParty,
-  ...Object.entries(notices)
-    .sort(([a], [b]) => a.localeCompare(b))
-    .flatMap(([path, text]) => ["", `## ${path.split("/").pop()}`, "", text]),
+  "## Source and warranty",
+  "",
+  "Both engines are provided **as is**, without any warranty. Their source is",
+  "available at the links above and in the pinned archives; nothing about the",
+  "reader's document leaves this device.",
 ].join("\n");

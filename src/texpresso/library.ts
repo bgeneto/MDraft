@@ -26,7 +26,7 @@ const TEX_DIRS: Record<TexpressoEngine, readonly string[]> = {
   luatex: ["tex/lualatex/", "tex/latex/", "tex/luatex/", "tex/generic/"],
   xetex: ["tex/xelatex/", "tex/latex/", "tex/xetex/", "tex/generic/"],
 };
-/** `LUAINPUTS`, the same list WasmTex's search hook uses. */
+/** `LUAINPUTS`, the same list the previous bundled engine's search hook uses. */
 const LUA_DIRS = ["scripts/", "tex/luatex/", "tex/plain/", "tex/generic/", "tex/latex/"];
 const LUA = /\.(?:lua|luc|texlua)$/i;
 

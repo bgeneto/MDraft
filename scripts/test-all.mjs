@@ -319,13 +319,6 @@ const SUITES = [
     script: "latex-sync-unit.mjs",
   },
   {
-    // The adapter pins LuaLaTeX and does not request or consume SyncTeX.
-    id: "latex-sdk-unit",
-    title: "LaTeX SDK and no-SyncTeX route (unit)",
-    kind: "node",
-    script: "latex-sdk-unit.mjs",
-  },
-  {
     // The TeXpresso backend's pure half: the default constant and the loopback
     // rule, engine mapping, every fallback's precedence and sentence, message
     // validation, the pins in texpresso.json, the absence of a TeXpresso
@@ -409,27 +402,6 @@ const SUITES = [
     script: "latex-format-unit.mjs",
   },
   {
-    // Real PDF selection, zoom, page growth and two-column scrolling.
-    id: "latex-preview",
-    title: "LaTeX preview, zoom, word correspondence and scroll",
-    kind: "cdp",
-    script: "latex-preview-test.mjs",
-    doc: "samples/feature-tour.md",
-    // Uses an unsaved buffer and a hidden app with the `.test-automation`
-    // identifier; it never writes the repository fixture or developer state.
-    safeWithInstalledApp: true,
-  },
-  {
-    id: "latex-project",
-    title: "LaTeX included-file PDF correspondence",
-    kind: "cdp",
-    script: "latex-project-test.mjs",
-    doc: "samples/latex-project/main.tex",
-    // All document changes are in-memory CodeMirror edits in the isolated
-    // `.test-automation` instance; the project fixture is never saved.
-    safeWithInstalledApp: true,
-  },
-  {
     // Track W / GAP-006 slice 1: Open Folder (picker stubbed at the IPC
     // transport), lazy keyboard tree, the filter box and type-ahead, open from
     // the tree, confinement, Close Folder. Read-only fixture; no LaTeX engine.
@@ -438,16 +410,6 @@ const SUITES = [
     kind: "cdp",
     script: "workspace-explorer-test.mjs",
     doc: "samples/latex-perf/huge/main.tex",
-    safeWithInstalledApp: true,
-  },
-  {
-    // Stage 6.2: the per-project bundled engine — the chip, the download of
-    // pdfLaTeX on first choice, the remembered choice and the magic comment.
-    id: "latex-engine-choice",
-    title: "Per-project TeX engine",
-    kind: "cdp",
-    script: "latex-engine-choice-test.mjs",
-    doc: "samples/latex-engines/plain.tex",
     safeWithInstalledApp: true,
   },
   {
@@ -543,39 +505,6 @@ const SUITES = [
     doc: "samples/latex-project/main.tex",
     safeWithInstalledApp: true,
   },
-  // The LaTeX live-preview probe of docs/architecture.md:
-  // one fixture per launch, selected by MDRAFT_LATEX_PERF_FIXTURE. Opt-in: they
-  // take minutes, and a host without the engine has nothing to measure. Set
-  // MDRAFT_LATEX_PERF_OUT to keep the run JSON outside the staging directory.
-  ...[
-    ["latex-perf", "small", "samples/latex-perf/small.tex", "small single file"],
-    ["latex-perf-preamble", "preamble", "samples/latex-perf/preamble.tex", "preamble only"],
-    ["latex-perf-huge", "huge", "samples/latex-perf/huge/main.tex", "12 included chapters"],
-    ["latex-perf-book", "book", "samples/latex-perf/book/main.tex", "book, included chapters"],
-    [
-      "latex-perf-book-flat",
-      "book-flat",
-      "samples/latex-perf/book-flat/main.tex",
-      "book, one file",
-    ],
-    ["latex-perf-tikz", "tikz", "samples/latex-perf/tikz.tex", "twelve TikZ figures"],
-    ["latex-perf-plain", "plain", "samples/latex-engines/plain.tex", "plain.tex, three engines"],
-    [
-      "latex-perf-tikz-auto",
-      "tikz-auto",
-      "samples/latex-perf/tikz-auto.tex",
-      "twelve TikZ figures, externalization auto",
-    ],
-  ].map(([id, fixture, doc, label]) => ({
-    id,
-    title: `LaTeX live-preview probe (${label})`,
-    kind: "cdp",
-    script: "latex-performance-test.mjs",
-    doc,
-    env: { MDRAFT_LATEX_PERF_FIXTURE: fixture },
-    safeWithInstalledApp: true,
-    optIn: true,
-  })),
   // The same fixtures on the TeXpresso backend, for the comparison the plan
   // requires: E2P and p95 from the frame's own paint, the shadow compile's
   // export against the frame's `xdvipdfmx` output, and the process tree's RSS.
@@ -604,40 +533,6 @@ const SUITES = [
     origin: true,
     reuseProfile: true,
   })),
-  {
-    // Stage 3.4: seeded edits on the 12-chapter project, each compared page
-    // by page with a fresh full compile through the re-anchoring command.
-    id: "latex-perf-differential",
-    title: "LaTeX incremental builds equal full builds (huge)",
-    kind: "cdp",
-    script: "latex-performance-test.mjs",
-    doc: "samples/latex-perf/huge/main.tex",
-    env: { MDRAFT_LATEX_PERF_FIXTURE: "huge", MDRAFT_LATEX_PERF_MODE: "differential" },
-    safeWithInstalledApp: true,
-    optIn: true,
-  },
-  {
-    // Gate 4.3: sustained editing on the 105-page book. 60 minutes unless
-    // MDRAFT_LATEX_SOAK_MINUTES says otherwise.
-    id: "latex-perf-soak",
-    title: "LaTeX live preview under sustained editing (book)",
-    kind: "cdp",
-    script: "latex-performance-test.mjs",
-    doc: "samples/latex-perf/book/main.tex",
-    env: { MDRAFT_LATEX_PERF_FIXTURE: "book", MDRAFT_LATEX_PERF_MODE: "soak" },
-    safeWithInstalledApp: true,
-    optIn: true,
-  },
-  {
-    id: "latex-perf-starvation",
-    title: "LaTeX live preview under scripted typing (huge)",
-    kind: "cdp",
-    script: "latex-performance-test.mjs",
-    doc: "samples/latex-perf/huge/main.tex",
-    env: { MDRAFT_LATEX_PERF_FIXTURE: "huge", MDRAFT_LATEX_PERF_MODE: "starvation" },
-    safeWithInstalledApp: true,
-    optIn: true,
-  },
   {
     // The encoding catalogue matches Rust's OFFERED list, and inputenc/meta/XML
     // declarations are found at exact offsets: pure, no application.
@@ -1762,71 +1657,6 @@ const USER_STATE = [
   "ai-keys.json",
 ];
 
-/** The engine junction this run created, so it can be removed afterwards. */
-let latexEngineLink = null;
-
-/**
- * Make the developer's installed LaTeX engine visible to the test instance.
- *
- * The harness runs under `<identifier>.test-automation`, so the engine the
- * developer installed under `<identifier>` is invisible to it: a `.tex` document
- * shows the "Enable bundled TeX" note instead of a PDF, and every LaTeX preview
- * assertion has nothing to measure. That is why the scroll-correspondence, blink
- * and two-column steps could not be tested through the UI.
- *
- * A **junction** (Windows) or **symlink** (elsewhere) is the answer: it costs no
- * copying of the 12 MiB of assets, and `linkLatexEngineCleanup` removes it before
- * the developer's own settings are restored, so nothing outside the test instance
- * is touched. When the engine is not installed the function does nothing and the
- * LaTeX suites that need it skip rather than fail.
- */
-function linkLatexEngine() {
-  const dataRoot = appConfigDir().replace(`${identifier}`, tauriConfig.identifier);
-  let source = path.join(dataRoot, "latex");
-  if (!fs.existsSync(path.join(source, "assets"))) {
-    // `wasmtex-luatex.js` of any engine profile in `src-tauri/latex-engine.json`, the
-    // same rule the backend uses to migrate a directory from before `latex/` existed.
-    // The release marker, not this digest, decides whether the files are the active year.
-    const engineConfig = JSON.parse(
-      fs.readFileSync(path.join(repoRoot, "src-tauri", "latex-engine.json"), "utf8"),
-    );
-    const digests = new Set(
-      Object.values(engineConfig.profiles).map(
-        (profile) => profile.assets.find((asset) => asset.name === "wasmtex-luatex.js").sha256,
-      ),
-    );
-    const candidates = fs.existsSync(dataRoot)
-      ? fs.readdirSync(dataRoot, { withFileTypes: true }).filter((entry) => {
-          if (!entry.isDirectory() || entry.name === "latex") return false;
-          const asset = path.join(dataRoot, entry.name, "assets", "wasmtex-luatex.js");
-          try {
-            return digests.has(createHash("sha256").update(fs.readFileSync(asset)).digest("hex"));
-          } catch {
-            return false;
-          }
-        })
-      : [];
-    if (candidates.length !== 1) return;
-    source = path.join(dataRoot, candidates[0].name);
-  }
-  const target = path.join(appConfigDir(), "latex");
-  if (!fs.existsSync(target)) {
-    fs.mkdirSync(appConfigDir(), { recursive: true });
-    try {
-      fs.symlinkSync(source, target, process.platform === "win32" ? "junction" : "dir");
-      latexEngineLink = target;
-      console.log(`engine   linked from ${source}\n`);
-    } catch (error) {
-      // A host that forbids links (or a target already present) is not a failure:
-      // the suites that need the engine report their own skip. Say so, because a
-      // silent skip is what made the first attempt look like it worked.
-      console.log(`engine   could not be linked (${String(error).split("\n")[0]})\n`);
-      return;
-    }
-  }
-  enableLatexEngineInSettings();
-}
-
 /**
  * Turn the bundled engine on in the test profile's settings.
  *
@@ -1850,17 +1680,6 @@ function enableLatexEngineInSettings() {
     // A settings file this run cannot write is the suite's own problem to report.
     console.log(`engine   could not enable LaTeX (${String(error).split("\n")[0]})\n`);
   }
-}
-
-/** Remove the engine link, leaving the developer's own directory untouched. */
-function linkLatexEngineCleanup() {
-  if (!latexEngineLink) return;
-  try {
-    fs.unlinkSync(latexEngineLink);
-  } catch {
-    // Already gone.
-  }
-  latexEngineLink = null;
 }
 
 function takeUserState(destination) {
@@ -2138,10 +1957,9 @@ async function runCdpSuite(suite, port, options, context) {
     fs.rmSync(path.join(appDataDir(), "typst", "service"), { recursive: true, force: true });
   }
   // `resetAppState` removed the switch with the settings file; put it back for
-  // the layers that compile. The hidden WasmTex backend still needs its assets,
-  // which `linkLatexEngine` exposed before the suites started.
-  if (suite.id.startsWith("latex-") || suite.id === "preview-freshness")
-    enableLatexEngineInSettings();
+  // the layers that compile. Each layer installs or reuses the bundled preview
+  // its platform selects.
+  if (suite.id.startsWith("latex-")) enableLatexEngineInSettings();
   // The TeXpresso layer fetches its engine and TeX Live data from the pinned
   // loopback origin, so the runner serves it for exactly that layer.
   if (suite.origin) {
@@ -2448,7 +2266,6 @@ async function main() {
       );
 
       savedUserState = takeUserState(path.join(context.stage, "user-state"));
-      if (suites.some((suite) => !suite.skipEngine)) linkLatexEngine();
       fixtures = snapshotFixtures(suites);
     }
 
@@ -2537,7 +2354,6 @@ async function main() {
     // The engine link is removed before the developer's own state is restored:
     // it lives inside the test instance's directory, so leaving it would make the
     // next run skip the link and the one after that inherit a stale one.
-    linkLatexEngineCleanup();
     if (savedUserState.length) restoreUserState(savedUserState);
     if (fixtures.size) restoreFixtures(fixtures);
     if (context) {

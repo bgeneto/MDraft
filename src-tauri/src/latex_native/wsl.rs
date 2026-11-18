@@ -71,6 +71,7 @@ pub struct WslCandidate {
 }
 
 /// A Linux absolute directory that is safe to name as an argv element.
+#[allow(dead_code)]
 pub fn safe_linux_dir(path: &str) -> bool {
     path.starts_with('/')
         && path.len() < 512
@@ -83,6 +84,7 @@ pub fn safe_linux_dir(path: &str) -> bool {
 
 /// A distribution name as WSL accepts it; it is still matched against the
 /// registered list before use.
+#[allow(dead_code)]
 pub fn safe_distro_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 64
@@ -92,6 +94,7 @@ pub fn safe_distro_name(name: &str) -> bool {
 }
 
 /// Group engine path lines into directories, in first-seen order.
+#[allow(dead_code)]
 pub fn group_engines(output: &str) -> Vec<(String, Vec<String>)> {
     let mut out: Vec<(String, Vec<String>)> = Vec::new();
     for line in output.lines().map(str::trim) {

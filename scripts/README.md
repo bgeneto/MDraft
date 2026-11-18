@@ -53,7 +53,7 @@ license files. Private records and source captures must remain outside this tree
 | `texpresso-origin-server.mjs` | `--mount /prefix=<dir>` (repeatable) `[--port 8717] [--record <file>] [--latency <ms>] [--fail <text>=<status>] [--corrupt <text>] [--truncate <text>]`; loopback-only stand-in for the production origin with the bucket's object layout and headers |
 | `texpresso-archive.mjs` | `--engine <dir> --data <dir> [--fetch [origin]] [--write]`; builds the two reproducible install archives (`install/engine-<sha16>.zip` with every engine asset, `install/core-<sha16>.zip` with the bundle list, digest table and formats) from the pinned files and prints their pins (`--write` replaces `archives` in `src-tauri/texpresso.json`); refuses any input that differs from its pin; `--fetch` copies missing pinned files from the origin, verified |
 | `texpresso-origin-check.mjs` | `[origin] [--all] [--sample <n>] [--concurrency <n>]`; read-only proof that an origin serves exactly the pinned engine, bundle, digest table and install archives (every archive member against its pin; `--all` fetches all 163,011 bundle files, otherwise an evenly spread sample); one PASS/FAIL line per check, non-zero exit on any FAIL |
-| `texpresso-r2-upload.mjs` | `--bucket <name> [--data <mirror>] [--engine <dir>] [--snapshot <id>] [--release <id>] [--dry-run] [--verify] [--digests-only] [--archives-only] [--force]`; uploads the mirror, engine files and pinned install archives to Cloudflare R2 with `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`, skipping keys already there at the right size; `--archives-only` sends just the archives; `--verify` compares the bucket without uploading |
+| `texpresso-r2-upload.mjs` | `--bucket <name> [--data <mirror>] [--engine <dir>] [--phitex <archive>] [--snapshot <id>] [--release <id>] [--dry-run] [--verify] [--digests-only] [--archives-only] [--force]`; uploads the mirror, engine files, a pinned PhiTeX archive or the pinned install archives to Cloudflare R2 with `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY`, skipping keys already there at the right size; `--phitex` verifies the archive against `src-tauri/phitex.json` and uploads it to `phitex/<archive.path>`; `--archives-only` sends just the archives; `--verify` compares the bucket without uploading |
 | `optional-tools-test.mjs` | `npm test -- --only optional-tools`; isolated first-run offer, context setup, background progress and the Preferences › Export pandoc button checks |
 | `backup-test.mjs` | `npm test -- --only backup`; isolated Data controls, ZIP creation, safety backup, cancellation and headless restore/restart with synthetic text |
 | `typst-service-install-test.mjs` | `[port]`; opt-in isolated install test for the published Typst companion service (`MDRAFT_TYPST_SERVICE_E2E=1 npm test -- --only typst-service-install`); verifies the pinned release archive, unpacked binary and an in-process service compile |
@@ -108,11 +108,11 @@ here with its public purpose and, for owner sessions, to the private catalog.
 | `npm run pdf:map:perf` | `node scripts/pdf-map-performance.mjs` |
 | `npm run pdf:map:webview` | `node scripts/pdf-webview-performance.mjs` |
 | `npm run test:harness:unit` | `node scripts/test-harness-ownership-unit.mjs`; test-process ownership and test-profile engine-link preservation |
-| `npm run latex:sdk:unit` | `node scripts/latex-sdk-unit.mjs` |
-| `npm run texpresso:unit` | `node scripts/texpresso-unit.mjs` |
+| `npm run texpresso:unit` | `node scripts/texpresso-unit.mjs`; selection, fallbacks, protocol, pins and local libraries |
+| `npm run build:phitex` | rebuild `src-tauri/phitex-shell/bundles/` from the vendored viewer and a pinned `engine-worker.js` |
+| `npm run phitex:frame` | Linux-only WebKitWebDriver check of the PhiTeX frame: page, gestures, marks, logs and PDF; set `MDRAFT_PHITEX_TEST_TEX`/`MDRAFT_PHITEX_SKIP_GESTURES`/`MDRAFT_PHITEX_PDF_OUT` for a link or minted fixture |
 | `npm run latex:texmf:unit` | `node scripts/latex-texmf-unit.mjs` |
 | `npm run latex:correspondence:unit` | `node scripts/latex-correspondence-unit.mjs` |
-| `npm run latex:preview` | `node scripts/latex-preview-test.mjs` |
 | `npm run latex:perf` | `node scripts/latex-performance-test.mjs` |
 | `npm run latex:perf:baseline` | `node scripts/latex-perf-baseline.mjs` |
 | `npm run latex:perf:book` | `node scripts/latex-perf-book.mjs` |
@@ -140,7 +140,6 @@ here with its public purpose and, for owner sessions, to the private catalog.
 | `npm run tabs:restore:unit` | `node scripts/tabs-restore-unit.mjs` |
 | `npm run typst:map:unit` | `node scripts/typst-page-map-unit.mjs` |
 | `npm run latex:sync:unit` | `node scripts/latex-sync-unit.mjs` |
-| `npm run latex:project` | `node scripts/latex-project-test.mjs` |
 | `npm run latex:native` | `node scripts/latex-native-test.mjs` |
 | `npm run latex:ondemand` | `node scripts/latex-on-demand-test.mjs` |
 | `npm run html:map:unit` | `node scripts/html-source-map-unit.mjs` |

@@ -47,7 +47,8 @@ const typst = (found = false, canInstall = true) => ({
 const latex = (overrides = {}) => ({
   backend: "none",
   bundledEnabled: false,
-  bundledInstalled: false,
+  texpressoInstalled: false,
+  phitexInstalled: false,
   previewInstalled: false,
   nativeEnabled: false,
   nativeRoot: null,

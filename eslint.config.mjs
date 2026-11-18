@@ -4,7 +4,7 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["bin/**", "dist/**", "node_modules/**", "src-tauri/**"],
+    ignores: ["bin/**", "dist/**", "node_modules/**", "src-tauri/**", "src/vendor/**"],
   },
   {
     files: ["src/**/*.{ts,js}"],

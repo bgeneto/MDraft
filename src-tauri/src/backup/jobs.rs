@@ -471,7 +471,7 @@ pub(super) fn available_space(path: &Path) -> Result<u64, String> {
         ));
     }
     let value = unsafe { value.assume_init() };
-    Ok((value.f_bavail as u64).saturating_mul(value.f_frsize as u64))
+    Ok(value.f_bavail.saturating_mul(value.f_frsize))
 }
 
 fn archive_space_bound(

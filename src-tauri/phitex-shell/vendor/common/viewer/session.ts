@@ -1,0 +1,1892 @@
+// A live preview session, independent of the editor and of where the core
+// runs: the project's texts, the edits batched once a frame and sent in
+// order, page-first painting, the latencies, and the debug check.
+//
+// An editor is an EditorHost (Overleaf: the page hook + the ZIP; VS Code:
+// its workspace API), the core is reached through a CoreTransport (a chrome
+// port to the offscreen document's core host; VS Code's, in process:
+// corehost.ts), and the preview is drawn by a PreviewSink (the shadow-DOM
+// panel; in VS Code the same panel in a webview, told over messages).
+
+import { Batch, byteOffset, charOffset, textSum, type Edit } from "./edits.ts";
+
+/** One work a citation cites, as the engine read it (the `cites` op): its key, its label as the .aux has it, where its entry is typeset ([page, baseline] in the origins' points). */
+export interface CiteAnswer {
+  key: string;
+  label: string | null;
+  at: [number, number] | null;
+}
+import type { DiffReq } from "./diff.ts";
+import { ENGINES, type Engine } from "./engines.ts";
+import { report } from "./report.ts";
+
+/** Whether a source loads minted (as the worker's own test, worker.ts). */
+/** A main file's preamble: what its engine is read from (engines.ts `needs`). */
+const preambleOf = (t: string | undefined) => {
+  const end = t?.indexOf("\\begin{document}") ?? -1;
+  return end < 0 ? (t ?? "") : t!.slice(0, end);
+};
+const usesMinted = (t: string) => /\\(usepackage|RequirePackage)\s*(\[[^\]]*\])?\s*\{[^}]*\bminted\b/.test(t);
+import { boxes, from, glyphNear, glyphs, lineAt, nearest, wordBytes, wordNear, type Glyph } from "./sync.ts";
+import { diagnose, type Diagnostic, type TexError } from "./diagnostics.ts";
+import { plainWhy } from "./words.ts";
+import { DELIVERED, isPackageFile, referenced, noPackages, type PackageSource, type PackageState } from "./packages.ts";
+import { asDiagnostic, type Problem } from "./problems.ts";
+import { latexmkFiles, latexmkNotes } from "./latexmkrc.ts";
+import type { Entry } from "./outline.ts";
+
+/** The events Options.remote's host tells (WatchEvent), routed to onWatch. */
+const WATCH = new Set(["page", "progress", "diagnostics", "settled", "superseded", "sync"]);
+
+/** An editor. Edits are sequential (each against the text just before it), in UTF-16. */
+export interface EditorHost {
+  /** Every text file of the project, by path. */
+  loadProject(): Promise<Record<string, string>>;
+  /** The main file among them, if the host knows it (else guessed). */
+  mainFile?(files: Record<string, string>): string | null;
+  onOpen(cb: (file: string, text: string) => void): void;
+  /**
+   * The editor's changes to `file`; `len`, its text's length after them
+   * (UTF-16 units, as a JS string's), and `sum`, its textSum (edits.ts),
+   * given when typing pauses (no edits then): the session checks its own
+   * copy against them and asks for the whole text again when they differ.
+   */
+  onChanges(cb: (file: string, edits: Edit[], len?: number, sum?: number) => void): void;
+  /** Announce `file`'s whole text again (onOpen): the session's copy drifted from the editor's. */
+  resend?(file: string): void;
+  /** Called once the session is ready for onOpen (the host may re-announce the open file). */
+  ready?(): void;
+}
+
+/** The core's requests (worker.ts's `Req`, less the routing fields). */
+export type CoreReq =
+  | { op: "open"; main: string; files: Record<string, string>; fuel: number; engine?: Engine; workers?: 1; latexmk?: { files: Record<string, string>; exact: boolean }; projectFiles?: string[] }
+  | { op: "edit"; file: string; start: number; end: number; text: string; page: number; dpi: number }
+  | { op: "set_file"; file: string; text: string }
+  | { op: "png"; page: number; dpi: number; scale?: number; view?: [number, number, number, number] }
+  | { op: "pdf" }
+  | { op: "status" }
+  | { op: "log" }
+  | { op: "pages" }
+  | { op: "origins"; page: number }
+  | { op: "page_of"; file: string; at: number }
+  | { op: "cites"; page: number; x: number; y: number }
+  | { op: "trace"; on: boolean }
+  | { op: "auxdump" }
+  | { op: "check"; file?: string; expect?: string }
+  /** (answered by the offscreen document, shelf.ts: not the core) */
+  | { op: "package"; name: string; engine?: string }
+  /** (answered by the offscreen document, diff.ts: PhiTeX's latexdiff) */
+  | { op: "latexdiff"; req: DiffReq };
+
+// (the page types the renderer shares: PhiTeX's viewer/src, vendored)
+import type { Link, PageImage } from "./types.ts";
+export type { PageImage };
+
+/** The longest a request answered "pending" is asked again for, in all (ms). */
+const PENDING_CAP_MS = 10_000;
+
+export interface CoreRes {
+  ok: boolean;
+  json?: any;
+  pdf?: Uint8Array;
+  /** (`package`: the file's text, null: none; and where from) */
+  text?: string | null;
+  from?: string;
+  /** (a page drawn from the PDF, in the tab: its canvas and size in PDF points) */
+  canvas?: HTMLElement;
+  size?: [number, number];
+  /** (its links, from MuPDF) */
+  links?: Link[];
+  /** (`package`: a binary file, handed to the core by the offscreen document) */
+  delivered?: boolean;
+  error?: string;
+}
+
+/** How far (bytes) a problem's culprit may be from the typeset word underlined for it, when it is not typeset itself. */
+const NEAR_CULPRIT = 64;
+
+/**
+ * The cursor at `pos` (UTF-16) in text `t`, as the glyph origins count:
+ * its byte, the word it is in or by (`wordNear`), and its line (bytes).
+ */
+function place(t: string, pos: number): { at: number; word: [number, number] | null; line: [number, number] } {
+  const at = byteOffset(t, pos);
+  const lo = t.lastIndexOf("\n", pos - 1) + 1, hiC = t.indexOf("\n", pos);
+  const line: [number, number] = [byteOffset(t, lo), byteOffset(t, hiC < 0 ? t.length : hiC)];
+  return { at, word: wordNear(new TextEncoder().encode(t), at, line[0], line[1]), line };
+}
+
+/** A request, for the trace: its op and fields, texts by their length. */
+function traceReq(r: CoreReq): Record<string, unknown> {
+  const o: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(r)) {
+    if (k === "op" || k === "id") continue;
+    o[k] = typeof v === "string" && v.length > 40 ? `${v.length} chars` : v && typeof v === "object" ? `${Object.keys(v).length} keys` : v;
+  }
+  return o;
+}
+/** A reply, for the trace: what the core said, briefly. */
+function traceRes(r: CoreRes): Record<string, unknown> {
+  const j = (r.json ?? {}) as Record<string, any>;
+  return {
+    ok: r.ok,
+    ...(r.error ? { error: r.error } : {}),
+    ...(typeof j.how === "string" ? { how: j.how.split("\n")[0].slice(0, 140) } : {}),
+    ...(j.pages !== undefined ? { pages: Array.isArray(j.pages) ? j.pages.length : j.pages } : {}),
+    ...(j.history !== undefined ? { history: j.history } : {}),
+    ...(Array.isArray(j.missing) && j.missing.length ? { missing: j.missing.length } : {}),
+    ...(j.error ? { texError: typeof j.error === "string" ? j.error : j.error.message } : {}),
+    ...(j.build_ms !== undefined ? { build_ms: Math.round(j.build_ms) } : {}),
+    ...(r.pdf ? { pdf: r.pdf.length } : {}),
+    // (a page from the draw worker: its draw time, and whether it was drawn ahead)
+    ...(j.draw_ms !== undefined ? { drawer: true, draw_ms: Math.round(j.draw_ms), kept: j.kept } : {}),
+  };
+}
+
+/**
+ * A streamed open's (the plain build's): each page as it is shipped, how far
+ * it is, and its end, with what the open would have answered.
+ */
+export type StreamEvent =
+  | { event: "page"; pages: number; hashes: string[] }
+  | { event: "progress"; phase: string; pass?: number; pages: number; ms?: number }
+  | { event: "done"; ok: boolean; json?: any; error?: string };
+
+/**
+ * `phitex watch`'s events, the host building from disk (Options.remote,
+ * crates/cli/src/view.rs): a page shipped while the build runs, how
+ * far it is, its problems, the build in (or a pass of it, settling), a
+ * newer save superseding it, and a forward search's place.
+ */
+export type WatchEvent =
+  | { event: "page"; k: number; hash: string; pages?: number; exact?: boolean }
+  | { event: "progress"; pass?: number; pages?: number; phase?: string; ms?: number; name?: string; pack?: string; done?: number; total?: number }
+  | { event: "diagnostics"; items: Problem[] }
+  | { event: "settled"; settling?: boolean; pass?: number; ms?: number; since_ms?: number | null; cold?: boolean; passes?: number; ran?: number; kept?: number; threads?: number; fetched?: number }
+  | { event: "superseded" }
+  | { event: "sync"; file: string; lo: number; hi: number; at: number; page?: number; y?: number };
+
+/**
+ * An LSP editor's cursor and selection (`phitex/cursor`, the language
+ * server's, native or the core's: docs/spec-editor-protocol.md §3.1), in
+ * bytes of the file's text, the glyph origins' space: shown as the
+ * Overleaf path shows its own ([`PreviewSession.followBytes`],
+ * [`PreviewSession.selectBytes`]).
+ */
+export type CursorEvent =
+  | { event: "follow"; file: string; at: number; word: [number, number] | null; line: [number, number] }
+  | { event: "select"; file: string; from: number; to: number };
+
+/** A Shelf pack the host fetches for a core that fetches its own (asked or prefetched, once per id), with its size once in. */
+export type PackEvent = { event: "pack"; id: string; state: "fetching" | "done" | "failed"; bytes?: number };
+
+export type CoreEvent = StreamEvent | WatchEvent | CursorEvent | PackEvent | { event: "building"; on: boolean } | { event: "preparing"; on: boolean } | { event: "switched" } | { event: "latexmkrc"; notes: string[] } | { event: "release"; release?: { release: string; min_extension?: string; notice?: string | null } };
+/** A collaborator's mark: its page, its glyphs' boxes, their label and hue. */
+type Peer = { k: number; boxes: [number, number, number, number][]; label: string; hue: number; file?: string; pos?: number };
+
+export interface CoreTransport {
+  request(req: CoreReq): Promise<CoreRes>;
+  /** Called when the core is lost (the session reopens). */
+  onLost?(cb: () => void): void;
+  /** What the core says unasked: its progress (a Shelf pack it fetches mid-build among it), a page, its diagnostics. */
+  onEvent?(cb: (e: CoreEvent) => void): void;
+}
+
+export interface Status {
+  pages: number;
+  /** What the source and the build tell, worst first (diagnostics.ts). */
+  diagnostics?: Diagnostic[];
+  /** Values pending (unsupported, or out of fuel); undefined: not known yet. */
+  pending?: number;
+  main: string | null;
+  file: string | null;
+}
+
+export interface PreviewSink {
+  /** Page `k` of `n` drawn (`hash`: its box's, if known). */
+  page(img: PageImage | null, k: number, n: number, hash?: string | null): void;
+  /**
+   * The pages there are, by their boxes' hashes (a continuous view draws the changed ones it shows);
+   * `previews` those streamed while the build runs and drawn without some of what they draw with.
+   */
+  layout?(hashes: string[], previews?: ReadonlySet<string>): void;
+  /** Another document's pages from here (a compare's diff): the last one's gone, the opening until this one's first page. */
+  opening?(): void;
+  status(s: Status): void;
+  /** A one-line summary, and (optionally) the details behind it. */
+  latency(summary: string, details?: string): void;
+  /** Packages being downloaded (not the project's files: say so), and those not found. */
+  packages?(p: PackageState): void;
+  /** A build is running (true) or none is (false): the view says so if it takes a while. */
+  busy?(on: boolean): void;
+  /** A build is in flight. */
+  busy?(on: boolean): void;
+  /** The core readies its next rebuild (pages still draw; an edit waits for it). */
+  preparing?(on: boolean): void;
+  /**
+   * Between the first paint (a plain build) and the SSA program: "preparing"
+   * since `since` (Date.now(): the detached tab's clock too), `slow` once an edit was typed in it
+   * (a plain rebuild); then "ready", once.
+   */
+  warmup?(w: { state: "preparing" | "ready"; since?: number; slow?: boolean }): void;
+  /** The document's outline (its PDF's bookmarks), after each build: Options.remote's, the `outline` op's. */
+  outline?(items: Entry[]): void;
+  /** The session's citation lookup, given once (the `cites` op: the citation under a point of page `k`, in the origins' points; null: none, or no answer). */
+  citesBy?(ask: (k: number, x: number, y: number) => Promise<CiteAnswer[] | null>): void;
+  /** The session's drawing of part of a page at a zoom of its own, given once: a link's window zoomed in (the `png` op at `scale` pixels a point, around `view`, fractions of the page). */
+  zoomBy?(ask: (k: number, scale: number, view: [number, number, number, number]) => Promise<PageImage | null>): void;
+  /** A streamed open: the pages shipped so far (null: it ended). */
+  streaming?(s: { pages: number; phase: string } | null): void;
+  /** A repaint is on screen, `ms` after the keystroke that made it. */
+  painted?(ms: number): void;
+  /** A build finished in `ms` (`first`: the cold one): the timing popover's bars. A watch's host says it from its own socket. */
+  buildTime?(ms: number, first: boolean): void;
+  /** Put the editor at `file`'s [from, to) (UTF-16 offsets), opening it if need be. */
+  goto?(file: string, from: number, to: number, focus?: boolean): void;
+  /** The editor's selection, highlighted on its pages until it changes ([] clears). */
+  marks?(marks: { k: number; boxes: [number, number, number, number][] }[]): void;
+  /** The pages' glyph origins came, or changed (a watch makes a build's after it is announced): what was looked up on them before is looked up again. */
+  origins?(): void;
+  /**
+   * Whether the document's outline is shown (the contents beside the
+   * pages): none, or false, it is not asked for after each build; the view
+   * asks for it with [`PreviewSession.outline`] when it shows it.
+   */
+  outlineWanted?(): boolean;
+  /** Highlight boxes on page `k` ([x, y top, w, h], PDF points), scrolled into view. */
+  mark?(k: number, boxes: [number, number, number, number][], scroll?: boolean): void;
+  /**
+   * Collaborators' cursors on the pages, each its word's boxes in its hue
+   * (0-360) with its label; the whole set ([] clears). Never scrolls.
+   */
+  others?(marks: { k: number; boxes: [number, number, number, number][]; label: string; hue: number; file?: string; pos?: number }[]): void;
+  /**
+   * The engine the project runs with: `ready` false, ⚡ Instant can't run it
+   * (yet); `needed` the engine a build error asked for, if any.
+   */
+  engine?(e: { engine: Engine; ready: boolean; needed?: Engine | null; approx?: boolean }): void;
+  error(e: string): void;
+  /** The connection to the engine lost (with why) or back: the view dims its pages while it is lost. */
+  connection?(up: boolean, why?: string): void;
+  check?(r: { ok: boolean; ms: number; mismatch?: string }): void;
+  mains?(names: string[], main: string | null): void;
+}
+
+export interface Options {
+  fuel: number;
+  /** 1: the one-worker start (the offscreen document's two-worker start otherwise, where the machine allows it). */
+  workers?: 1;
+  dpi: number;
+  checkEveryMs: number;
+  /** Where files the project doesn't have come from (packages.ts; default: nowhere). */
+  packages?: PackageSource;
+  /** The engine to run the project with, given its main file's text (default: pdfLaTeX). */
+  engine?: (main: string | undefined) => Engine;
+  /**
+   * A XeLaTeX project pdfLaTeX can approximate (engines.ts `approximable`),
+   * run with these stand-ins (extension/shims/: fonts ignored) instead of
+   * not at all; absent, such a project isn't built.
+   */
+  shims?: (main: string | undefined) => Promise<Record<string, string> | null>;
+  /**
+   * The host builds from disk (`phitex watch`): no project sent, no edits;
+   * the pages, problems and outline as its events tell; a double-click's
+   * source opened by it (`source`, bytes of the file as it is on disk), and
+   * a selection on the pages selected in the editor by it (`select`, the
+   * same bytes; the editor's focus left where it is).
+   */
+  remote?: { source(file: string, start: number, end: number): void; select?(file: string, start: number, end: number): void };
+  /** Schedules a flush (default: the next task). */
+  schedule?: (f: () => void) => void;
+  now?: () => number;
+}
+
+// (fuel is per chunk: 10^5 steps is far more than plain documents need, and
+// a runaway recursion costs ~70 ms a keystroke, not 700)
+const defaults: Options = { fuel: 100_000, dpi: 96, checkEveryMs: 5000 };
+
+const image = (r: CoreRes): PageImage | null => (r.canvas && r.size ? { canvas: r.canvas, w: r.size[0], h: r.size[1], links: r.links } : null);
+
+/**
+ * The project's main file, as Overleaf's "Main document" would be: a .tex
+ * file another file inputs (`\input`, `\include`, `\subfile`, `\subfileinclude`,
+ * a subfiles chapter, a standalone figure) is not it, whatever it holds; a
+ * file that inputs others is; then a whole document (`\documentclass` and
+ * `\end{document}`), `main.tex`, the top folder. Never the file open in the
+ * editor for being open.
+ */
+export function guessMain(files: Record<string, string>): string | null {
+  const names = Object.keys(files).filter((n) => /\.tex$/i.test(n));
+  const strip = (t: string) => t.replace(/(^|[^\\])%.*$/gm, "$1");
+  // (the names each file inputs, as paths from the project's top, .tex added)
+  const inputs = new Map<string, string[]>();
+  for (const n of names) {
+    const dir = n.includes("/") ? n.slice(0, n.lastIndexOf("/") + 1) : "";
+    const got: string[] = [];
+    for (const m of strip(files[n]).matchAll(/\\(?:input|include|subfile|subfileinclude|includestandalone)\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}/g)) {
+      const f = m[1].trim().replace(/^\.\//, "");
+      const tex = /\.tex$/i.test(f) ? f : `${f}.tex`;
+      got.push(tex, dir + tex);
+    }
+    inputs.set(n, got);
+  }
+  const inputted = new Set<string>();
+  for (const [n, got] of inputs) for (const f of got) if (f !== n) inputted.add(f);
+  const score = (n: string) => {
+    const t = strip(files[n]);
+    let s = 0;
+    if (inputted.has(n)) s -= 16;
+    if (inputs.get(n)!.some((f) => f !== n && f in files)) s += 8;
+    if (/(^|\n)[^%\n]*\\(bye|end\{document\})/.test(t)) s += 4;
+    if (/(^|\n)\s*\\documentclass/.test(t)) s += 2;
+    if (/^main\.tex$/i.test(n)) s += 1;
+    if (!n.includes("/")) s += 1;
+    return s;
+  };
+  return names.sort((a, b) => score(b) - score(a))[0] ?? null;
+}
+
+/** `text` replacing `old`, as the one edit of their differing middle (null: same). */
+export function diff(old: string, text: string): Edit | null {
+  if (old === text) return null;
+  let a = 0;
+  while (a < old.length && a < text.length && old[a] === text[a]) a++;
+  let z = 0;
+  while (z < old.length - a && z < text.length - a && old[old.length - 1 - z] === text[text.length - 1 - z]) z++;
+  // (never split a surrogate pair)
+  if (a > 0 && /[\udc00-\udfff]/.test(old[a] ?? "")) a--;
+  if (z > 0 && /[\udc00-\udfff]/.test(old[old.length - z] ?? "")) z--;
+  return { from: a, to: old.length - z, text: text.slice(a, text.length - z) };
+}
+
+export class PreviewSession {
+  private o: Options;
+  /** Each file's text as sent to the core (queued edits: in `batches`). */
+  private files: Record<string, string> = {};
+  private batches = new Map<string, Batch>();
+  main: string | null = null;
+  open: string | null = null;
+  page = 0;
+  pages = 0;
+  private opened = false;
+  debug = false;
+  /** When each file's queued edits began (the oldest keystroke not sent). */
+  private since = new Map<string, number>();
+  private scheduled = false;
+  /** Sends are chained: the core gets the edits in the order they were made. */
+  private chain: Promise<void> = Promise.resolve();
+  private host: EditorHost;
+  private core: CoreTransport;
+  private sink: PreviewSink;
+
+  /**
+   * What happened, in order (dev: scripts/mock-run.mjs reads it): each core
+   * request and its reply, package fetches, layouts. A ring of the last 3000,
+   * times in ms since the session began; never document text, only sizes.
+   */
+  readonly trace: { t: number; k: string; d?: unknown }[] = [];
+  /** The core fetches what it lacks from Shelf itself (its open reply says so). */
+  private coreFetches = false;
+  /** Shelf packs the core fetched in the build under way (shown as loading until it ends). */
+  private inBuild: string[] = [];
+  private tellPackages(): void {
+    this.sink.packages?.({ ...this.pkg, loading: [...this.pkg.loading], unavailable: [...this.pkg.unavailable], done: [...(this.pkg.done ?? [])], failed: [...(this.pkg.failed ?? [])] });
+  }
+  /**
+   * The core fetches a pack mid-build (the job goes on with it), as its
+   * progress says (`phase: "fetching"`): the view says which. (A pack it
+   * could not get is the build's trouble, said by the host, not here.)
+   */
+  private onFetching(e: { pack: string; name: string }): void {
+    this.tr("package: core fetches", e);
+    this.pkg.source = this.source.label;
+    // (one at a time, in order: the one before it has arrived)
+    const prev = this.inBuild.at(-1);
+    if (prev) this.pkg.loading = this.pkg.loading.filter((n) => n !== prev);
+    if (prev) this.pkg.done = [...(this.pkg.done ?? []), prev];
+    this.inBuild.push(e.pack);
+    this.pkg.loading = [...this.pkg.loading, e.pack];
+    this.tellPackages();
+  }
+
+  /**
+   * A pack the host fetches for the core (a core that fetches its own: the
+   * panel had said "0 package files" all through a cold build's downloads):
+   * loading while it comes, then done with its bytes counted, or failed.
+   */
+  private onPack(e: PackEvent): void {
+    this.tr("package: host fetches for the core", { id: e.id, state: e.state, bytes: e.bytes });
+    this.pkg.source = this.source.label || "Shelf";
+    const p = this.pkg;
+    p.loading = p.loading.filter((n) => n !== e.id);
+    if (e.state === "fetching") {
+      if (!p.done?.includes(e.id)) p.loading = [...p.loading, e.id];
+    } else if (e.state === "done") {
+      if (!p.done?.includes(e.id)) ((p.done = [...(p.done ?? []), e.id]), (p.bytes = (p.bytes ?? 0) + (e.bytes ?? 0)));
+    } else p.failed = [...(p.failed ?? []).filter((f) => f.name !== e.id), { name: e.id, error: "could not be fetched" }];
+    this.tellPackages();
+  }
+
+  /** Core requests sent and not answered yet; of them, ones that may build. */
+  inflight = 0;
+  private building = 0;
+  private t0 = 0;
+  tr(k: string, d?: unknown): void {
+    this.t0 ||= this.now();
+    this.trace.push({ t: Math.round(this.now() - this.t0), k, d });
+    if (this.trace.length > 3000) this.trace.shift();
+  }
+
+  constructor(host: EditorHost, core: CoreTransport, sink: PreviewSink, opts: Partial<Options> = {}) {
+    this.host = host;
+    // (a trap in the core, a panic, restarts its instance: every session it
+    // held is gone, "no such handle". Reopened here, a few times at most,
+    // since a panic a build always hits would loop)
+    core.onEvent?.((e) => {
+      // (a queued edit's build over, as `send` waits for it: built, failed, or the core gone)
+      const ev = (e as { event?: string }).event ?? "";
+      if (this.ended.length && (ev === "settled" || ev === "failed" || ev === "trapped")) for (const f of this.ended.splice(0)) f(e as { event: string });
+      // (a build's time, from every core and the watch alike: the popover's first-build and edit bars; a pass while the job's files settle is not one)
+      if (ev === "settled") {
+        const b = e as { ms?: number; cold?: boolean; settling?: boolean };
+        if (typeof b.ms === "number" && !b.settling) this.sink.buildTime?.(b.ms, !!b.cold);
+      }
+      if (e.event === "follow") return this.followBytes(e.file, e.at, e.word, e.line);
+      if (e.event === "select") return void this.selectBytes(e.file, e.from, e.to);
+      // (the watch's build moved the sources of pages it did not draw again,
+      // a comment line added above them: the glyphs kept are asked again, not
+      // left at the old text's bytes, which put a double-click lines off)
+      // (and the problems' underlines, looked up before the origins were
+      // there, are looked up again: a build's problems reach the view
+      // before its origins do)
+      // (a request for them still in flight may have been answered before
+      // they came, its reply sent after this event: not shared or kept, the
+      // page asked again, glyphsFetch)
+      if ((e as { event?: string }).event === "origins") this.originsGen++;
+      if (this.o.remote && (e as { event?: string }).event === "origins") return void (this.originsSeen++, this.glyphsAsked.clear(), this.glyphCache.clear(), this.culprits.clear(), this.sink.origins?.());
+      if (this.o.remote && "event" in e && WATCH.has(e.event)) return this.onWatch(e as WatchEvent);
+      // (a build of the core's began or ended; `preparing`, older cores' name for it)
+      if (e.event === "building" || e.event === "preparing") return this.sink.preparing?.(e.on);
+      // (references settled after one-trip keystrokes: the pages that changed drawn again)
+      // (the two-worker start: the SSA worker took over; its glyphs' sources are its own)
+      if (e.event === "switched") {
+        this.tr("core: the SSA worker took over", {});
+        this.glyphCache.clear();
+        if (this.opened) this.chain = this.chain.then(() => this.layout()).then(() => this.statusSoon());
+        return;
+      }
+      if (e.event === "settled") {
+        if (this.opened && !this.busy) this.chain = this.chain.then(() => this.layout()).then(() => this.queuedLatency(e)).then(() => this.statusSoon());
+        return;
+      }
+      if (e.event === "pack") return this.onPack(e);
+      // (the open's rc files: what they set that was not applied, said once an open)
+      if (e.event === "latexmkrc") return void ((this.rcNotes = latexmkNotes(e.notes)), this.statusSoon());
+      if (e.event === "page" || e.event === "progress" || e.event === "done") this.onStream(e as StreamEvent);
+    });
+    this.core = {
+      request: async (r) => {
+        const t0 = this.now();
+        this.tr(`→ ${r.op}`, traceReq(r));
+        this.inflight++;
+        // (the ops that may build: the view shows a build that takes a while)
+        const builds = r.op === "edit" || r.op === "status" || r.op === "open";
+        if (builds && this.building++ === 0) this.sink.busy?.(true);
+        // (the glyphs' sources: an edit maps them, as an editor maps positions;
+        // a file set whole or a new session asks them again)
+        if (r.op === "open" || r.op === "set_file") this.glyphCache.clear();
+        if (r.op === "edit") {
+          const len = new TextEncoder().encode(r.text).length;
+          this.mapCulprits(r.file, r.start, r.end, len);
+          this.mapGlyphs(r.file, r.start, r.end, len);
+        }
+        const res = await core.request(r).finally(() => {
+          this.inflight--;
+          if (builds && --this.building === 0) this.sink.busy?.(false);
+          // (the build that fetched them is done: the packs are in)
+          if (builds && this.inBuild.length) {
+            this.pkg.done = [...(this.pkg.done ?? []), ...this.inBuild.filter((n) => this.pkg.loading.includes(n))];
+            this.pkg.loading = this.pkg.loading.filter((n) => !this.inBuild.includes(n));
+            this.inBuild = [];
+            this.tellPackages();
+          }
+        });
+        this.tr(`← ${r.op}`, { ms: Math.round(this.now() - t0), ...traceRes(res) });
+        if (res.error) this.errorsSeen = [...this.errorsSeen.slice(-19), `${r.op}: ${res.error}`];
+        const lost = res.json?.error === "no such handle" || /^(core trapped|PDF driver failed)/.test(res.error ?? "");
+        // (a build that came back whole: a trap after it is a new one)
+        if (res.ok && (r.op === "edit" || r.op === "status")) this.traps = 0;
+        // (a core that ran out of the memory it got: the same document
+        // outgrows it again, so it is said, not reopened, the host's words
+        // naming the size and what to close)
+        if (lost && this.opened && /needs more than the [\d.]+ GiB of memory/.test(res.error ?? "")) {
+          this.opened = false;
+          this.sink.error(plainWhy(res.error!));
+          this.sink.connection?.(false, plainWhy(res.error!));
+          return res;
+        }
+        if (lost && this.opened && r.op !== "open") {
+          this.opened = false;
+          // (a trap again with no good build between is the same trap, the
+          // same input to the same engine: reopened once, then stopped, however
+          // long each takes; counted by time, a slow one would loop forever)
+          this.traps++;
+          const why = plainWhy(res.error ?? "The engine restarted.");
+          if (this.traps <= 1) {
+            this.sink.error(`${why} Restarting it.`);
+            this.sink.connection?.(false, `${why} Restarting it.`);
+            this.chain = this.chain.then(() => this.reopen());
+          } else {
+            this.sink.error(`${why} It happened again, so the preview has stopped. Reload the page to try again.`);
+            this.sink.connection?.(false, `${why} It happened again, so the preview has stopped. Reload the page to try again.`);
+          }
+        }
+        return res;
+      },
+      onLost: core.onLost?.bind(core),
+    };
+    this.sink = sink;
+    sink.citesBy?.((k, x, y) => this.cites(k, x, y));
+    sink.zoomBy?.((k, scale, view) => this.zoomed(k, scale, view));
+    this.o = { ...defaults, ...opts };
+    host.onOpen((f0, t) => {
+      const f = this.known(f0);
+      this.open = f;
+      this.resending.delete(f);
+      this.sync(f, t);
+      this.status();
+    });
+    host.onChanges((f0, es, len, sum) => {
+      const f = this.known(f0);
+      this.queue(f, es);
+      if (len !== undefined) this.agree(f, len, es, sum);
+    });
+    core.onLost?.(() => {
+      this.opened = false;
+      this.sink.error("The engine stopped. Restarting it.");
+      this.sink.connection?.(false, "The engine stopped. Restarting it.");
+      this.reopen();
+    });
+  }
+
+  /** Files whose whole text was asked for again (host.resend), until it comes (onOpen). */
+  private resending = new Set<string>();
+
+  /**
+   * The session's copy of `file` (its queued edits in) against the
+   * editor's length after `edits`, and its sum when it gives one (as typing
+   * pauses: a same-length paste misapplied keeps the length): on a
+   * difference the copy has drifted (edits lost or applied twice, as an
+   * Overleaf history restore's were),
+   * so it is said and the whole text asked for again, sync() diffing it in.
+   * Once until it comes.
+   */
+  private agree(file: string, len: number, edits: Edit[], sum?: number): void {
+    const text = this.text(file) ?? "";
+    // (the length at each change; the content too, when the editor gives its sum)
+    if ((text.length === len && (sum === undefined || textSum(text) === sum)) || this.resending.has(file)) return;
+    this.tr("editor and session disagree", { file, editor: len, session: text.length, sum: sum !== undefined, edits: edits.slice(-5) });
+    if (!this.host.resend) return;
+    this.resending.add(file);
+    this.host.resend(file);
+  }
+
+  /**
+   * The project's file the editor's name is: itself, else the one file
+   * whose path ends with it (a name read from Overleaf's page without its
+   * folders: edits to a new, empty file the build never reads, the page
+   * never changing while the chip said they were built).
+   */
+  private known(f: string): string {
+    if (f in this.files) return f;
+    const like = Object.keys(this.files).filter((p) => p.endsWith("/" + f));
+    if (like.length === 1) {
+      this.tr("file: named by its path", { from: f, to: like[0] });
+      return like[0];
+    }
+    return f;
+  }
+
+  /** The pages' request: -1, the PDF (the host draws its pages with MuPDF). */
+  private dpi(): number {
+    return -1;
+  }
+
+
+  private now(): number {
+    return (this.o.now ?? (() => performance.now()))();
+  }
+
+  async start(): Promise<void> {
+    if (this.o.remote) {
+      this.opened = true;
+      return this.watchJoined();
+    }
+    const files = await this.host.loadProject();
+    // (a file the editor already announced keeps the editor's text)
+    for (const [f, t] of Object.entries(files)) if (!(f in this.files)) this.files[f] = t;
+    this.main = this.host.mainFile?.(this.files) ?? guessMain(this.files);
+    this.sink.mains?.(Object.keys(this.files).filter((f) => f.endsWith(".tex")), this.main);
+    await this.reopen();
+    this.host.ready?.();
+    if (this.o.checkEveryMs > 0) this.checkTimer = setInterval(() => this.debug && this.check(), this.o.checkEveryMs);
+  }
+
+  private checkTimer: ReturnType<typeof setInterval> | undefined;
+
+  /** The session ends (its view closed): its timers stop and it sends nothing more; the core's side is its transport's to close. */
+  stop(): void {
+    clearInterval(this.checkTimer);
+    if (this.statusTimer) clearTimeout(this.statusTimer);
+    this.opened = false;
+    this.paused = true;
+  }
+
+  /** Files changed outside the editor (e.g. a project reloaded): each diffed in. */
+  refresh(files: Record<string, string>): void {
+    for (const [f, t] of Object.entries(files)) if (f !== this.open) this.sync(f, t);
+  }
+
+  setMain(m: string): Promise<void> {
+    this.main = m;
+    return this.reopen();
+  }
+
+  /**
+   * Clean recompile: the project's files as Overleaf has them now, packages
+   * that failed or were not found asked for again, and a fresh core session
+   * (discovery, first paint, then the incremental program), nothing kept from
+   * the last job but the packages already fetched.
+   */
+  async clean(files: Record<string, string>): Promise<void> {
+    for (const [f, t] of Object.entries(files)) if (f !== this.open) this.files[f] = t;
+    for (const n of [...this.pkg.unavailable, ...(this.pkg.failed ?? []).map((f) => f.name)]) this.asked.delete(n);
+    this.pkg.unavailable = [];
+    this.pkg.failed = [];
+    this.texError = undefined;
+    this.hashes = [];
+    return this.reopen();
+  }
+
+  /** Whether the open's sources used minted (the worker then has its runner). */
+  private minted = false;
+
+  /** A fresh core session from the texts with every queued edit in. */
+  async reopen(): Promise<void> {
+    if (!this.main) return this.sink.error("no main .tex file found");
+    for (const [f, b] of this.batches) this.files[f] = b.text;
+    this.batches.clear();
+    const t = this.now();
+    // (what the project's files load, by a scan, fetched before the first
+    // build: a cold build costs the format's load, ~0.7 s in wasm, and stops
+    // at the first file it lacks)
+    // (pdftex.map: every PDF-mode build reads it first)
+    const want = this.o.engine?.(this.files[this.main]) ?? "pdflatex";
+    // (XeLaTeX approximated: pdfLaTeX with stand-ins for fontspec & co.)
+    const shims = !ENGINES[want].ready && want === "xelatex" ? await this.o.shims?.(this.files[this.main]) : null;
+    const engine: Engine = shims ? "pdflatex" : want;
+    this.engine = engine;
+    this.wanted = want;
+    this.preamble = preambleOf(this.files[this.main]);
+    this.sink.engine?.({ engine: want, ready: ENGINES[engine].ready, approx: !!shims });
+    // (an engine ⚡ Instant doesn't run yet: nothing is built; the view says so and offers another)
+    if (!ENGINES[engine].ready) {
+      this.opened = false;
+      this.tr("engine", { engine, ready: false });
+      return;
+    }
+    await this.prefetch(["pdftex.map", ...Object.values(this.files).flatMap(referenced)]);
+    // (an open with minted in the sources loads the worker's \write18 runner, Pyodide)
+    this.minted = Object.values(this.files).some(usesMinted);
+    // (the project's latexmkrc, as Overleaf reads it: its search paths applied by the core, the rest said)
+    const rc = latexmkFiles(this.files);
+    this.rcFiles = new Set(Object.keys(rc ?? {}));
+    this.rcNotes = [];
+    const latexmk = rc && { files: rc, exact: false };
+    const r = await this.core.request({ op: "open", main: this.main, files: { ...this.pkgFiles, ...shims, ...this.files }, fuel: this.o.fuel, engine, workers: this.o.workers, latexmk, projectFiles: rc && Object.keys(this.files) });
+    if (!r.ok) return this.sink.error((typeof r.json?.error === "string" ? r.json.error : undefined) ?? r.error ?? "open failed");
+    this.sink.connection?.(true);
+    // (streamed: the pages come as they are shipped, onStream; then its end,
+    // with what a blocking open would have answered)
+    if (r.json.building) {
+      this.tr("open: streaming", {});
+      this.opened = true;
+      this.sink.busy?.(true);
+      this.sink.streaming?.({ pages: 0, phase: r.json.phase ?? "typesetting" });
+      const d = await new Promise<Extract<StreamEvent, { event: "done" }>>((res) => (this.streamEnd = res));
+      this.sink.busy?.(false);
+      this.sink.streaming?.(null);
+      if (!d.ok || !d.json) return this.sink.error(d.error ?? "the build stopped");
+      r.json = d.json;
+    }
+    this.opened = true;
+    const latex = r.json.engine === "phitex";
+    // (diagnosed before this was known: say it again with it)
+    if (latex !== this.latex) this.lastWarned = 0;
+    this.latex = latex;
+    this.coreFetches = !!r.json.fetches;
+    // (a plain first paint: the SSA program is still to come, said until it is)
+    this.warming = typeof r.json.how === "string" && r.json.how.startsWith("plain") ? this.now() : 0;
+    this.warmSlow = false;
+    if (this.warming) this.sink.warmup?.({ state: "preparing", since: Date.now() });
+    this.setPages(r.json.pages);
+    this.noteError(r.json);
+    this.status(r.json.pending, r.json.undefined_names);
+    this.fetchPackages(r.json.missing);
+    // (the open's answer: how long the engine took to answer it, and its own build's time when it built then)
+    const rt = this.now() - t, said = (ms: number) => (ms < 1000 ? `${ms.toFixed(0)} ms` : `${(ms / 1000).toFixed(1)} s`);
+    this.sink.latency(`opened: the engine answered in ${said(rt)}${r.json.build_ms >= 1 ? `, its build ${said(r.json.build_ms)}` : ""}`);
+    await (this.sink.layout ? this.layout(Array.isArray(r.json.hashes) ? r.json.hashes : undefined) : this.showPage());
+    // (the first build is in: nothing is building for the packages now)
+    this.pkg.building = false;
+    this.tellPackages();
+    this.statusSoon();
+  }
+
+  /** A streamed open's end, awaited by `open`. */
+  private streamEnd: ((d: Extract<StreamEvent, { event: "done" }>) => void) | undefined;
+  /** The streamed open's first page was traced. */
+  private streamFirst = false;
+
+  private onStream(e: StreamEvent): void {
+    if (e.event === "done") {
+      this.tr("open: streamed", { ok: e.ok });
+      this.streamFirst = false;
+      this.streamEnd?.(e);
+      this.streamEnd = undefined;
+      return;
+    }
+    if (!this.streamEnd) return;
+    if (e.event === "progress") return this.sink.streaming?.({ pages: e.pages, phase: e.phase });
+    // (a page shipped: laid out and drawn, as after an edit)
+    if (!this.streamFirst) {
+      this.streamFirst = true;
+      this.tr("open: first page", { pages: e.pages });
+    }
+    this.setPages(e.pages);
+    this.sink.streaming?.({ pages: e.pages, phase: "typesetting" });
+    if (this.sink.layout) this.chain = this.chain.then(() => this.layout(e.hashes));
+  }
+
+  /** When the plain first paint came, while the SSA program is still to come (0: not warming). */
+  private warming = 0;
+  private warmSlow = false;
+  /** A status said how the last build was: past a plain one, the SSA program is there. */
+  private warmCheck(how: unknown): void {
+    if (!this.warming || typeof how !== "string" || how.startsWith("plain")) return;
+    this.tr("warmup: ready", { ms: Math.round(this.now() - this.warming) });
+    this.warming = 0;
+    this.sink.warmup?.({ state: "ready" });
+  }
+
+  private lastWarned = 0;
+  /** When the core trapped, in the last minute. */
+  /** Traps since the last build that came back whole. */
+  private traps = 0;
+  /** The engine the project runs with (its packages are resolved for it: which tree's file). */
+  private engine: Engine = "pdflatex";
+  /** The engine the main file asked for at the last open (before the shims' choice), and its preamble then. */
+  private wanted?: Engine;
+  private preamble?: string;
+  /** The core runs LaTeX (the open reply's `engine`; until it says, as phitex's, the default build). */
+  private latex = true;
+  private diags: Diagnostic[] = [];
+  /** The open's rc files (latexmkrc.ts): an edit to one reopens. */
+  private rcFiles = new Set<string>();
+  /** What the open's rc files set that was not applied (the core's `latexmkrc` event). */
+  private rcNotes: Diagnostic[] = [];
+  /** The last build's first TeX error (the core's status), if it had one. */
+  private texError?: TexError;
+  private noteError(j: { history?: number; error?: unknown }): void {
+    if (j.history === undefined) return;
+    this.texError = j.error && typeof j.error === "object" ? (j.error as TexError) : undefined;
+  }
+  private undefinedNames: string[] = [];
+
+  /** The last status scan's pending count (edits keep it until the next scan). */
+  private pending?: number;
+
+  private status(pending?: number, undefinedNames?: string[]): void {
+    if (this.o.remote) return this.sink.status({ pages: this.pages, main: this.main, file: null, diagnostics: this.watchDiags });
+    this.pending = pending;
+    // (the source scan is O(project): at most once a second)
+    if (undefinedNames) this.undefinedNames = undefinedNames;
+    if (this.now() - this.lastWarned > 250 || undefinedNames) {
+      const texts: Record<string, string> = {};
+      for (const f of Object.keys(this.files)) texts[f] = this.text(f)!;
+      this.diags = diagnose(texts, this.main, {
+        pages: this.pages,
+        pending,
+        undefinedNames: this.undefinedNames,
+        unavailable: this.pkg.unavailable,
+        packageSource: this.source === noPackages ? undefined : this.source.label,
+        latex: this.latex,
+        texError: this.texError,
+        packageErrors: this.pkg.failed,
+      });
+      this.lastWarned = this.now();
+    }
+    this.sink.status({ pages: this.pages, pending, main: this.main, file: this.open, diagnostics: this.rcNotes.length ? [...this.diags, ...this.rcNotes] : this.diags });
+  }
+
+  /** Packages the core was given (kept apart from the project's files: never diagnosed, never a main). */
+  private pkgFiles: Record<string, string> = {};
+  /** Every package name asked for once: not asked again. */
+  private asked = new Set<string>();
+  private pkg: PackageState = { loading: [], unavailable: [], source: "", done: [], building: false };
+  private get source(): PackageSource {
+    return this.o.packages ?? noPackages;
+  }
+
+  /**
+   * The core read `missing` and found nothing: each package among them
+   * fetched (once), then set as a file (a rebuild each: the core never
+   * looks for a missing file again). What they read in turn shows up in
+   * the next status, and is fetched then.
+   */
+  private fetchPackages(missing?: string[], guessed: string[] = []): void {
+    // (a core that fetches from Shelf itself, mid-build, looked everywhere:
+    // what it still lacks is nowhere; said, not fetched again)
+    if (this.coreFetches) {
+      const none = (missing ?? []).filter((n) => isPackageFile(n) && !this.pkg.unavailable.includes(n));
+      if (none.length) (this.pkg.unavailable.push(...none), this.tellPackages());
+      return;
+    }
+    const wanted = new Set(missing ?? []);
+    missing = [...wanted, ...guessed];
+    const want = [...new Set(missing ?? [])].filter((n) => isPackageFile(n) && !(n in this.files) && !this.asked.has(n));
+    if (!want.length) return;
+    for (const n of want) this.asked.add(n);
+    const src = this.source;
+    this.pkg.source = src.label;
+    const tell = () =>
+      this.sink.packages?.({ ...this.pkg, loading: [...this.pkg.loading], unavailable: [...this.pkg.unavailable], done: [...(this.pkg.done ?? [])], failed: [...(this.pkg.failed ?? [])] });
+    if (src === noPackages) {
+      this.pkg.unavailable.push(...want);
+      tell();
+      return this.status(this.pending, this.undefinedNames);
+    }
+    this.pkg.loading.push(...want);
+    tell();
+    // (each package fetched is scanned for the ones it loads, and those are
+    // fetched too, before the next build: the build stops at the first file
+    // it lacks, so learning them one build at a time costs a build each)
+    const got: (readonly [string, string | null])[] = [];
+    this.tr("packages: want", want);
+    const fetchOne = async (n: string): Promise<void> => {
+      const t = await src.resolve(n, this.engine).catch((e) => this.failed(n, e));
+      this.tr(t === null ? "package: none" : "package: got", n);
+      got.push([n, t]);
+      this.pkg.loading = this.pkg.loading.filter((m) => m !== n);
+      if (t !== null) {
+        this.pkg.done!.push(n);
+        this.pkg.failed = this.pkg.failed?.filter((f) => f.name !== n);
+      }
+      const more = t === null || t === DELIVERED ? [] : referenced(t).filter((m) => isPackageFile(m) && !(m in this.files) && !this.asked.has(m));
+      for (const m of more) this.asked.add(m);
+      this.pkg.loading.push(...more);
+      tell();
+      await Promise.all(more.map(fetchOne));
+    };
+    void Promise.all(want.map(fetchOne)).then(() => {
+      for (const [n, t] of got) {
+        if (t === null) {
+          // (a name the scan guessed and the build never asked for is not "unavailable")
+          if (wanted.has(n) && !this.pkg.failed?.some((f) => f.name === n)) this.pkg.unavailable.push(n);
+          continue;
+        }
+        // (a binary file: the source gave it to the core, and gives it again on a reopen)
+        if (t === DELIVERED) continue;
+        this.pkgFiles[n] = t;
+        if (this.opened) this.chain = this.chain.then(() => this.core.request({ op: "set_file", file: n, text: t }).then(() => undefined));
+      }
+      const any = got.some(([, t]) => t !== null);
+      this.pkg.building = any;
+      tell();
+      this.status(this.pending, this.undefinedNames);
+      if (any)
+        this.chain = this.chain
+          .then(() => this.layout())
+          .then(() => {
+            this.pkg.building = false;
+            tell();
+            this.statusSoon();
+          });
+    });
+  }
+
+  /** After the core's discovery pass: what it asked for is here (or nowhere), so the first paint may build. Once per open. */
+  /** A fetch that failed: kept with why (shown), and askable again. */
+  private failed(n: string, e: unknown): null {
+    this.asked.delete(n);
+    const error = e instanceof Error ? e.message : String(e);
+    this.pkg.failed = [...(this.pkg.failed ?? []).filter((f) => f.name !== n), { name: n, error }];
+    return null;
+  }
+
+  /** Fetch `names` (and what they load, by the scan) into pkgFiles, before a session opens. */
+  private async prefetch(names: string[]): Promise<void> {
+    const src = this.source;
+    const want = [...new Set(names)].filter((n) => isPackageFile(n) && !(n in this.files) && !this.asked.has(n));
+    if (src === noPackages || !want.length) return;
+    this.pkg.source = src.label;
+    const tell = () =>
+      this.sink.packages?.({ ...this.pkg, loading: [...this.pkg.loading], unavailable: [...this.pkg.unavailable], done: [...(this.pkg.done ?? [])], failed: [...(this.pkg.failed ?? [])] });
+    for (const n of want) this.asked.add(n);
+    this.pkg.loading.push(...want);
+    tell();
+    const one = async (n: string): Promise<void> => {
+      const t = await src.resolve(n, this.engine).catch((e) => this.failed(n, e));
+      this.pkg.loading = this.pkg.loading.filter((m) => m !== n);
+      if (t !== null) this.pkg.done!.push(n);
+      if (t !== null && t !== DELIVERED) this.pkgFiles[n] = t;
+      const more = t === null || t === DELIVERED ? [] : referenced(t).filter((m) => isPackageFile(m) && !(m in this.files) && !this.asked.has(m));
+      for (const m of more) this.asked.add(m);
+      this.pkg.loading.push(...more);
+      tell();
+      await Promise.all(more.map(one));
+    };
+    const t0 = this.now();
+    this.tr("prefetch: start", want.length);
+    await Promise.all(want.map(one));
+    this.tr("prefetch: done", { files: this.pkg.done?.length ?? 0, ms: Math.round(this.now() - t0) });
+    this.pkg.building = true;
+    tell();
+  }
+
+  /** The page count of the last build; the page in view kept inside it
+   * (a build with no page, an error, keeps the page: it comes back). */
+  private setPages(n: number): void {
+    this.pages = n;
+    if (n > 0 && this.page >= n) this.page = n - 1;
+  }
+
+  /** The page in view (the one an edit paints first). */
+  setPage(p: number): Promise<void> {
+    this.page = Math.max(0, Math.min(p, Math.max(this.pages - 1, 0)));
+    void this.peerPages();
+    return this.sink.layout ? Promise.resolve() : this.showPage();
+  }
+
+  /** The pages' hashes, as the core has them now. */
+  private hashes: string[] = [];
+
+  /** Tell the view which pages there are (by hash). */
+  /** `given`: the hashes a reply carried (the open's), else asked for. */
+  /** The pages streamed not exact, by hash (`{"event":"page","exact":false}`, the pages answer's `inexact`). */
+  private previews = new Set<string>();
+
+  private async layout(given?: string[]): Promise<void> {
+    if (!this.sink.layout) return;
+    if (given) this.hashes = given;
+    else {
+      const r = await this.core.request({ op: "pages" });
+      if (!r.ok || !r.json?.pages) return;
+      this.hashes = r.json.pages;
+      // (the pages streamed not exact, by place: their hashes marked)
+      const ix: unknown = r.json.inexact;
+      this.previews = new Set(Array.isArray(ix) ? ix.map((k) => this.hashes[k as number]).filter((h): h is string => !!h) : []);
+    }
+    this.tr("layout", { pages: this.hashes.length });
+    this.setPages(this.hashes.length);
+    // (no page shipped: the view keeps what it shows, dimmed; see the sink)
+    if (this.hashes.length) this.sink.layout(this.hashes, this.previews);
+    // (the collaborators on the new pages)
+    this.drawPeers();
+    void this.peerPages();
+    // (the glyphs' sources of the pages around the one read, asked now, after
+    // the build, so a double-click or a selection finds them ready)
+    if (this.sink.goto && !this.noOriginsPrefetch) this.glyphsAll();
+  }
+
+  /** Everything again, for a view that just joined (a detached PDF tab). */
+  async resync(): Promise<void> {
+    if (!this.opened) return;
+    if (this.o.remote) return this.watchJoined();
+    this.sink.mains?.(Object.keys(this.files).filter((f) => f.endsWith(".tex")), this.main);
+    this.status(this.pending);
+    await (this.sink.layout ? this.layout() : this.showPage());
+  }
+
+  /** Page `k`, for a view that wants it. */
+  async fetch(k: number): Promise<void> {
+    if (!this.opened) return;
+    const r = await this.core.request({ op: "png", page: k, dpi: this.dpi() });
+    const img = image(r);
+    // (the hash of the page drawn: the draw worker's PDF may be a build behind or ahead)
+    if (img) this.sink.page(img, k, this.pages, r.json?.hash ?? this.hashes[k] ?? null);
+  }
+
+  /** Part of page `k` (`view`, fractions of it) at `scale` pixels a point, for a link's window zoomed in: not the pages' drawing, which stays as it is. */
+  async zoomed(k: number, scale: number, view: [number, number, number, number]): Promise<PageImage | null> {
+    if (!this.opened) return null;
+    const r = await this.core.request({ op: "png", page: k, dpi: this.dpi(), scale, view }).catch(() => null);
+    return r?.ok ? image(r) : null;
+  }
+
+  async showPage(): Promise<void> {
+    if (!this.opened) return;
+    if (this.sink.layout) return this.layout();
+    const r = await this.core.request({ op: "png", page: this.page, dpi: this.dpi() });
+    this.sink.page(image(r), this.page, this.pages);
+  }
+
+  /** (debugging: no glyph-origin requests after layouts) */
+  noOriginsPrefetch = false;
+  /** The errors replies carried (traps, panics), the last 20. */
+  private errorsSeen: string[] = [];
+
+  /** An anonymized debug report (report.ts) for the user to send. */
+  report(env: { version: string; engine: string; userAgent: string }): string {
+    const st = this.trace.filter((e) => e.k === "← status").at(-1)?.d as Record<string, unknown> | undefined;
+    return report({
+      ...env,
+      paths: Object.keys(this.files),
+      trace: this.trace,
+      diagnostics: this.diags ?? [],
+      status: st,
+      packages: this.pkg,
+      // (TeX's error by its message only: its context is the document's lines)
+      errors: [...this.errorsSeen, ...(this.texError ? [`TeX: ${this.texError.message}`] : [])],
+    });
+  }
+
+  /** Page `k`'s glyphs with their sources, as the core has them now (kept by the page's hash). */
+  private glyphCache = new Map<string, Glyph[]>();
+  /**
+   * An edit replaced bytes [start, end) of `file` with `len` bytes: every
+   * cached glyph's source range moved with it. A page the edit changed has a
+   * new hash, so its glyphs are asked again (the cache is by page hash).
+   */
+  private mapGlyphs(file: string, start: number, end: number, len: number): void {
+    const map = (p: number) => (p < start ? p : p >= end ? p + len - (end - start) : start + len);
+    for (const [key, gs] of this.glyphCache) {
+      // (a page with a glyph whose source the edit replaced: its glyphs
+      // asked again, not mapped: all of them would land at the edit's end;
+      // a whole document replaced did that to every page)
+      if (end > start && gs.some((g) => g.file === file && g.start < end && g.end > start)) {
+        this.glyphCache.delete(key);
+        continue;
+      }
+      for (const g of gs) {
+        if (g.file !== file) continue;
+        const [a, b] = [map(g.start), map(g.end)];
+        g.start = a;
+        g.end = Math.max(a, b);
+      }
+    }
+  }
+
+  /**
+   * boxesOf's answers, by page (its glyph list: a page changed has a new
+   * one) and range (`file\0start\0end`): the range's boxes there and the
+   * page's glyph nearest it. Mapped through edits as the glyphs are, so a
+   * build's problems are looked up only on the pages it changed.
+   */
+  private culprits = new Map<Glyph[], Map<string, { boxes: [number, number, number, number][] | null; g: Glyph | null; d: number }>>();
+  /** The culprits' answers moved with an edit (before the glyphs are): one the edit touches, between its range and its nearest glyph, dropped. */
+  private mapCulprits(file: string, start: number, end: number, len: number): void {
+    const live = new Set(this.glyphCache.values());
+    for (const [all, memo] of this.culprits) {
+      if (!live.has(all)) {
+        this.culprits.delete(all);
+        continue;
+      }
+      const moved: [string, NonNullable<ReturnType<typeof memo.get>>][] = [];
+      for (const [id, m] of memo) {
+        const [f, a, b] = id.split("\0");
+        if (f !== file) continue;
+        const lo = Math.min(+a, m.g?.start ?? +a), hi = Math.max(+b, m.g?.end ?? +b);
+        if (start > hi) continue;
+        memo.delete(id);
+        // (before it all: moved by what the edit added)
+        if (end < lo) moved.push([`${f}\0${+a + len - (end - start)}\0${+b + len - (end - start)}`, m]);
+      }
+      for (const [id, m] of moved) memo.set(id, m);
+    }
+  }
+
+  /** Page `k`'s glyphs if they are here, at once (no request, no waiting on a build). */
+  private cached(k: number): Glyph[] | undefined {
+    return this.glyphCache.get(`${k}:${this.hashes[k] ?? ""}`);
+  }
+
+  /** Every page's glyphs asked for, the one read first, one at a time: after each build, so lookups are local. */
+  private glyphsAll(): void {
+    const gen = ++this.glyphGen;
+    const n = this.hashes.length;
+    const order = [this.page, ...Array.from({ length: n }, (_, i) => i).filter((i) => i !== this.page)];
+    void (async () => {
+      for (const k of order) {
+        if (gen !== this.glyphGen) return;
+        if (k >= 0 && k < n && !this.cached(k)) await this.glyphsOf(k);
+      }
+    })();
+  }
+  private glyphGen = 0;
+
+  private glyphsOf(k: number): Promise<Glyph[]> {
+    // (by the page's hash: an unchanged page keeps its glyphs, mapped through edits)
+    const key = `${k}:${this.hashes[k] ?? ""}`;
+    const have = this.glyphCache.get(key);
+    if (have) return Promise.resolve(have);
+    // (asked once while it is asked: the prefetch, a follow and the
+    // collaborators all ask for a page an edit changed, at once)
+    let p = this.glyphsAsked.get(key);
+    if (!p) {
+      const mine: Promise<Glyph[]> = this.glyphsFetch(k, key).finally(() => this.glyphsAsked.get(key) === mine && this.glyphsAsked.delete(key));
+      this.glyphsAsked.set(key, (p = mine));
+    }
+    return p;
+  }
+  private glyphsAsked = new Map<string, Promise<Glyph[]>>();
+  /** The watch's `origins` events seen: a page's answer asked before the latest is of the origins before it. */
+  private originsSeen = 0;
+
+  /** The builds' `origins` events seen, the core's and the watch's: an ask made before the latest is of an older build. */
+  private originsGen = 0;
+
+  /**
+   * `req` asked until it is made: an answer `{pending: true}` (made when
+   * asked, by the core's owner) asked again after 4 ms, then 8, doubling to
+   * 100 ms, for [`PENDING_CAP_MS`] at most; given up (null) once `stale()`
+   * says the ask is of an older build (a single-threaded core's long build
+   * holds its step: asked every 4 ms with no end, a page gone by the next
+   * build was asked for ever).
+   */
+  /**
+   * The citation under point (`x`, `y`) of page `k` (the origins' points: from the page's top
+   * left, the link's middle will do), as the engine read it: each key in the \cite's order, its
+   * label from the .aux, where its entry is typeset. Null: no citation there, no answer, a core
+   * without the op (the viewer reads the pages then). Asked between builds, as page_of.
+   */
+  async cites(k: number, x: number, y: number): Promise<CiteAnswer[] | null> {
+    const r = await this.untilMade({ op: "cites", page: k, x, y }).catch(() => null);
+    const c = r?.ok ? (r.json as { cites?: unknown } | undefined)?.cites : null;
+    return Array.isArray(c) ? (c as CiteAnswer[]).filter((e) => e && typeof e.key === "string") : null;
+  }
+
+  private async untilMade(req: CoreReq, stale: () => boolean = () => false): Promise<CoreRes | null> {
+    let r = await this.core.request(req);
+    for (let wait = 4, spent = 0; r.ok && r.json?.pending; wait = Math.min(2 * wait, 100)) {
+      if (stale() || spent >= PENDING_CAP_MS) return null;
+      await new Promise((go) => setTimeout(go, wait));
+      spent += wait;
+      if (stale()) return null;
+      r = await this.core.request(req);
+    }
+    return r;
+  }
+
+  private async glyphsFetch(k: number, key: string): Promise<Glyph[]> {
+    const seen = this.originsSeen;
+    const gen = this.originsGen;
+    // (a page's origins are made when asked, that page alone: asked again
+    // until they are, while this build's)
+    const r = await this.untilMade({ op: "origins", page: k }, () => gen !== this.originsGen);
+    // (the origins came while this was asked, the answer made before
+    // them: the page asked again, as the event's lookups do, if it is
+    // still there)
+    if (seen !== this.originsSeen || gen !== this.originsGen) return k < this.hashes.length ? this.glyphsOf(k) : [];
+    if (!r || !r.ok || !r.json || r.json.pending) return [];
+    // (the job's names: "main" for main.tex, "ch/intro.tex", "article.cls")
+    const path = (n: string) => {
+      n = n.replace(/^\.\//, "");
+      // (the host's names, as they are on its disk)
+      if (this.o.remote) return n;
+      return n in this.files ? n : n + ".tex" in this.files ? n + ".tex" : null;
+    };
+    const gs = glyphs(r.json, path);
+    // (an empty answer is not kept: a page asked before its origins came
+    // must be asked again, not stay empty under its hash)
+    if (!gs.length) return gs;
+    // (old hashes' entries: dropped past a few hundred pages' worth)
+    if (this.glyphCache.size > 4 * Math.max(this.hashes.length, 100)) this.glyphCache.clear();
+    this.glyphCache.set(key, gs);
+    // (a collaborator on this page shown now)
+    if (this.peers.length) this.drawPeers();
+    return gs;
+  }
+
+  /** A double-click at (x, y) on page `k` (PDF points from its top left): the editor to its source. */
+  async toSource(k: number, x: number, y: number): Promise<void> {
+    if (!this.opened) return;
+    const g = nearest(this.cached(k) ?? (await this.glyphsOf(k)), x, y);
+    this.tr("sync→source", { k, x, y, g });
+    if (!g?.file) return;
+    if (this.o.remote) return this.o.remote.source(g.file, g.start, g.end);
+    const t = this.files[g.file];
+    this.sink.goto?.(g.file, charOffset(t, g.start), charOffset(t, g.end));
+  }
+
+  /**
+   * The editor selected [from, to) of `file` (UTF-16): the glyphs that came
+   * from it, on every page, highlighted (an empty selection clears them).
+   */
+  async selectSource(file: string, from: number, to: number): Promise<void> {
+    if (!this.opened || !(file in this.files)) return;
+    const t = this.files[file];
+    return this.selectBytes(file, byteOffset(t, from), byteOffset(t, to));
+  }
+
+  /**
+   * Bytes [a, b) of `file`'s text selected (the glyph origins' offsets):
+   * the glyphs that came from them, on every page, highlighted (an empty
+   * selection clears them). [`selectSource`]'s, and an LSP editor's
+   * (`{event: "select"}`).
+   */
+  async selectBytes(file: string, a: number, b: number): Promise<void> {
+    if (!this.opened) return;
+    if (a === b) return this.sink.marks?.([]);
+    const out: { k: number; boxes: [number, number, number, number][] }[] = [];
+    for (let k = 0; k < Math.max(this.hashes.length, this.pages); k++) {
+      const all = this.cached(k) ?? (await this.glyphsOf(k));
+      const hit = all.filter((g) => g.file === file && !g.synth && g.start < b && g.end > a);
+      if (hit.length) out.push({ k, boxes: boxes(hit, all) });
+    }
+    this.tr("select→page", { file, a, b, pages: out.map((m) => m.k) });
+    this.sink.marks?.(out);
+  }
+
+  /**
+   * Text selected on the pages ([x, y top, w, h] boxes in PDF points, by
+   * page): the editor selects the source it came from (the file most of it
+   * came from, from its first glyph's start to its last's end).
+   */
+  async selectPage(sel: { k: number; rects: [number, number, number, number][] }[]): Promise<void> {
+    const best = await this.sourceOf(sel);
+    if (!best) return;
+    const { file, start: lo, end: hi } = best;
+    // (the host has the files: it selects them, as it opens a double-click's)
+    if (this.o.remote) return void this.o.remote.select?.(file, lo, hi);
+    const t = this.files[file];
+    if (t === undefined) return;
+    this.sink.goto?.(file, charOffset(t, lo), charOffset(t, hi), false);
+  }
+
+  /**
+   * The source of text selected on the pages ([x, y top, w, h] boxes in PDF
+   * points, by page): the file most of its glyphs came from, from its first
+   * glyph's start to its last's end, in bytes (the glyph origins'); null
+   * where none of it came from a file.
+   */
+  async sourceOf(sel: { k: number; rects: [number, number, number, number][] }[]): Promise<{ file: string; start: number; end: number } | null> {
+    if (!this.opened || !sel.length) return null;
+    const by = new Map<string, { lo: number; hi: number; n: number }>();
+    for (const { k, rects } of sel) {
+      for (const g of this.cached(k) ?? (await this.glyphsOf(k))) {
+        if (!g.file || g.synth) continue;
+        // (a glyph's body: just right of and above its origin)
+        const [gx, gy] = [g.x + 1, g.y - 2];
+        if (!rects.some(([x, y, w, h]) => gx >= x && gx <= x + w && gy >= y && gy <= y + h)) continue;
+        const r = by.get(g.file) ?? { lo: Infinity, hi: -Infinity, n: 0 };
+        by.set(g.file, { lo: Math.min(r.lo, g.start), hi: Math.max(r.hi, g.end), n: r.n + 1 });
+      }
+    }
+    const best = [...by].sort((x, y) => y[1].n - x[1].n)[0];
+    this.tr("select→source", { pages: sel.map((s) => s.k), file: best?.[0], glyphs: best?.[1].n ?? 0 });
+    if (!best) return null;
+    const [file, { lo, hi }] = best;
+    return { file, start: lo, end: hi };
+  }
+
+  /** The source place nearest (x, y) on page `k` (PDF points from its top left): a spot with no text of its own, a figure's. */
+  async spotOf(k: number, x: number, y: number): Promise<{ file: string; start: number } | null> {
+    if (!this.opened) return null;
+    const g = nearest(this.cached(k) ?? (await this.glyphsOf(k)), x, y);
+    return g?.file ? { file: g.file, start: g.start } : null;
+  }
+
+  /**
+   * The editor's cursor at `pos` (UTF-16) in `file`, as it moves: the word it
+   * is in highlighted on the page, at once, from the glyphs already here
+   * (none asked for: a page not yet here is skipped); scrolled to only when
+   * the cursor changed line.
+   */
+  follow(file: string, pos: number): void {
+    if (!this.opened || !(file in this.files) || !this.sink.mark) return;
+    const { at, word, line } = place(this.files[file], pos);
+    this.followBytes(file, at, word, line);
+  }
+
+  /**
+   * Collaborators' cursors (the host's, Overleaf's: never the user's own),
+   * each at `pos` (UTF-16) in `file`: the word there marked on its page,
+   * by follow's rule, in the collaborator's hue with their label, never
+   * scrolling, apart from the user's own mark. From the glyphs here; a
+   * cursor on a page without them is shown once they come (the pages
+   * around the one in view asked for). Each call is the whole set: []
+   * clears.
+   */
+  others(file: string, others: { label: string; hue: number; pos: number }[]): void {
+    this.peers = others.map((o) => ({ file, ...o }));
+    this.drawPeers();
+    void this.peerPages();
+  }
+  private peers: { file: string; label: string; hue: number; pos: number }[] = [];
+
+  /**
+   * The collaborators' marks, from the glyphs already here. A collaborator
+   * not found whose last mark is on a page made again, its glyphs not here
+   * yet (a build: the page's new hash), keeps that mark until they come
+   * ([`peerPages`] asks for them): dropped and drawn again a round trip
+   * later, it blinked at every build.
+   */
+  private drawPeers(): void {
+    if (!this.sink.others || !this.opened) return;
+    const out: Peer[] = [];
+    const drawn = new Map<string, Peer>();
+    for (const p of this.peers) {
+      const t = this.files[p.file];
+      if (t === undefined) continue;
+      const id = `${p.label}\u0000${p.hue}`;
+      const { at, word, line } = place(t, p.pos);
+      let e: Peer | undefined;
+      for (let k = 0; k < this.hashes.length; k++) {
+        const all = this.cached(k);
+        const hit = all ? this.wordOn(all, p.file, at, word, line) : [];
+        if (!all || !hit.length) continue;
+        e = { k, boxes: boxes(hit, all), label: p.label, hue: p.hue, file: p.file, pos: p.pos };
+        break;
+      }
+      const was = this.peersDrawn.get(id);
+      if (!e && was && was.k < this.hashes.length && !this.cached(was.k)) e = { ...was, file: p.file, pos: p.pos };
+      if (!e) continue;
+      out.push(e);
+      drawn.set(id, e);
+    }
+    this.peersDrawn = drawn;
+    this.sink.others(out);
+  }
+  /** The collaborators' marks last drawn, by label and hue. */
+  private peersDrawn = new Map<string, Peer>();
+
+  /** The glyphs of the pages around the one in view, and of those a collaborator's kept mark is on, asked for, then the collaborators drawn again. */
+  private async peerPages(): Promise<void> {
+    if (!this.peers.length || !this.sink.others) return;
+    const near = [this.page, this.page + 1, this.page - 1, ...[...this.peersDrawn.values()].map((e) => e.k)];
+    const ks = [...new Set(near)].filter((k) => k >= 0 && k < this.hashes.length && !this.cached(k));
+    if (!ks.length) return;
+    await Promise.all(ks.map((k) => this.glyphsOf(k)));
+    this.drawPeers();
+  }
+
+  /**
+   * The glyphs to mark for a cursor at byte `at` of `file`, in word `w`
+   * (bytes, none: not in a word) of line `line` (bytes), among a page's
+   * glyphs `all` (none: not on that page): a word, never the whole line,
+   * while typing: the cursor's word, else, not typeset yet (just typed),
+   * the typeset word nearest it on its line, the glyph's own; the line
+   * only with no word near at all.
+   */
+  private wordOn(all: Glyph[], file: string, at: number, w: [number, number] | null, line: [number, number]): Glyph[] {
+    const onLine = from(all, file, line[0], line[1]);
+    if (!onLine.length) return [];
+    let word = w ? from(onLine, file, w[0], w[1]) : [];
+    if (!word.length) {
+      const g = glyphNear(onLine, at);
+      const t = this.files[file];
+      const gw = g && t !== undefined ? wordBytes(new TextEncoder().encode(t), g.start) : null;
+      word = gw ? from(onLine, file, gw[0], gw[1]) : g ? onLine.filter((x) => x.start === g.start) : [];
+    }
+    return word.length ? word : lineAt(onLine, at);
+  }
+
+  /**
+   * The cursor at byte `at` of `file`'s text (the glyph origins' offsets),
+   * in word `w` (bytes, none: not in a word) of line `line` (bytes): the
+   * word highlighted on the page, else the line's glyphs nearest it, from
+   * the glyphs already here (a page not yet here asked for, then shown if
+   * the cursor is still there); scrolled to only when the cursor changed
+   * line. [`follow`]'s, and an LSP editor's (`{event: "follow"}`).
+   */
+  followBytes(file: string, at: number, w: [number, number] | null, line: [number, number]): void {
+    if (!this.opened || !this.sink.mark) return;
+    const [a, b] = line;
+    const key = `${file}:${a}`;
+    const scroll = key !== this.followLine;
+    this.followLine = key;
+    const n = Math.max(this.hashes.length, this.pages, 1);
+    const order = [this.page, ...Array.from({ length: n }, (_, i) => i).filter((i) => i !== this.page)];
+    for (const k of order) {
+      const all = this.cached(k);
+      if (!all) continue;
+      const hit = this.wordOn(all, file, at, w, line);
+      if (!hit.length) continue;
+      this.followWant = "";
+      this.sink.mark(k, boxes(hit, all), scroll);
+      return;
+    }
+    // (its page not here yet, far down a long document: asked for now, the
+    // pages not here, then shown if the cursor is still there)
+    const want = `${file}:${at}`;
+    this.followWant = want;
+    void (async () => {
+      // (the pages its source's lines were placed on first, as the core
+      // finds them without matching a page; then the rest, in order)
+      const gen = this.originsGen;
+      const r = await this.untilMade({ op: "page_of", file, at }, () => gen !== this.originsGen || this.followWant !== want);
+      const placed: number[] = Array.isArray(r?.json?.pages) ? (r?.json?.pages as number[]) : [];
+      for (const k of [...placed, ...order.filter((x) => !placed.includes(x))]) {
+        if (this.followWant !== want) return;
+        if (k >= this.hashes.length || this.cached(k)) continue;
+        const all = await this.glyphsOf(k);
+        if (from(all, file, a, b).length) {
+          if (this.followWant === want) {
+            this.followLine = "";
+            this.followBytes(file, at, w, line);
+          }
+          return;
+        }
+      }
+    })();
+  }
+  private followLine = "";
+  private followWant = "";
+
+  /** The last build's transcript, the job's `.log` (the viewer's "View log"; none: the core has none yet). */
+  async log(): Promise<string | null> {
+    if (!this.opened) return null;
+    // (made only when asked: the first answer may be "pending", the core's
+    // owner laying it out; asked again until it is there)
+    const r = await this.untilMade({ op: "log" });
+    if (!r?.ok || r.json?.pending) return null;
+    const t = r.json?.text;
+    return typeof t === "string" && t ? t : null;
+  }
+
+  /**
+   * The boxes of [`start`, `end`) (bytes, as a problem's range) of `file` on
+   * the pages: the culprit under a problem's wavy underline. From the pages'
+   * glyphs, the page in view first and the rest asked for as needed; [] where
+   * none of it is typeset.
+   */
+  async boxesOf(file: string, start: number, end: number): Promise<{ k: number; boxes: [number, number, number, number][] }[]> {
+    if (!this.opened) return [];
+    // (a problem names its file as TeX opened it: "./main.tex" is main.tex)
+    file = file.replace(/^\.\//, "");
+    const n = Math.max(this.hashes.length, this.pages, 1);
+    const order = [this.page, ...Array.from({ length: n }, (_, i) => i).filter((i) => i !== this.page)];
+    const out: { k: number; boxes: [number, number, number, number][] }[] = [];
+    // (the nearest typeset glyph to it, for a culprit that is not typeset:
+    // an undefined command's name, a missing brace)
+    let near: { k: number; g: Glyph; d: number; all: Glyph[] } | null = null;
+    for (const k of order) {
+      if (k >= this.hashes.length) continue;
+      const all = this.cached(k) ?? (await this.glyphsOf(k));
+      // (a page looked up for this range before, unchanged since: as it was)
+      const memo = this.culprits.get(all) ?? this.culprits.set(all, new Map()).get(all)!;
+      const id = `${file}\0${start}\0${end}`;
+      let m = memo.get(id);
+      if (!m) {
+        // (its glyphs and the nearest, in one pass over the page's)
+        const hi = Math.max(end, start + 1), hit: Glyph[] = [];
+        m = { boxes: null, g: null, d: Infinity };
+        for (const g of all) {
+          if (g.file !== file || g.synth) continue;
+          if (g.start < hi && g.end > start) hit.push(g);
+          const d = g.start >= end ? g.start - end : start - g.end;
+          if (d >= 0 && d < m.d) (m.g = g), (m.d = d);
+        }
+        if (hit.length) m.boxes = boxes(hit, all);
+        memo.set(id, m);
+      }
+      if (m.boxes) out.push({ k, boxes: m.boxes });
+      if (m.g && (!near || m.d < near.d)) near = { k, g: m.g, d: m.d, all };
+    }
+    if (!out.length && near && near.d <= NEAR_CULPRIT) {
+      // (its word: the glyphs next to it with no gap between their bytes)
+      const mine = near.all.filter((x) => x.file === file && !x.synth).sort((x, y) => x.start - y.start);
+      let i = mine.indexOf(near.g), j = i;
+      while (i > 0 && mine[i - 1].end >= mine[i].start) i--;
+      while (j + 1 < mine.length && mine[j].end >= mine[j + 1].start) j++;
+      out.push({ k: near.k, boxes: boxes(mine.slice(i, j + 1), near.all) });
+    }
+    return out.sort((x, y) => x.k - y.k);
+  }
+
+
+  /** The place `pos` (UTF-16) in `file`: its line's glyphs highlighted on the page (the page in view first). */
+  async toPage(file: string, pos: number): Promise<void> {
+    if (!this.opened || !(file in this.files)) return;
+    const t = this.files[file];
+    const lo = t.lastIndexOf("\n", pos - 1) + 1, hiC = t.indexOf("\n", pos);
+    const [a, b] = [byteOffset(t, lo), byteOffset(t, hiC < 0 ? t.length : hiC)];
+    const n = Math.max(this.hashes.length, this.pages, 1);
+    const order = [this.page, ...Array.from({ length: n }, (_, i) => i).filter((i) => i !== this.page)];
+    for (const k of order) {
+      const all = this.cached(k) ?? (await this.glyphsOf(k));
+      const hit = lineAt(from(all, file, a, b), byteOffset(t, pos));
+      if (hit.length) {
+        this.tr("sync→page", { file, pos, k, glyphs: hit.length });
+        this.sink.mark?.(k, boxes(hit, all));
+        return;
+      }
+    }
+    this.tr("sync→page", { file, pos, k: -1 });
+  }
+
+  async pdf(): Promise<Uint8Array | undefined> {
+    this.flush();
+    await this.chain;
+    const t = this.now();
+    const r = await this.core.request({ op: "pdf" });
+    this.sink.latency(`PDF made in ${(this.now() - t).toFixed(1)} ms`);
+    return r.pdf;
+  }
+
+  /** `file` is now `text`: only the differing middle is sent. */
+  sync(file: string, text: string): void {
+    const old = this.batches.get(file)?.text ?? this.files[file];
+    if (old === undefined) {
+      this.files[file] = text;
+      if (this.opened) this.chain = this.chain.then(() => this.core.request({ op: "set_file", file, text }).then(() => undefined));
+      this.rcChanged(file);
+      return;
+    }
+    const e = diff(old, text);
+    if (e) this.queue(file, [e]);
+  }
+
+  queue(file: string, edits: Edit[]): void {
+    if (!edits.length) return;
+    let b = this.batches.get(file);
+    if (!b) this.batches.set(file, (b = new Batch(this.files[file] ?? "")));
+    if (!(file in this.files)) this.files[file] = "";
+    if (!b.size) this.since.set(file, this.now());
+    for (const e of edits) b.push(e);
+    this.keystrokes += edits.length;
+    this.rcChanged(file);
+    if (!this.scheduled) {
+      this.scheduled = true;
+      const f = () => this.flush();
+      if (this.o.schedule) this.o.schedule(f);
+      // (the next task, not the next frame: a window without frames, an
+      // unfocused or covered one, waited for a 100 ms fallback; edits that
+      // come while a build runs are merged by the send loop anyway)
+      else setTimeout(f, 0);
+    }
+  }
+
+  private rcTimer?: ReturnType<typeof setTimeout>;
+  /** `file` changed: one of the open's rc files, or a new root one, reopens (once typing pauses): the core reads them at an open only. */
+  private rcChanged(file: string): void {
+    if (!this.opened || !(this.rcFiles.has(file) || file === "latexmkrc" || file === ".latexmkrc")) return;
+    clearTimeout(this.rcTimer);
+    this.rcTimer = setTimeout(() => (this.chain = this.chain.then(() => this.reopen())), 800);
+  }
+
+  /** A send loop is running (it takes what is queued when each build ends). */
+  private busy = false;
+  /** Waiting for a queued edit's build to end (`send`): its `settled`, else `failed` or `trapped`. */
+  private ended: ((e: { event: string }) => void)[] = [];
+  /** Edits the host gave, and builds they took (the batching's effect). */
+  keystrokes = 0;
+  builds = 0;
+
+  /**
+   * Send the queued edits, in order; the last of a round painted first
+   * (edit_view). Backpressure: at most one round in flight. What is typed
+   * meanwhile merges into the batches, and goes as one edit when the core
+   * is free: a fast core builds every keystroke, a slow one the last N
+   * together, never a state already stale.
+   */
+  /** Paused (the extension turned off): edits keep merging in their batches, sent on resume. */
+  private paused = false;
+
+  pause(on: boolean): void {
+    this.paused = on;
+    if (!on) void this.flush();
+  }
+
+  flush(): Promise<void> {
+    this.scheduled = false;
+    if (!this.opened || this.busy || this.paused) return this.chain;
+    this.busy = true;
+    this.sink.busy?.(true);
+    this.chain = this.chain.then(async () => {
+      try {
+        for (;;) {
+          const round = [...this.batches].filter(([, b]) => b.size);
+          if (!round.length) break;
+          for (const [file, b] of round) if (!(await this.send(file, b))) return;
+        }
+        // (then the other pages: the view draws those it shows that changed)
+        await this.layout();
+        this.statusSoon();
+      } finally {
+        this.busy = false;
+        this.sink.busy?.(false);
+        // (an edit queued after the loop's last look, while the pages were
+        // laid out: its flush found the loop busy; sent now, not at the
+        // next keystroke)
+        if ([...this.batches.values()].some((b) => b.size)) setTimeout(() => void this.flush(), 0);
+      }
+    });
+    return this.chain;
+  }
+
+  private statusTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * The pending/undefined scan flattens the whole program (3 ms at 180 KB,
+   * ten times an edit): once the edits have settled, at most every 300 ms.
+   */
+  /** `phitex watch`'s last build's problems (Options.remote), as diagnostics. */
+  private watchDiags: Diagnostic[] = [];
+  /** A build of the watch's under way (its progress told, not yet settled). */
+  private watchBuilding = false;
+
+  private watchBusy(on: boolean): void {
+    if (on === this.watchBuilding) return;
+    this.watchBuilding = on;
+    this.sink.busy?.(on);
+    if (!on) this.sink.streaming?.(null);
+  }
+
+  /** The watch joined (or joined again): its pages, outline and last problems. */
+  private async watchJoined(): Promise<void> {
+    await this.layout();
+    this.status();
+    void this.watchOutline();
+    const r = await this.core.request({ op: "diagnostics" } as never);
+    if (r.ok) this.onWatch({ event: "diagnostics", items: (r.json?.items ?? []) as Problem[] });
+  }
+
+  /** The document's outline asked for now and given to the view (it shows the contents). */
+  async outline(): Promise<void> {
+    if (!this.sink.outline) return;
+    const r = await this.core.request({ op: "outline" } as never);
+    if (r.ok) this.sink.outline((r.json?.items ?? []) as Entry[]);
+  }
+
+  /** After a build: the outline, only while the view shows it (else asked when it does). */
+  private async watchOutline(): Promise<void> {
+    if (!this.sink.outline || this.sink.outlineWanted?.() === false) return;
+    const r = await this.core.request({ op: "outline" } as never);
+    if (r.ok) this.sink.outline((r.json?.items ?? []) as Entry[]);
+  }
+
+  private onWatch(e: WatchEvent): void {
+    switch (e.event) {
+      case "page": {
+        // (a page shipped while the build runs: shown before the build is in,
+        // the PDF's page replacing it when it settles)
+        this.watchBusy(true);
+        const hs = [...this.hashes];
+        while (hs.length < Math.max(e.k + 1, e.pages ?? 0)) hs.push("");
+        hs[e.k] = e.hash;
+        this.hashes = hs;
+        // (not exact: drawn without some of what it draws with, marked; told
+        // again exact once the pages before it are known, the mark gone)
+        if (e.exact === false) this.previews.add(e.hash);
+        else this.previews.delete(e.hash);
+        this.setPages(hs.length);
+        this.sink.layout?.(hs, this.previews);
+        this.drawPeers();
+        void this.peerPages();
+        return;
+      }
+      case "progress":
+        this.watchBusy(true);
+        // (a pack the build fetches, the engine's own Shelf, native or wasm: as a host's fetch.
+        // The loading card lists the file asked for ("amsmath.sty", as $/progress's
+        // "Fetching amsmath.sty (12 of 40)" says it), so it goes as `pack`, the card's item;
+        // the pack's id goes as `name`, which a failure's text names: swapped on purpose)
+        if (e.phase === "fetching" && e.pack) return this.onFetching({ pack: e.name ?? e.pack, name: e.pack });
+        // (typesetting before a page is in: what was fetched is in, the loading card at its last step)
+        if (!this.hashes.length && (this.pkg.loading.length || !this.pkg.building)) {
+          this.pkg.done = [...(this.pkg.done ?? []), ...this.pkg.loading];
+          this.pkg.loading = [];
+          this.inBuild = [];
+          this.pkg.building = true;
+          this.tellPackages();
+        }
+        this.sink.streaming?.({ pages: e.pages ?? 0, phase: e.phase ?? "typesetting" });
+        return;
+      case "superseded":
+        this.watchBusy(true);
+        return;
+      case "diagnostics":
+        this.watchDiags = e.items.map(asDiagnostic);
+        this.status();
+        return;
+      case "settled":
+        // (a pass shown while the job's own files settle: still building;
+        // the watch's `preparing` ends here, it sends no `off`)
+        if (!e.settling) {
+          this.watchBusy(false);
+          this.sink.preparing?.(false);
+          // (the build is in: nothing is building for the packages now, as
+          // the local open says after its first build; a remote session's
+          // `progress` set it, and nothing else cleared it)
+          if (this.pkg.building) (this.pkg.building = false), this.tellPackages();
+        }
+        this.chain = this.chain.then(() => this.layout()).then(() => (this.status(), this.watchOutline()));
+        return;
+      case "sync":
+        void this.syncTo(e.file, e.lo, e.hi, e.at, e.page);
+        return;
+    }
+  }
+
+  /** Forward search: bytes [lo, hi) of `file` (a line), the glyphs from it nearest `at`'s highlighted, the page in view tried first. */
+  private async syncTo(file: string, lo: number, hi: number, at: number, hint?: number): Promise<void> {
+    const n = this.hashes.length;
+    const first = hint ?? this.page;
+    for (const k of [first, ...Array.from({ length: n }, (_, i) => i).filter((i) => i !== first)]) {
+      const all = this.cached(k) ?? (await this.glyphsOf(k));
+      const hit = lineAt(from(all, file, lo, hi), at);
+      if (hit.length) return this.sink.mark?.(k, boxes(hit, all), true);
+    }
+  }
+
+  /** The last keystroke a core queued (its build said by `settled`): when it was typed, sent, answered. */
+  private queued: { t0: number; tSend: number; tBack: number } | null = null;
+
+  /** A queued keystroke's build in and drawn: its time from the keystroke, and the build's own, said. */
+  private queuedLatency(e: Extract<WatchEvent, { event: "settled" }>): void {
+    const q = this.queued;
+    if (!q || e.ms === undefined) return;
+    this.queued = null;
+    const e2e = this.now() - q.t0;
+    this.sink.painted?.(e2e);
+    const ran = e.ran ?? 0, kept = e.kept ?? 0, passes = e.passes ?? 1;
+    this.sink.latency(
+      `${e2e.toFixed(0)} ms keystroke→page · build ${e.ms.toFixed(1)} ms · ${this.keystrokes} edits → ${this.builds} builds`,
+      [
+        `build            ${e.ms.toFixed(2)} ms (in the core: the edit's steps, every page, the .aux/.bbl loops)`,
+        `keystroke→page   ${e2e.toFixed(1)} ms = queued ${(q.tSend - q.t0).toFixed(1)} + round trip ${(q.tBack - q.tSend).toFixed(1)} + build and paint ${(this.now() - q.tBack).toFixed(1)}`,
+        `rebuilt          ${ran} of ${ran + kept} steps, ${passes} pass${passes === 1 ? "" : "es"}`,
+        `batching         ${this.keystrokes} edits → ${this.builds} builds (one in flight; the rest merged)`,
+      ].join("\n"),
+    );
+  }
+
+  private statusSoon(): void {
+    if (this.statusTimer) return;
+    this.statusTimer = setTimeout(async () => {
+      this.statusTimer = null;
+      if (this.busy || !this.opened) return this.statusSoon();
+      const r = await this.core.request({ op: "status" });
+      if (r.ok && r.json) {
+        this.warmCheck(r.json.how);
+        this.setPages(r.json.pages);
+        this.noteError(r.json);
+        this.status(r.json.pending, r.json.undefined_names);
+        this.fetchPackages(r.json.missing);
+      }
+    }, 300);
+  }
+
+  private async send(file: string, b: Batch): Promise<boolean> {
+    // (typed before the SSA program: a plain rebuild, slower; said so)
+    if (this.warming && !this.warmSlow) {
+      this.warmSlow = true;
+      this.sink.warmup?.({ state: "preparing", since: Date.now() - (this.now() - this.warming), slow: true });
+    }
+    const t0 = this.since.get(file) ?? this.now();
+    const tSend = this.now();
+    const edits = b.take();
+    this.files[file] = b.text;
+    // (minted appearing in a project opened without it, by a paste or a
+    // whole replace: opened again, so the worker loads its runner first;
+    // an edit would have run minted's command with none, and kept that)
+    if (!this.minted && usesMinted(b.text)) {
+      this.tr("minted: open again, with its runner", {});
+      await this.reopen();
+      return false;
+    }
+    // (the main file's preamble now asks for another engine, \usepackage{fontspec}
+    // added or a whole XeLaTeX paper pasted in, or no longer does: opened
+    // again with it; the engine is looked at only when the preamble changed)
+    if (file === this.main && this.o.engine) {
+      const pre = preambleOf(b.text);
+      if (pre !== this.preamble) {
+        this.preamble = pre;
+        const want = this.o.engine(b.text);
+        if (want !== this.wanted) {
+          this.tr("engine: open again", { from: this.wanted, to: want });
+          await this.reopen();
+          return false;
+        }
+      }
+    }
+    for (const [i, e] of edits.entries()) {
+      const last = i === edits.length - 1;
+      this.builds++;
+      // (the end of its build, if the core queues it: listened for before it is sent, so an early one is not missed)
+      let done: ((e: { event: string }) => void) | undefined;
+      const ended = last ? new Promise<{ event: string }>((res) => ((done = res), this.ended.push(res))) : null;
+      const unheard = () => (this.ended = this.ended.filter((f) => f !== done));
+      const r = await this.core.request({ op: "edit", file, ...e, page: last ? this.page : -1, dpi: this.dpi() });
+      if (!r.ok) {
+        unheard();
+        this.sink.error((typeof r.json?.error === "string" ? r.json.error : undefined) ?? r.error ?? "edit failed");
+        if (r.error?.includes("trapped")) await this.reopen();
+        return false;
+      }
+      if (!last) continue;
+      if (!r.json?.queued) unheard();
+      const tBack = this.now();
+      const j = r.json;
+      // (a core that queues the edit and says its build with `settled`:
+      // timed then, from this keystroke)
+      if (j.queued) {
+        this.queued = { t0, tSend, tBack };
+        this.setPages(j.pages);
+        // (its build waited for and its page drawn before the next round:
+        // sent at once, the next edit's build ran first, and the page's
+        // frame (core1 answers between builds) waited behind it, "waiting
+        // for the engine 1.2 s" while typing)
+        const end = await ended!;
+        if (end.event === "settled") (await this.layout(), this.queuedLatency(end as Extract<WatchEvent, { event: "settled" }>));
+        continue;
+      }
+      this.setPages(j.pages);
+      this.noteError(j);
+      this.status(this.pending);
+      const img = image(r);
+      if (img) this.sink.page(img, this.page, this.pages, j.painted_hash ?? null);
+      else if (!this.sink.layout) await this.showPage();
+      const e2e = this.now() - t0;
+      this.sink.painted?.(e2e);
+      this.sink.latency(
+        `${e2e.toFixed(0)} ms keystroke→page · core ${j.paint_ms.toFixed(1)} ms · ${this.keystrokes} edits → ${this.builds} builds`,
+        [
+          `first paint      ${j.paint_ms.toFixed(2)} ms (in the core: edit_view, the page painted)`,
+          `fixed point      ${j.total_ms.toFixed(2)} ms (every page, the .aux/.bbl loops)${j.wrong ? " · first paint was superseded" : ""}`,
+          `keystroke→page   ${e2e.toFixed(1)} ms = queued ${(tSend - t0).toFixed(1)} + round trip ${(tBack - tSend).toFixed(1)} + paint ${(this.now() - tBack).toFixed(1)}`,
+          `rebuilt          ${j.stats.rebuilt} of ${j.stats.rebuilt + j.stats.reused} chunks, ${j.stats.passes} pass${j.stats.passes === 1 ? "" : "es"}`,
+          `batching         ${this.keystrokes} edits → ${this.builds} builds (one in flight; the rest merged)`,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      );
+    }
+    return true;
+  }
+
+  /** PhiTeX's invariant: the incremental state = a fresh build of the same text. */
+  async check(): Promise<CoreRes["json"]> {
+    if (!this.opened) return;
+    await this.flush();
+    const file = this.open ?? this.main!;
+    const r = await this.core.request({ op: "check", file, expect: this.files[file] });
+    this.sink.check?.(r.json);
+    return r.json;
+  }
+
+  /** The texts the session has sent (tests). */
+  text(file: string): string | undefined {
+    return this.batches.get(file)?.text ?? this.files[file];
+  }
+
+  /** Every project file's text as it is now (queued edits in): a compare's new side. */
+  texts(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const f of Object.keys(this.files)) out[f] = this.text(f)!;
+    return out;
+  }
+}

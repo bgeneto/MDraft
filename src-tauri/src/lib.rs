@@ -11,6 +11,7 @@ mod html_preview;
 mod images;
 mod latex;
 mod latex_native;
+mod latex_phitex;
 mod latex_texmf;
 mod latex_texpresso;
 mod launch;
@@ -33,6 +34,8 @@ mod typst;
 mod workspace;
 
 use settings::{AppState, Settings};
+#[cfg(debug_assertions)]
+use tauri::Emitter;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -176,6 +179,21 @@ pub fn run() {
                 let builder = tauri::WebviewWindowBuilder::from_config(app.handle(), config)?;
                 navigation::guard(builder, dev_url.clone()).build()?;
             }
+            // Test-only: emit one menu action after the document has had time to
+            // compile, so a headless run can exercise the real menu path (for
+            // example `file.print`) without scripting the native menu.
+            #[cfg(debug_assertions)]
+            if let Ok(event) = std::env::var("MDRAFT_TEST_MENU") {
+                let handle = app.handle().clone();
+                let delay = std::env::var("MDRAFT_TEST_MENU_DELAY_MS")
+                    .ok()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(12_000);
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(delay));
+                    let _ = handle.emit("menu", event);
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -203,12 +221,12 @@ pub fn run() {
             backup::inbox_store::cancel_recovered_revision,
             backup::inbox_store::forget_recovered_document,
             backup::inbox_store::save_recovered_copies,
-            latex::latex_status,
             latex::texpresso_status,
             latex::install_texpresso,
+            latex::phitex_status,
+            latex::install_phitex,
             latex::latex_stats,
             latex::texpresso_download_decision,
-            latex::install_latex,
             latex::latex_project_snapshot,
             latex::latex_texpresso_revoke,
             latex::save_compiled_pdf,
@@ -263,8 +281,6 @@ pub fn run() {
             workspace::workspace_list,
             workspace::workspace_index,
             workspace::workspace_main_candidates,
-            latex::latex_engine_available,
-            latex::install_latex_engine,
             documents::resolve_legacy_local_image,
             documents::open_external,
             documents::open_app_folder,
