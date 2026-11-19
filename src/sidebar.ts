@@ -467,6 +467,16 @@ export function renderRecent(
   }
 
   const fragment = document.createDocumentFragment();
+
+  // Clearing is a whole-list action, so it belongs above the rows. At the
+  // bottom of a long history it would need scrolling past every file first.
+  const header = element("div", "sidebar-header");
+  const clear = element("button", "sidebar-link", "Clear recent files");
+  clear.type = "button";
+  clear.addEventListener("click", handlers.onClear);
+  header.appendChild(clear);
+  fragment.appendChild(header);
+
   for (const file of files) {
     const name = file.split(/[\\/]/).pop() ?? file;
     const directory = file.slice(0, Math.max(0, file.length - name.length - 1));
@@ -478,13 +488,6 @@ export function renderRecent(
     row.addEventListener("click", () => handlers.onOpenFile(file));
     fragment.appendChild(row);
   }
-
-  const footer = element("div", "sidebar-footer");
-  const clear = element("button", undefined, "Clear recent files");
-  clear.type = "button";
-  clear.addEventListener("click", handlers.onClear);
-  footer.appendChild(clear);
-  fragment.appendChild(footer);
 
   container.replaceChildren(fragment);
 }

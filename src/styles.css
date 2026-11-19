@@ -902,22 +902,11 @@ body {
   outline: none;
 }
 
-.sidebar-footer {
-  padding: 6px 12px 12px;
-}
-
-.sidebar-footer button {
-  border: none;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 11.5px;
-  cursor: pointer;
-  padding: 2px 0;
-}
-
-.sidebar-footer button:hover {
-  color: var(--accent);
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 2px 12px 6px;
 }
 
 /* --------------------------------------------------------------------------
@@ -6273,7 +6262,8 @@ label.optional-tools-row:hover {
 }
 
 .explorer-action,
-.explorer-link {
+.explorer-link,
+.sidebar-link {
   border: none;
   background: transparent;
   color: var(--accent);
@@ -6283,7 +6273,8 @@ label.optional-tools-row:hover {
   padding: 1px 3px;
 }
 
-.explorer-link {
+.explorer-link,
+.sidebar-link {
   font-size: inherit;
   padding: 0;
   text-decoration: underline;

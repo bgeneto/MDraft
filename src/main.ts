@@ -7170,9 +7170,9 @@ function renderSidebar(): void {
 /**
  * Clear the persisted recents from whichever control asked.
  *
- * The native menu, the sidebar footer and Preferences all mean the same thing,
- * and Rust refreshes the menu itself. Doing it in one place keeps the toast and
- * the sidebar redraw from existing on only one of the three routes.
+ * The native menu, the sidebar's Clear link and Preferences all mean the same
+ * thing, and Rust refreshes the menu itself. Doing it in one place keeps the
+ * toast and the sidebar redraw from existing on only one of the three routes.
  */
 function clearRecentFiles(): void {
   void queueSettings(async () => {

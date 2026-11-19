@@ -507,13 +507,13 @@ try {
     JSON.stringify(stored),
   );
   check(
-    (await evaluate(`document.querySelector("#sidebar-body .sidebar-footer") === null`)) &&
+    (await evaluate(`document.querySelector("#sidebar-body .sidebar-link") === null`)) &&
       !(await evaluate(
         `[...document.querySelectorAll("#sidebar-body button")].some(
           (button) => /clear/i.test(button.textContent),
         )`,
       )),
-    "the Favorites panel has no Clear All and no footer",
+    "the Favorites panel has no Clear All and no header link",
   );
 
   // -------------------------------------------------------------------------
