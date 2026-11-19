@@ -907,6 +907,9 @@ body {
   align-items: center;
   justify-content: flex-end;
   padding: 2px 12px 6px;
+  /* Linked text inherits its size; the Explorer's inline links sit in 12px
+     empty-state copy, so the header supplies the same context here. */
+  font-size: 12px;
 }
 
 /* --------------------------------------------------------------------------
