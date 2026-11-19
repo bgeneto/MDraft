@@ -63,6 +63,14 @@ GUI/CDP tests require an isolated test app and the fixture the harness selects.
 They must not reset a user's settings/profile. Node's WebSocket CDP scripts enable
 Runtime, await promises, check exceptionDetails and exit nonzero on failed checks.
 
+The opt-in `latex-tab-cache` layer runs twenty warm tab switches, a manual
+return to a different LaTeX root, and a switch away from a live compile. It logs
+tab and preview latency, title IPC, snapshot timings and renderer long tasks.
+It uses the local TeXpresso mirror and temporary synthetic documents by default.
+For a read-only benchmark of existing projects, pass
+`MDRAFT_LATEX_TAB_PROBE_FILES` as a JSON array containing the book and parent
+document paths in that order.
+
 ## npm command inventory
 
 The command names below correspond directly to `package.json`. Scripts also carry

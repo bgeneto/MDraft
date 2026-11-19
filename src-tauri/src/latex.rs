@@ -1327,7 +1327,6 @@ pub async fn latex_project_snapshot(
         {
             return Err("Choose a saved .tex file as the LaTeX project root.".into());
         }
-        let project_token = crate::latex_texpresso::project_token(&root)?;
         let mut files = Vec::new();
         let mut skipped = Vec::new();
         let mut generation = String::new();
@@ -1372,7 +1371,7 @@ texmf:",
         }
         Ok(ProjectSnapshot {
             main_file,
-            project_token,
+            project_token: crate::latex_texpresso::project_token(&root)?,
             files,
             manifest,
             skipped,

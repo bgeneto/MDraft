@@ -655,6 +655,7 @@ let purgeAfterClose = false;
 let activeDataJob: { id: string; canceled: boolean } | null = null;
 let restoreAfterClose: string | null = null;
 let lastTitle = "";
+let pendingWindowTitle: Promise<void> | null = null;
 /**
  * Signature of the last remembered tab list that was written (or seeded from
  * the settings loaded at boot). Comparing it is what keeps the tab-memory
@@ -1624,7 +1625,7 @@ function applySettingsPatch(
 
   if (patch.latexAutoCompile !== undefined) {
     // Manual mode holds the edit stream too; Compile sends what was held.
-    texpresso?.hold(settings.latexAutoCompile === false);
+    if (previewCovers(texpressoOwner)) texpresso?.hold(settings.latexAutoCompile === false);
     syncLatexAutoToggle();
     syncMenuState(false);
   }
@@ -1665,10 +1666,26 @@ async function refreshTitle(): Promise<void> {
   if (title === lastTitle) return;
   lastTitle = title;
   document.title = title;
+  pendingWindowTitle ??= Promise.resolve().then(writeWindowTitles);
+  await pendingWindowTitle;
+}
+
+/** Coalesce titles that changed while the native IPC was pending. */
+async function writeWindowTitles(): Promise<void> {
   try {
-    await getCurrentWindow().setTitle(title);
-  } catch {
-    /* window title is cosmetic */
+    let sent: string;
+    do {
+      sent = lastTitle;
+      const started = performance.now();
+      try {
+        await getCurrentWindow().setTitle(sent);
+      } catch {
+        /* window title is cosmetic */
+      }
+      perfMeasure("window-title", started);
+    } while (sent !== lastTitle);
+  } finally {
+    pendingWindowTitle = null;
   }
 }
 
@@ -2049,6 +2066,55 @@ function probeOf(session: Session): OwnerProbe {
   };
 }
 
+/** Cache root detection across tab returns to large unchanged buffers. */
+const latexMainDocuments = new WeakMap<
+  Session,
+  {
+    revision: number;
+    incarnation: number;
+    path: string | null;
+    main: ReturnType<typeof resolveMainDocument>;
+  }
+>();
+
+function latexMainOf(session: Session, read: () => string): ReturnType<typeof resolveMainDocument> {
+  const known = latexMainDocuments.get(session);
+  if (
+    known?.revision === session.revision &&
+    known.incarnation === session.incarnation &&
+    known.path === session.path
+  )
+    return known.main;
+  const main = resolveMainDocument({
+    directory: session.directory ?? "",
+    source: read(),
+    pinnedContains: true,
+  });
+  latexMainDocuments.set(session, {
+    revision: session.revision,
+    incarnation: session.incarnation,
+    path: session.path,
+    main,
+  });
+  return main;
+}
+
+function previewCovers(owner: PreviewOwner | null, read = () => editor.getDoc()): boolean {
+  if (!owner || !covers(owner, probeOf(doc))) return false;
+  if (owner.kind === "document") return true;
+  const root = sessions.byId(owner.rootId);
+  if (!root?.path || root.incarnation !== owner.rootIncarnation) return false;
+  const main = latexMainOf(doc, read);
+  if (main.kind === "self") return doc.id === root.id;
+  if (main.kind === "comment") return pathKey(main.path) === pathKey(root.path);
+  const workspace = settings.workspaceFolder;
+  const chosen =
+    workspace && doc.path && pathKey(doc.path).startsWith(pathKey(workspace) + "/")
+      ? workspaceMainDocument()
+      : null;
+  return !chosen || pathKey(chosen) === pathKey(root.path);
+}
+
 /**
  * Record that the pane now describes `owner`.
  *
@@ -2198,7 +2264,8 @@ function restorePreview(): boolean {
   if (
     previewOwner !== null ||
     slot.incarnation !== doc.incarnation ||
-    slot.language !== doc.language
+    slot.language !== doc.language ||
+    !previewCovers(slot.owner)
   ) {
     disposeSlot(slot);
     return false;
@@ -2458,7 +2525,7 @@ function scheduleRender(immediate = false): void {
     // A PDF the store holds for exactly these inputs is current, so a return to
     // a manual tab may show it. Only a snapshot can tell, and the probe never
     // compiles or reports a failure.
-    if (immediate && previewOwner === null && settings.viewMode !== "source") {
+    if (immediate && previewStale && settings.viewMode !== "source") {
       const token = ++renderToken;
       const source = editor.getDoc();
       renderTimer = window.setTimeout(
@@ -2969,7 +3036,7 @@ function setTypstStatus(message: string, saveable = false, state?: CompiledStatu
 
 function compileCurrentLatex(clean = false): void {
   if (doc.language !== "latex") return;
-  texpresso?.flush();
+  if (previewCovers(texpressoOwner)) texpresso?.flush();
   // Compile is also the reader's retry after a frame failure, and after the
   // engine ran out of memory.
   texpressoFailed.clear();
@@ -3339,7 +3406,7 @@ function rebindLatexPreview(
     value.rootId !== root.id ||
     !root.path ||
     !root.directory ||
-    !covers(previewOwner, probeOf(doc))
+    !previewCovers(previewOwner)
   )
     return false;
   const file = latexRelative(value, doc.path);
@@ -4138,15 +4205,6 @@ async function renderLatexPreview(
   const build = await resolveLatexBuild(source, token, activeId, storeOnly);
   if (!build) return;
   const { engineStatus, root, revisions, overlays, engineChoice } = build;
-  // The bundled preview is drawn by its frame: TeXpresso with JSPI, PhiTeX on
-  // a Linux webview without it. A bundled build the frame cannot draw never
-  // falls back to a second compiler; texpressoPrepare names the reason.
-  // Recompile from scratch and a clean build are asked to rebuild: never covered.
-  const shadow = texpressoPrepare(build, storeOnly, !force && options.clean !== true);
-  if (engineStatus.backend === "bundled" && !shadow) {
-    if (storeOnly) latexInFlight = false;
-    return;
-  }
   const owner = { rootId: root.id, rootDirectory: root.directory, activeId, token, revisions };
   // The snapshot's own file list is the definition of "this project", used when a
   // failure has to decide whether a later tab switch is still inside it.
@@ -4157,12 +4215,14 @@ async function renderLatexPreview(
         ? "Installed TeX"
         : engineStatus.nativeEngine
       : ENGINE_LABELS[engineChoice?.engine ?? "lualatex"];
+  let snapshotToken: string | null = null;
   try {
     const snapshotStarted = perfMark("snapshot-ipc-start", {
       path: root.path,
       overlays: overlays.length,
     });
     const snapshot = await api.latexProjectSnapshot(root.path, overlays);
+    snapshotToken = snapshot.projectToken;
     perfMeasure("snapshot-ipc", snapshotStarted, {
       files: snapshot.files.length,
       libraries: snapshot.texmf?.files.length ?? 0,
@@ -4181,47 +4241,46 @@ async function renderLatexPreview(
       ...latexEngineIdentity(engineStatus),
       bundledEngine: engineChoice?.engine ?? null,
     });
-    // A covered frame is drawn over by the stored PDF of exactly these inputs.
-    // After an edit it stays covered while this project's PDF is still on
-    // screen (labelled out of date); with neither, the frame is the content.
-    const coverHit =
-      shadow && texpressoCovered && !force && !storeOnly ? latexStore.get(key) : undefined;
-    if (
-      shadow &&
-      texpressoCovered &&
-      !coverHit &&
-      !(typstPdf !== null && latexPreview?.rootId === root.id)
-    ) {
-      texpressoUncover(storeOnly);
-    }
-    // The live preview takes the same capture: its project follows every
-    // render, so a file added to the project reaches it without an edit.
-    if (shadow && !texpressoSyncSnapshot(build, snapshot)) {
-      if (!storeOnly) latexInFlight = false;
-      return;
-    }
-    if (shadow && !coverHit) {
-      // The frame's own exporter is the authority for export, print, the menu
-      // state and the Problems list; nothing is drawn from it.
-      if (storeOnly) return;
-      if (!force && rebindLatexShadow(key, root, token, activeId, revisions)) return;
-      const cached = force ? undefined : latexStore.get(key);
-      if (cached) {
-        commitLatexShadow({ ...owner, result: cached }, key, {
-          stored: true,
-          started,
-        });
+    const stored = force ? undefined : latexStore.get(key);
+    // A frame which already typeset this snapshot can stay live. A PDF hit
+    // alone is never a reason to mount or send a project to a frame.
+    if (!force && engineStatus.backend === "bundled" && texpresso && texpressoKey === key) {
+      if (stored || (latexShadowKey === key && latexPreview?.rootId === root.id)) {
+        texpresso.hold(settings.latexAutoCompile === false);
+        texpresso.open(projectRelativePath(root.directory, doc.path, pathKey));
+        texpressoShow(settings.viewMode !== "source");
+        texpressoChip();
+        if (!texpressoCovered && texpressoOwner) {
+          if (typstPdf) {
+            disposeTypstPdf();
+            typstPdfToken = -1;
+            preview.replaceChildren();
+          }
+          commitPreview(texpressoOwner);
+          previewSyncReady = true;
+        }
+        if (!rebindLatexShadow(key, root, token, activeId, revisions) && stored) {
+          commitLatexShadow({ ...owner, result: stored }, key, { stored: true, started });
+        }
         return;
       }
+    }
+    if (engineStatus.backend === "native") texpressoRelease();
+    if (!force && rebindLatexPreview(key, root, source, token, activeId, revisions)) return;
+    if (stored) {
+      // A live frame for another generation must not overlay this cached result.
+      if (previewCovers(texpressoOwner)) texpressoRelease();
+      latexInFlight = true;
+    } else if (storeOnly) {
+      return;
+    } else if (engineStatus.backend === "bundled") {
+      if (!texpressoPrepare(build)) return;
+      if (!texpressoSyncSnapshot(build, snapshot, key)) return;
+      // The session releases this capture when replaced or disposed.
+      snapshotToken = null;
       await texpressoExportPdf(build, snapshot, owner, key, started);
       return;
     }
-    if (!force && rebindLatexPreview(key, root, source, token, activeId, revisions)) return;
-    // A PDF already built from exactly these inputs — typically the one this
-    // tab showed before the reader switched away — is drawn instead of compiled.
-    const stored = force ? undefined : latexStore.get(key);
-    if (storeOnly && !stored) return;
-    if (stored) latexInFlight = true;
     // A symlink the snapshot refused is reported before the compile, so a
     // "File not found" from the engine is explained rather than mysterious. The
     // project still compiles: one odd entry must not make a document unusable.
@@ -4297,11 +4356,6 @@ async function renderLatexPreview(
     // made continuous typing show nothing at all.
     if (!latexDisplayable(value)) return;
     if (!stored) latexStore.set(key, result, latexResultBytes(result));
-    if (shadow && !coverHit) {
-      perfMeasure("post", postStarted, { sources: result.sources.length });
-      commitLatexShadow(value, key, { stored: Boolean(stored), started, backend: engineStatus });
-      return;
-    }
     // Narrowed once for the closure: the map callback is not where a mutable
     // `let root` keeps its non-null narrowing.
     const rootDirectory = root.directory;
@@ -4327,9 +4381,10 @@ async function renderLatexPreview(
     const pdfStarted = perfMark("pdf-start");
     // The reading position of the view being replaced: its pages get their
     // text first, so selection and the first paint do not wait for the rest.
-    // A cover drawn on a return has no such view; it opens at the frame's page.
+    // A cached return can also restore the page last seen in the live frame.
+    const rememberedPage = stored ? rememberedLatexPage() : undefined;
     await view.render(result.pdf.slice(), {
-      focusPage: typstPdf?.topPosition()?.page ?? (coverHit ? texpressoLanding?.page : undefined),
+      focusPage: typstPdf?.topPosition()?.page ?? rememberedPage,
     });
     perfMeasure("pdf", pdfStarted, { pdfBytes: result.pdf.length });
     if (stagedPdf?.view !== view || !latexDisplayable(value)) {
@@ -4345,11 +4400,12 @@ async function renderLatexPreview(
     latexPreview = value;
     latexProject = latexProjectOf(value);
     latexShownToken = token;
-    // A view being replaced hands its own position on (commitPdfHost); only a
-    // cover drawn into an empty pane takes the frame's remembered page.
-    const coverOpens = coverHit && !typstPdf;
+    const restorePage = !typstPdf && rememberedPage !== undefined;
     commitPdfHost(host, view, token);
-    if (coverOpens) texpressoCoverLanding(view);
+    if (restorePage) {
+      view.goToPage(Math.min(rememberedPage, view.pageCount()));
+      updatePageChrome();
+    }
     // Only a current result follows the editor: an out-of-date one describes
     // older text, its map is not built yet, and scrolling it from the caret
     // moved a reader who was following the end of the document away from it
@@ -4378,9 +4434,6 @@ async function renderLatexPreview(
       ),
       key,
     );
-    // The drawn PDF is the frame's export too: an unchanged later render
-    // rebinds it instead of exporting again.
-    if (coverHit) latexShadowKey = key;
     previewSyncReady = true;
     // A successful compile is the only authority that clears a problem list.
     latexProblems = result.warnings;
@@ -4460,6 +4513,8 @@ async function renderLatexPreview(
         { engine: buildEngine, elapsedMs: performance.now() - started },
       );
     }
+  } finally {
+    if (snapshotToken) revokeLatexSnapshot(snapshotToken);
   }
 }
 
@@ -4544,8 +4599,16 @@ async function resolveLatexBuild(
   }
 
   let root = latexNavigationRoot ? sessions.byId(latexNavigationRoot) : undefined;
+  if (texpressoOwner?.kind === "latex-project" && previewCovers(texpressoOwner)) {
+    root = sessions.byId(texpressoOwner.rootId);
+  }
   const pinnedContains = Boolean(
-    root?.path && root.directory && latexProject && latexProjectFile(latexProject, doc.path),
+    root?.path &&
+    root.directory &&
+    ((latexProject?.rootId === root.id && latexProjectFile(latexProject, doc.path)) ||
+      (texpressoOwner?.kind === "latex-project" &&
+        texpressoOwner.rootId === root.id &&
+        previewCovers(texpressoOwner))),
   );
   if (!pinnedContains) {
     // A failed compile has no preview to ask, so the previous root is kept while
@@ -4564,11 +4627,8 @@ async function resolveLatexBuild(
   // The main document (GAP-034): a `% !TeX root` comment wins, then a file with
   // its own \documentclass, then the pinned project; a lone chapter is told how
   // to name its main file instead of failing deep inside the engine.
-  const main = resolveMainDocument({
-    directory: doc.directory ?? "",
-    source,
-    pinnedContains: Boolean(root),
-  });
+  const declaration = latexMainOf(doc, () => source);
+  const main = declaration.kind === "pinned" && !root ? { kind: "missing" as const } : declaration;
   // Rule 2: the reader's explicit choice for this workspace wins over the pin;
   // rule 4: a chapter with no project yet asks the include graph.
   if (main.kind === "pinned" || main.kind === "missing") {
@@ -4661,6 +4721,8 @@ async function resolveLatexBuild(
 
 /** The live preview; another project or engine replaces it. */
 let texpresso: TexpressoSession | null = null;
+let texpressoOwner: PreviewOwner | null = null;
+let texpressoKey: string | null = null;
 /** Main documents whose frame failed twice: Compile retries them. */
 const texpressoFailed = new Set<string>();
 /**
@@ -4694,14 +4756,7 @@ let texpressoShown = false;
  * the pane but shows nothing, and the waiting surface stays over it.
  */
 let texpressoHasPages = false;
-/**
- * A new frame is warming up under the PDF the store already held for this
- * project, instead of showing the wait over a blank frame. It stays laid out
- * (transparent, under `#preview`) so it typesets and paints as usual, and takes
- * over on its first finished page. Without this, a tab switch between two
- * projects retypeset from scratch behind "Typesetting…" although the exact PDF
- * was stored.
- */
+/** A frame typesetting changed inputs can build underneath its project's last PDF. */
 let texpressoCovered = false;
 /** The frame's own scroll offset, as it last reported it. */
 let texpressoScrollTop = 0;
@@ -4711,7 +4766,12 @@ let texpressoScrollTop = 0;
  * keeps for every tab says nothing about it; and only one frame lives at a
  * time, so a return from another project mounts a new one at page 1.
  */
-const texpressoTabPages = new Map<string, number>();
+const texpressoTabPages = new Map<string, { incarnation: number; page: number }>();
+
+function rememberedLatexPage(): number | undefined {
+  const reading = texpressoTabPages.get(doc.id);
+  return reading?.incarnation === doc.incarnation ? reading.page : undefined;
+}
 /**
  * The page a newly mounted frame is to open at once it has typeset that far:
  * the remembered page, or the page of the stored PDF it takes over from.
@@ -4927,19 +4987,11 @@ function texpressoShow(visible: boolean): void {
   updatePageChrome();
 }
 
-/** The frame is this tab's content again; arm the wait if it has no page yet. */
-function texpressoUncover(storeOnly: boolean): void {
-  if (!texpressoCovered) return;
-  texpressoCovered = false;
-  texpressoShow(settings.viewMode !== "source");
-  texpressoArmWait(storeOnly);
-}
-
 /** A frame without a page owns the pane but shows nothing: the wait covers it. */
-function texpressoArmWait(storeOnly: boolean): void {
+function texpressoArmWait(): void {
   if (!texpressoAwaitingPages()) return;
   armPending();
-  if (!storeOnly) revivePending(latexWaitPhase(""));
+  revivePending(latexWaitPhase(""));
 }
 
 /** The page the reader is on in the stored PDF that covers the frame. */
@@ -4984,6 +5036,8 @@ function texpressoHandOver(): void {
   disposeTypstPdf();
   typstPdfToken = -1;
   preview.replaceChildren();
+  previewOwner = texpressoOwner;
+  committedKey = null;
   texpressoFollowTab();
   if (texpressoShowing()) clearPending();
   // After the wait ran out the page may never come (an edit removed it): the
@@ -5017,39 +5071,23 @@ function texpressoTryLanding(settle = false): void {
   updatePageChrome();
 }
 
-/** The stored PDF drawn over a new frame opens at the page that frame is to land on. */
-function texpressoCoverLanding(view: TypstPdfPreview): void {
-  const landing = texpressoLanding;
-  if (!texpressoCovered || !landing || landing.session !== texpresso) return;
-  suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
-  view.goToPage(landing.page);
-  updatePageChrome();
-}
-
 /**
  * Keep the page the frame shows for the tab being left, which its
  * `previewScroll` cannot hold. Called for LaTeX tabs only.
  */
 function rememberTexpressoPage(): void {
   for (const id of texpressoTabPages.keys()) if (!sessions.byId(id)) texpressoTabPages.delete(id);
-  // A stored PDF on screen keeps its place in the pane offset as any PDF does.
-  if (!texpressoShowing()) {
-    texpressoTabPages.delete(doc.id);
-    return;
-  }
-  // A landing still on its way is where the reader is about to be.
+  // A page number also survives eviction of a parked PDF or a zoom change.
   const landing = texpressoLanding?.session === texpresso ? texpressoLanding.page : null;
-  texpressoTabPages.set(doc.id, landing ?? texpressoPage);
+  const page = texpressoShowing() ? (landing ?? texpressoPage) : typstPdf?.visiblePage();
+  if (page) texpressoTabPages.set(doc.id, { incarnation: doc.incarnation, page });
 }
 
 /** Show the frame again for a tab of its project, or hide it for any other. */
 function texpressoFollowTab(): void {
-  const session = texpresso;
-  const member =
-    session !== null &&
-    doc.language === "latex" &&
-    projectRelativePath(session.rootDirectory, doc.path, pathKey) !== null;
-  texpressoShow(member && settings.viewMode !== "source");
+  texpressoShow(
+    texpresso !== null && previewCovers(texpressoOwner) && settings.viewMode !== "source",
+  );
 }
 
 function texpressoRelease(): void {
@@ -5058,6 +5096,8 @@ function texpressoRelease(): void {
   texpressoLanding = null;
   void texpresso.dispose();
   texpresso = null;
+  texpressoOwner = null;
+  texpressoKey = null;
   texpressoSetPages(false);
   texpressoShow(false);
 }
@@ -5129,26 +5169,10 @@ function texpressoChip(): void {
   }
 }
 
-/**
- * Decide, before the snapshot, whether the frame draws this build, and mount
- * or reuse it. Returns true when it does: the build is then the frame's own
- * export for the PDF, print and Problems.
- */
-function texpressoPrepare(
-  build: LatexBuildRequest,
-  storeOnly: boolean,
-  coverable: boolean,
-): boolean {
+/** Mount or reuse the frame once the render has work for it. */
+function texpressoPrepare(build: LatexBuildRequest): boolean {
   texpressoFallbackReason = null;
   delete statusEngine.dataset.baseTitle;
-  // An installed distribution is a backend, not a TeXpresso fallback. Naming it
-  // as one produced a warning status on every native build, before the native
-  // compile even started.
-  if (build.engineStatus.backend !== "bundled") {
-    texpressoRelease();
-    texpressoChip();
-    return false;
-  }
   const engine = build.engineChoice?.engine ?? "xelatex";
   const rootKey = pathKey(build.root.path);
   const previewBackend = latexPreviewBackend();
@@ -5169,12 +5193,15 @@ function texpressoPrepare(
     return false;
   }
   const session = texpresso;
-  if (!session || pathKey(session.key.rootPath) !== rootKey || session.key.engine !== frameEngine) {
-    // Manual mode returning to a tab never starts a frame: that is a compile.
-    if (storeOnly) {
-      texpressoShow(false);
-      return false;
-    }
+  if (
+    !session ||
+    pathKey(session.key.rootPath) !== rootKey ||
+    session.key.engine !== frameEngine ||
+    session.key.backend !== previewBackend ||
+    texpressoOwner?.kind !== "latex-project" ||
+    texpressoOwner.rootId !== build.root.id ||
+    texpressoOwner.rootIncarnation !== build.root.incarnation
+  ) {
     // Another project or engine: XeLaTeX and LuaLaTeX are different workers,
     // formats and font caches, so an engine change is a new frame.
     texpressoRelease();
@@ -5187,30 +5214,16 @@ function texpressoPrepare(
     texpressoSetPages(false);
     texpressoSessionCount += 1;
     preview.dataset.texpressoSession = String(texpressoSessionCount);
-    texpresso.hold(settings.latexAutoCompile === false);
     texpressoLog = [];
     texpressoLogLine(`Preview starting (${ENGINE_LABELS[engine]})`);
     texpressoWatchFetches();
     perfMark("texpresso-mount", { engine: frameEngine });
-    // Until the snapshot says whether the store holds this project's PDF, the
-    // new frame warms up covered; a miss uncovers it before anything shows.
-    texpressoCovered = coverable;
-    // A return to a tab read further down: the stored PDF opens there, and so
-    // does the frame once it has typeset that far.
-    const page = texpressoTabPages.get(doc.id) ?? 1;
+    texpressoCovered =
+      typstPdf !== null && latexPreview?.rootId === build.root.id && previewCovers(previewOwner);
+    const page = rememberedLatexPage() ?? 1;
     texpressoLanding = page > 1 ? { session: texpresso, page } : null;
   }
-  // A frame that stayed kept its own place.
-  if (!storeOnly) texpressoTabPages.delete(doc.id);
-  texpresso!.open(projectRelativePath(build.root.directory, doc.path, pathKey));
-  texpressoShow(settings.viewMode !== "source");
-  texpressoChip();
-  // A new frame (first open, another project, an engine change, Recompile from
-  // scratch) is blank for seconds to minutes even though the pane still has an
-  // owner, so the wait is armed here rather than by the owner test alone. A
-  // build that starts over an idle "no pages" or "unavailable" surface spins it
-  // again.
-  texpressoArmWait(storeOnly);
+  texpresso!.hold(settings.latexAutoCompile === false);
   return true;
 }
 
@@ -5227,6 +5240,7 @@ function texpressoLiveText(directory: string, path: string): string | null {
 function texpressoSyncSnapshot(
   build: LatexBuildRequest,
   snapshot: api.LatexProjectSnapshot,
+  key: string,
 ): boolean {
   const session = texpresso;
   if (!session) return false;
@@ -5245,27 +5259,19 @@ function texpressoSyncSnapshot(
     return false;
   }
   session.sync(prepared, projectRelativePath(directory, doc.path, pathKey));
-  // The project record, before any PDF exists: chapter tabs find their main
-  // document from it (step 5).
-  latexProject = {
-    rootId: build.root.id,
-    rootDirectory: directory,
-    files: new Set([
-      ...snapshot.files.map((file) => file.path),
-      ...snapshot.manifest.files.map((file) => file.path),
-    ]),
-  };
-  // The frame is this project's content: the pane is owned, the wait is over.
-  commitPreview(
-    projectOwner(
-      build.root,
-      [
-        ...snapshot.files.map((file) => file.path),
-        ...snapshot.manifest.files.map((file) => file.path),
-      ].map((path) => pathKey(joinDir(directory, path))),
-    ),
-    null,
+  const files = new Set([...snapshot.files.map((file) => file.path), ...session.projectFetched]);
+  latexProject = { rootId: build.root.id, rootDirectory: directory, files };
+  texpressoOwner = projectOwner(
+    build.root,
+    [...files].map((file) => pathKey(joinDir(directory, file))),
   );
+  texpressoKey = key;
+  perfMark("texpresso-project-sync", { token: renderToken, files: files.size });
+  texpressoShow(settings.viewMode !== "source");
+  texpressoChip();
+  // Keep the last PDF's key and ownership while it covers the new build.
+  if (!texpressoCovered) commitPreview(texpressoOwner, null);
+  texpressoArmWait();
   previewSyncReady = true;
   return true;
 }
@@ -5364,10 +5370,7 @@ async function texpressoExportPdf(
   const result: LatexResult = {
     pdf: reply.pdf,
     sources: nativeSources(snapshot),
-    files: new Set([
-      ...snapshot.files.map((file) => file.path),
-      ...snapshot.manifest.files.map((file) => file.path),
-    ]),
+    files: new Set([...snapshot.files.map((file) => file.path), ...session.projectFetched]),
     mainFile: snapshot.mainFile,
     log: texpressoLogText(),
     warnings,
@@ -5635,6 +5638,10 @@ function texpressoFailureNote(): HTMLElement {
   return note;
 }
 
+function revokeLatexSnapshot(token: string): void {
+  void api.latexTexpressoRevoke(token).catch(() => {});
+}
+
 const texpressoHandlers = {
   onReady(
     session: TexpressoSession,
@@ -5659,11 +5666,16 @@ const texpressoHandlers = {
   },
   onMessage(session: TexpressoSession, message: FrameMessage): void {
     if (session !== texpresso) return;
+    if (!texpressoShown && !texpressoCovered && !previewCovers(texpressoOwner)) return;
     texpressoMessage(session, message);
   },
   onBroken(session: TexpressoSession, reason: string): void {
     texpressoFailed.add(pathKey(session.key.rootPath));
     if (session !== texpresso) return;
+    if (!previewCovers(texpressoOwner) && !texpressoShown && !texpressoCovered) {
+      texpressoRelease();
+      return;
+    }
     toast(reason, 6200);
     texpressoFallbackTo("failed");
     // The empty pane already says this, with the same button, in its middle.
@@ -5675,9 +5687,7 @@ const texpressoHandlers = {
       toast("The preview stopped answering; restarting it.", 4200);
   },
   currentText: texpressoLiveText,
-  revokeToken: (token: string) => {
-    void api.latexTexpressoRevoke(token).catch(() => {});
-  },
+  revokeToken: revokeLatexSnapshot,
   theme: texpressoTheme,
   zoom: () => zoomFactor(),
   reference: () => texpressoReference(),
@@ -5685,6 +5695,21 @@ const texpressoHandlers = {
 
 function texpressoMessage(session: TexpressoSession, message: FrameMessage): void {
   switch (message.type) {
+    case "project-fetched": {
+      const owner = texpressoOwner;
+      if (owner?.kind !== "latex-project") break;
+      const member = pathKey(joinDir(session.rootDirectory, message.name));
+      if (owner.memberKeys.has(member)) break;
+      texpressoOwner = {
+        ...owner,
+        memberKeys: new Set([...owner.memberKeys, member]),
+      };
+      if (previewOwner === owner) previewOwner = texpressoOwner;
+      if (latexProject?.rootId === owner.rootId) {
+        latexProject = { ...latexProject, files: new Set([...latexProject.files, message.name]) };
+      }
+      break;
+    }
     case "status":
       if (message.busy) texpressoWatchFetches();
       texpressoLogLine(
@@ -5803,7 +5828,7 @@ function texpressoMessage(session: TexpressoSession, message: FrameMessage): voi
 /** The editor's transactions, straight to the frame: no debounce, no snapshot. */
 function texpressoEdit(changes: Array<[number, number, string]>, base: number, text: string): void {
   const session = texpresso;
-  if (!session || doc.language !== "latex") {
+  if (!session || (!texpressoShowing() && !texpressoCovered)) {
     delete preview.dataset.texpressoEdit;
     return;
   }
@@ -5812,6 +5837,7 @@ function texpressoEdit(changes: Array<[number, number, string]>, base: number, t
     preview.dataset.texpressoEdit = "outside-project";
     return;
   }
+  texpressoKey = null;
   preview.dataset.texpressoEdit = session.edit(file, base, changes, text);
   if (texpressoShowing()) texpressoRefreshStatus();
 }
@@ -7631,8 +7657,13 @@ function retirePreview(): void {
 
 /** A render that started for the previous tab must not paint this one. */
 function invalidatePreview(): void {
-  // Keep the outgoing tab's preview for its return instead of destroying it.
-  if (!covers(previewOwner, probeOf(doc))) parkPreview();
+  const incomingSource = () => doc.draft ?? doc.editorState?.doc.toString() ?? doc.savedContent;
+  const keepPreview = previewCovers(previewOwner, incomingSource);
+  if (!keepPreview) parkPreview();
+  if (texpresso && !previewCovers(texpressoOwner, incomingSource)) {
+    if (texpresso.busy || texpressoCovered || !texpressoKey) texpressoRelease();
+    else texpressoShow(false);
+  }
   latexInFlight = false;
   latexPartial = null;
   delete preview.dataset.latexPartial;
@@ -7646,9 +7677,6 @@ function invalidatePreview(): void {
   typstPdf?.cancelMap();
   typstScheduler.reset();
   cancelTypstRender();
-  // The warm LaTeX engine is kept across tab switches: a chapter of the same
-  // project reuses it, and another project's first compile replaces it. The
-  // outgoing render's result is dropped by its token and activeId.
   window.clearTimeout(renderTimer);
   window.clearTimeout(selectionTimer);
   wordMap = null;
@@ -7664,7 +7692,7 @@ function invalidatePreview(): void {
   // A rebuild for the same owner keeps the last readable output; another
   // document's content is removed before the new render can be slow. The
   // pending surface is re-armed for whichever document is now active.
-  if (!covers(previewOwner, probeOf(doc))) {
+  if (!keepPreview) {
     retirePreview();
     armPending();
   }
@@ -7728,7 +7756,6 @@ async function displayDoc(preservePdf = false): Promise<void> {
   // stays pending: the render that follows applies it right before it syncs
   // the panes, in the same order a full rebuild does, so the sync cannot move
   // the preview away from where the reader left it.
-  if (!preservePdf) restorePreview();
   suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
   suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
   if (doc.editorState) {
@@ -7742,6 +7769,7 @@ async function displayDoc(preservePdf = false): Promise<void> {
   // the session's language again is a no-op once that grammar is already in the
   // state, and it repairs the case where it is not.
   editor.setLanguage(editorLanguageFor(doc));
+  if (!preservePdf) restorePreview();
   assistant?.sync();
   // A captured EditorState keeps the marks it had; a tab that was hidden before
   // the failure has none, so paint the last compile's list for it. No pulse: the
@@ -7765,7 +7793,7 @@ async function displayDoc(preservePdf = false): Promise<void> {
   );
   resetTokenCount();
   scheduleTokenCount(editor.getDoc(), true);
-  await refreshTitle();
+  void refreshTitle();
   refreshStatus();
   renderDocTabs();
   if (preferences?.isOpen()) preferences.refresh();
@@ -8510,6 +8538,7 @@ async function latexExportSnapshot(): Promise<
     // Conversions keep their project-only snapshot: a registered library is
     // never injected into Pandoc, and a broken one does not block an export.
     const captured = await api.latexProjectSnapshot(root.path, overlays, false);
+    revokeLatexSnapshot(captured.projectToken);
     return {
       snapshot: {
         root: root.directory,
