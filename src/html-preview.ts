@@ -47,6 +47,31 @@ export interface HtmlLayout {
   probe: { from: number; to: number } | null;
   /** Host pixels per guest CSS pixel: the iframe's own document zoom. */
   scale: number;
+  /** The slide on screen when the document is a reveal.js deck, else null. */
+  paged: HtmlPage | null;
+}
+
+/** A reveal.js position: horizontal and vertical slide, fragment (-1: none). */
+export interface HtmlPage {
+  h: number;
+  v: number;
+  f: number;
+}
+
+function readPage(value: unknown): HtmlPage | null {
+  if (!value || typeof value !== "object") return null;
+  const page = value as Record<string, unknown>;
+  const index = (x: unknown, min: number): x is number =>
+    Number.isSafeInteger(x) && (x as number) >= min && (x as number) < 100_000;
+  return index(page.h, 0) && index(page.v, 0) && index(page.f, -1)
+    ? { h: page.h, v: page.v, f: page.f }
+    : null;
+}
+
+/** The fragment reveal.js reads at start, so a rebuilt deck opens where it was. */
+function pageHash(page: HtmlPage | null): string {
+  if (!page) return "";
+  return `#/${page.h}/${page.v}${page.f >= 0 ? `/${page.f}` : ""}`;
 }
 
 export interface HtmlAccelerator {
@@ -82,6 +107,8 @@ export interface HtmlPreviewCallbacks {
   onReady(layout: HtmlLayout): void;
   onError(message: string): void;
   onScrollInput?(dragging: boolean): void;
+  /** A deck changed slide; `own` when the host asked for it. */
+  onPage?(line: number, own: boolean): void;
   onZoomWheel?(deltaY: number): void;
 }
 
@@ -600,6 +627,8 @@ export function createHtmlPreview(
   let accelerators: HtmlAccelerator[] = [];
   let guestBase: string | null = null;
   let htmlFragments: HtmlTextFragment[] = [];
+  // The deck position of this document's last frame, carried into the next.
+  let deckPage: HtmlPage | null = null;
   let scrollIndex = new ScrollIndex<HtmlScrollAnchor>([]);
   let scrollRequest = 0;
   let pendingScroll: {
@@ -629,6 +658,7 @@ export function createHtmlPreview(
       const layout = readLayout(data, frame.fragments, frame.frame);
       if (!layout) return;
       currentLayout = layout;
+      if (layout.paged) deckPage = layout.paged;
       window.clearTimeout(frame.timer);
       frame.timer = 0;
       frame.ready = true;
@@ -689,7 +719,19 @@ export function createHtmlPreview(
 
     if (data.type === "layout") {
       const layout = readLayout(data, htmlFragments, frame.frame);
-      if (layout) currentLayout = layout;
+      if (layout) {
+        currentLayout = layout;
+        if (layout.paged) deckPage = layout.paged;
+      }
+      return;
+    }
+    if (data.type === "page") {
+      const page = readPage(data.paged);
+      const line = Number(data.line);
+      if (!page || !Number.isSafeInteger(line) || line < 1) return;
+      deckPage = page;
+      if (currentLayout) currentLayout = { ...currentLayout, paged: page, line };
+      callbacks.onPage?.(line, data.own === true);
       return;
     }
     if (data.type === "scroll") {
@@ -832,6 +874,7 @@ export function createHtmlPreview(
           ? htmlSourceRange(fragments, data.probe as HtmlSelection)
           : null,
       scale: frameElement ? frameScale(frameElement) : 1,
+      paged: readPage(data.paged),
     };
   }
 
@@ -841,7 +884,9 @@ export function createHtmlPreview(
     frame.title = "HTML preview";
     frame.setAttribute("sandbox", "allow-scripts allow-forms allow-modals");
     frame.setAttribute("referrerpolicy", "no-referrer");
-    frame.src = `${url}?v=${generation}`;
+    // A deck reads its slide from the fragment as it starts, so an edit does
+    // not send the reader back to the title slide (nor animate the way back).
+    frame.src = `${url}?v=${generation}${pageHash(deckPage)}`;
     host.appendChild(frame);
     return {
       frame,
@@ -882,6 +927,7 @@ export function createHtmlPreview(
       nonce = randomToken();
       guestBase = null;
       htmlFragments = [];
+      deckPage = null;
     },
 
     async render(source, root, filename, scripts, imageRoots = []) {
@@ -950,6 +996,7 @@ export function createHtmlPreview(
 
     dispose() {
       generation += 1;
+      deckPage = null;
       dropFrames();
       guestBase = null;
       htmlFragments = [];
