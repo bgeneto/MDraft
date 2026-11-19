@@ -5,6 +5,7 @@ import {
   ScrollOwnership,
   SyncReference,
   absorbResidual,
+  boundAbsorb,
   blockCorrection,
   chooseScrollRegion,
   clampScroll,
@@ -241,6 +242,40 @@ check("a small or unmeasurable leftover never moves the gesture's pane", () => {
   assert.equal(absorbResidual(NaN, 0, 5000), 0);
   assert.equal(absorbResidual(-100, NaN, 5000), 0);
   assert.equal(absorbResidual(-30, 0, 5000, 40), 0);
+});
+check("an absorb is a nudge: capped, and the selection stays in view", () => {
+  const view = { top: 0, bottom: 600 };
+  // The same 314 px preamble leftover moves the source at most the cap.
+  assert.equal(boundAbsorb(314, { top: 400, bottom: 420 }, view, 40, 120), 120);
+  // A row near the top cannot scroll up past the margin.
+  assert.equal(boundAbsorb(314, { top: 100, bottom: 120 }, view, 40, 120), 60);
+  // Already inside the margin, or a bound that would reverse it: nothing moves.
+  assert.equal(boundAbsorb(314, { top: 30, bottom: 50 }, view, 40, 120), 0);
+  assert.equal(boundAbsorb(-200, { top: 500, bottom: 580 }, view, 40, 120), 0);
+  // A selection taller than the view with its margins is never moved.
+  assert.equal(boundAbsorb(100, { top: 10, bottom: 590 }, view, 40, 120), 0);
+  assert.equal(boundAbsorb(NaN, { top: 300, bottom: 320 }, view, 40, 120), 0);
+});
+check("no absorb ever moves the selection out of view", () => {
+  let seed = 7;
+  const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  for (let i = 0; i < 5000; i += 1) {
+    const height = 120 + random() * 900;
+    const view = { top: random() * 200, bottom: 0 };
+    view.bottom = view.top + height;
+    const margin = 4 + random() * 40;
+    const top = view.top + random() * height;
+    const rows = { top, bottom: top + 2 + random() * height * 0.6 };
+    const shift = (random() - 0.5) * 3000;
+    const cap = height * 0.2;
+    const moved = boundAbsorb(shift, rows, view, margin, cap);
+    assert.ok(Math.abs(moved) <= cap + 1e-9, `cap ${moved} > ${cap}`);
+    assert.ok(moved === 0 || Math.sign(moved) === Math.sign(shift), "direction kept");
+    if (moved !== 0) {
+      assert.ok(rows.top - moved >= view.top + margin - 1e-9, "top stays in view");
+      assert.ok(rows.bottom - moved <= view.bottom - margin + 1e-9, "bottom stays in view");
+    }
+  }
 });
 check("levelling never turns the follower against the scroll direction", () => {
   assert.equal(levelStep(100, 40, 6), 6);

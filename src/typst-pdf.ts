@@ -60,6 +60,8 @@ export interface PdfScrollBookmark {
 
 /** A4 at 96 dpi, the width the old SVG page view capped at. */
 const MAX_PAGE_WIDTH = 794;
+/** Pixels a page top may sit below the pane top and still be the page being read. */
+const PAGE_EDGE_SLACK = 4;
 /** The fitted page runs this far past the pane, half clipped on each side. */
 const PAGE_BLEED = 4;
 /**
@@ -224,6 +226,8 @@ export class TypstPdfPreview {
   private pages: PdfPage[] = [];
   /** Content-space top of each page shell, for the page indicator. */
   private pageTops: number[] = [];
+  /** The last page jump and where it left the pane, so the indicator keeps it. */
+  private jumped: { page: number; top: number } | null = null;
   private readonly linesByPage = new Map<number, TextLine[]>();
   private observer: IntersectionObserver | null = null;
   private resizeObserver: ResizeObserver | null = null;
@@ -399,6 +403,7 @@ export class TypstPdfPreview {
     }
     this.pages = [];
     this.pageTops = [];
+    this.jumped = null;
     this.pageHashes = [];
     this.linesByPage.clear();
     this.allLines = [];
@@ -1065,7 +1070,19 @@ export class TypstPdfPreview {
   visiblePage(): number {
     if (this.disposed || this.pages.length === 0) return 0;
     if (this.pageTops.length !== this.pages.length) this.measurePageTops();
-    const top = this.pane.scrollTop + 12;
+    const scrollTop = this.pane.scrollTop;
+    // A jump that could not bring its page to the top (the last pages) still
+    // landed on that page, and so did one the browser rounded a pixel short.
+    const jumped = this.jumped;
+    if (jumped && Math.abs(jumped.top - scrollTop) <= 2 && jumped.page <= this.pages.length)
+      return jumped.page;
+    this.jumped = null;
+    const max = this.pane.scrollHeight - this.pane.clientHeight;
+    if (max > 0 && scrollTop >= max - 1) return this.pages[this.pages.length - 1].number;
+    // Page tops are fractional under display scaling while the scroll position
+    // snaps to device pixels: a page whose top is a pixel below the pane's top
+    // is still the page being read.
+    const top = scrollTop + PAGE_EDGE_SLACK;
     let lo = 0;
     let hi = this.pageTops.length;
     while (lo < hi) {
@@ -1090,13 +1107,19 @@ export class TypstPdfPreview {
     this.cancelScrollRestore();
     // The first page's natural position is the top of the pane: scrolling to
     // its shell would cut into the document's own top margin.
-    if (wanted === 1) {
-      this.pane.scrollTop = 0;
-      return;
+    if (wanted === 1) this.pane.scrollTop = 0;
+    else {
+      // The page's top edge goes to the pane's top edge, rounded up so no
+      // sliver of the previous page shows above it.
+      const box = target.shell.getBoundingClientRect();
+      const pane = this.pane.getBoundingClientRect();
+      const max = this.pane.scrollHeight - this.pane.clientHeight;
+      this.pane.scrollTop = Math.min(
+        max,
+        Math.max(0, Math.ceil(box.top - pane.top + this.pane.scrollTop)),
+      );
     }
-    const box = target.shell.getBoundingClientRect();
-    const pane = this.pane.getBoundingClientRect();
-    this.pane.scrollTop = Math.max(0, box.top - pane.top + this.pane.scrollTop - 12);
+    this.jumped = { page: wanted, top: this.pane.scrollTop };
   }
 
   /** Cache page tops in the pane's content coordinates; scroll-independent. */
@@ -1169,6 +1192,7 @@ export class TypstPdfPreview {
     }
     this.pages = [];
     this.pageTops = [];
+    this.jumped = null;
     this.pageHashes = [];
     this.linesByPage.clear();
     this.allLines = [];

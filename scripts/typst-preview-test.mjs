@@ -715,14 +715,39 @@ check(
 );
 await evaluate(`document.querySelector('.compiled-pages [aria-label="Next page"]').click()`);
 await sleep(350);
-const nextPage = await evaluate(`(() => {
+// Where page 2's top edge is against the pane's, and the strip's page.
+const pageLanding = () =>
+  evaluate(`(() => {
   const pane=document.getElementById('preview-pane');
-  return { top:pane.scrollTop, value:document.querySelector('.compiled-page-field')?.value };
+  const shell=document.querySelectorAll('.typst-page-shell')[1];
+  const max=pane.scrollHeight-pane.clientHeight;
+  return {
+    top:pane.scrollTop,
+    atEnd:pane.scrollTop>=max-1,
+    offset:shell ? shell.getBoundingClientRect().top-pane.getBoundingClientRect().top : null,
+    value:document.querySelector('.compiled-page-field')?.value,
+  };
 })()`);
+const nextPage = await pageLanding();
 check(
   "Next page moves to page 2",
   nextPage.top > 0 && nextPage.value === "2",
   JSON.stringify(nextPage),
+);
+check(
+  "a page jump puts the page's top edge at the preview's top edge",
+  nextPage.offset !== null &&
+    (Math.abs(nextPage.offset) < 1 || (nextPage.atEnd && nextPage.offset > 0)),
+  JSON.stringify(nextPage),
+);
+// Source sync answers the jump by scrolling the editor; that scroll must not
+// pull the page back off the top once it settles.
+await sleep(900);
+const settledPage = await pageLanding();
+check(
+  "the jumped page stays put after scroll sync settles",
+  Math.abs(settledPage.top - nextPage.top) < 1 && settledPage.value === "2",
+  JSON.stringify(settledPage),
 );
 await evaluate(`(() => {
   const field=document.querySelector('.compiled-page-field');

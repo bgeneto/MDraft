@@ -291,6 +291,42 @@ export function absorbResidual(
   return Math.abs(shift) < 0.5 ? 0 : shift;
 }
 
+/**
+ * The largest share of the gesture pane's height an absorb may scroll it. The
+ * other pane does the levelling; the clicked pane only nudges, and what it
+ * leaves stays as calibration for the reader's next scroll.
+ */
+export const ABSORB_MAX_SHARE = 0.2;
+
+/**
+ * Bound an absorb shift so the gesture's rows stay where the reader can see
+ * them. Scrolling by `shift` moves a row at `y` to `y - shift`; `rows` and
+ * `view` are viewport coordinates. The rows keep `margin` from either edge of
+ * the view, the shift never exceeds `cap`, and a bound that would turn the
+ * shift around (rows already near an edge, or taller than the view) gives 0:
+ * the absorb is a convenience, never worth moving the text being edited away.
+ */
+export function boundAbsorb(
+  shift: number,
+  rows: { top: number; bottom: number },
+  view: { top: number; bottom: number },
+  margin: number,
+  cap: number,
+): number {
+  const values = [shift, rows.top, rows.bottom, view.top, view.bottom, margin, cap];
+  if (!values.every(Number.isFinite) || cap <= 0 || shift === 0) return 0;
+  // shift >= lowest keeps the rows' bottom inside; shift <= highest keeps the top.
+  const lowest = rows.bottom - (view.bottom - margin);
+  const highest = rows.top - (view.top + margin);
+  if (lowest > highest) return 0;
+  const capped = Math.max(-cap, Math.min(cap, shift));
+  const bounded = Math.max(lowest, Math.min(highest, capped));
+  // The bounds only shorten a shift: rows already past a margin are not chased.
+  if (Math.sign(bounded) !== Math.sign(shift) || Math.abs(bounded) > Math.abs(capped)) return 0;
+  if (Math.abs(bounded) < 0.5) return 0;
+  return bounded;
+}
+
 export interface ScrollRegion {
   key: string;
   top: number;

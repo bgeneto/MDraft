@@ -12048,7 +12048,7 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
       case "page": {
         const target = Math.floor(Number(message.page));
         if (Number.isFinite(target) && target >= 1) {
-          panel.goPage(target - 1);
+          jumpToPage(target);
           scheduleViewport();
         }
         break;
@@ -12116,9 +12116,53 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
     pendingY = null;
     void session?.toSource(spot.k, spot.x, spot.y);
   });
+  var jumped = null;
+  function pageSlots(area) {
+    return [...area.querySelectorAll(".slot[data-k]")];
+  }
+  function jumpToPage(page) {
+    const area = stage();
+    if (!area) return;
+    const slots = pageSlots(area);
+    if (!slots.length) {
+      panel.goPage(page - 1);
+      return;
+    }
+    const wanted = Math.min(slots.length, page);
+    const slot = slots[wanted - 1];
+    const max = area.scrollHeight - area.clientHeight;
+    const top = wanted === 1 ? 0 : Math.ceil(
+      slot.getBoundingClientRect().top - area.getBoundingClientRect().top + area.scrollTop
+    );
+    area.scrollTop = Math.max(0, Math.min(max, top));
+    jumped = { page: wanted, top: area.scrollTop };
+  }
+  function pageAtTop(area) {
+    const slots = pageSlots(area);
+    if (!slots.length) return null;
+    const scrollTop = area.scrollTop;
+    if (jumped && Math.abs(jumped.top - scrollTop) <= 2 && jumped.page <= slots.length)
+      return jumped.page;
+    jumped = null;
+    const max = area.scrollHeight - area.clientHeight;
+    if (max > 0 && scrollTop >= max - 1) return slots.length;
+    const y = area.getBoundingClientRect().top + 4;
+    let lo = 0;
+    let hi = slots.length;
+    while (lo < hi) {
+      const mid = lo + hi >> 1;
+      if (slots[mid].getBoundingClientRect().top <= y) lo = mid + 1;
+      else hi = mid;
+    }
+    return Math.max(1, lo);
+  }
   async function reportViewport() {
     const area = stage();
-    if (!area || viewportBusy || !session) return;
+    if (!area || !session) return;
+    if (viewportBusy) {
+      scheduleViewport();
+      return;
+    }
     let page = -1;
     let fraction = 0;
     for (let k = 0; k < Math.max(pageCount, pageSizes.size); k += 1) {
@@ -12128,7 +12172,7 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
       fraction = Math.max(0, view[1]);
       break;
     }
-    const current2 = page < 0 ? null : page + 1;
+    const current2 = pageAtTop(area);
     if (page < 0) {
       post({
         type: "viewport",

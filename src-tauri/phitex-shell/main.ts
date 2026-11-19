@@ -538,7 +538,7 @@ window.addEventListener("message", (event) => {
     case "page": {
       const target = Math.floor(Number(message.page));
       if (Number.isFinite(target) && target >= 1) {
-        panel.goPage(target - 1);
+        jumpToPage(target);
         scheduleViewport();
       }
       break;
@@ -616,9 +616,72 @@ stage()?.addEventListener("click", (event) => {
  * scroll sync (preview → source). Asked a page at a time, after the scroll
  * settles, from the same glyph origins a click uses.
  */
+/** The last page jump and where it left the stage, so the report keeps it. */
+let jumped: { page: number; top: number } | null = null;
+
+function pageSlots(area: HTMLElement): HTMLElement[] {
+  return [...area.querySelectorAll<HTMLElement>(".slot[data-k]")];
+}
+
+/**
+ * Bring 1-based `page`'s top edge to the stage's top edge. The viewer's own
+ * goTo leaves a margin above the page, which reads as landing between pages.
+ */
+function jumpToPage(page: number): void {
+  const area = stage();
+  if (!area) return;
+  const slots = pageSlots(area);
+  if (!slots.length) {
+    panel.goPage(page - 1);
+    return;
+  }
+  const wanted = Math.min(slots.length, page);
+  const slot = slots[wanted - 1];
+  const max = area.scrollHeight - area.clientHeight;
+  // Rounded up so no sliver of the previous page shows above it.
+  const top =
+    wanted === 1
+      ? 0
+      : Math.ceil(
+          slot.getBoundingClientRect().top - area.getBoundingClientRect().top + area.scrollTop,
+        );
+  area.scrollTop = Math.max(0, Math.min(max, top));
+  jumped = { page: wanted, top: area.scrollTop };
+}
+
+/** The 1-based page at the stage's top edge, or null before a page is laid out. */
+function pageAtTop(area: HTMLElement): number | null {
+  const slots = pageSlots(area);
+  if (!slots.length) return null;
+  const scrollTop = area.scrollTop;
+  // A jump that could not bring its page to the top (the last pages) still
+  // landed on that page, and so did one the browser rounded a pixel short.
+  if (jumped && Math.abs(jumped.top - scrollTop) <= 2 && jumped.page <= slots.length)
+    return jumped.page;
+  jumped = null;
+  const max = area.scrollHeight - area.clientHeight;
+  if (max > 0 && scrollTop >= max - 1) return slots.length;
+  // Page tops are fractional under display scaling: a few pixels of slack.
+  const y = area.getBoundingClientRect().top + 4;
+  let lo = 0;
+  let hi = slots.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (slots[mid].getBoundingClientRect().top <= y) lo = mid + 1;
+    else hi = mid;
+  }
+  return Math.max(1, lo);
+}
+
 async function reportViewport(): Promise<void> {
   const area = stage();
-  if (!area || viewportBusy || !session) return;
+  if (!area || !session) return;
+  // A source lookup is still running: report once it is done rather than
+  // dropping this one, or the page indicator keeps the old page.
+  if (viewportBusy) {
+    scheduleViewport();
+    return;
+  }
   let page = -1;
   let fraction = 0;
   for (let k = 0; k < Math.max(pageCount, pageSizes.size); k += 1) {
@@ -628,7 +691,7 @@ async function reportViewport(): Promise<void> {
     fraction = Math.max(0, view[1]);
     break;
   }
-  const current = page < 0 ? null : page + 1;
+  const current = pageAtTop(area);
   if (page < 0) {
     post({
       type: "viewport",

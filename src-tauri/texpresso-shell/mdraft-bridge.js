@@ -831,10 +831,22 @@
    * Page tops are in document order, so a binary search avoids reading every
    * page rectangle on each scroll frame of a long paper.
    */
+  /** The last page jump and where it left the box, so the report keeps it. */
+  let jumped = null;
   const pageAtTop = (box) => {
     const pages = [...document.querySelectorAll("#pages .page")];
     if (!pages.length) return null;
-    const y = box.getBoundingClientRect().top + reference;
+    const scrollTop = scrollTopOf.get.call(box);
+    // A jump that could not bring its page to the top (the last pages) still
+    // landed on that page, and so did one the browser rounded a pixel short.
+    if (jumped && Math.abs(jumped.top - scrollTop) <= 2 && jumped.page <= pages.length)
+      return jumped.page;
+    jumped = null;
+    const max = box.scrollHeight - box.clientHeight;
+    if (max > 0 && scrollTop >= max - 1) return pages.length;
+    // The page at the frame's top edge, not at the sync line: page tops are
+    // fractional under display scaling, so a few pixels of slack.
+    const y = box.getBoundingClientRect().top + 4;
     let lo = 0;
     let hi = pages.length;
     while (lo < hi) {
@@ -856,7 +868,7 @@
     const landed =
       linkLanding && performance.now() < linkLanding.until && Math.abs(linkLanding.top - top) <= 2;
     if (landed) linkLanding = null;
-    const jumped = pageJump;
+    const fromJump = pageJump;
     pageJump = false;
     note(`viewport line=${line === null ? "null" : Math.round(line)} file=${openName()}`);
     post({
@@ -865,7 +877,7 @@
       page: pageAtTop(box),
       file: openName(),
       line,
-      gesture: jumped || (!landed && performance.now() - lastInput < 800),
+      gesture: fromJump || (!landed && performance.now() - lastInput < 800),
     });
   };
   const installScroll = (box) => {
@@ -1259,8 +1271,12 @@
       // scroll guard, report the landing, and let source sync follow it.
       ownScroll = null;
       pageJump = true;
-      const top = pageTopInBox(page, box) - reference;
-      scrollTopOf.set.call(box, Math.max(0, Math.min(box.scrollHeight - box.clientHeight, top)));
+      // The page's top edge goes to the frame's top edge, rounded up so no
+      // sliver of the previous page shows above it.
+      const max = box.scrollHeight - box.clientHeight;
+      const top = requested === 1 ? 0 : Math.ceil(pageTopInBox(page, box));
+      scrollTopOf.set.call(box, Math.max(0, Math.min(max, top)));
+      jumped = { page: Math.min(pages.length, requested), top: scrollTopOf.get.call(box) };
       if (!viewportFrame) viewportFrame = requestAnimationFrame(reportViewport);
     },
     zoom(message) {

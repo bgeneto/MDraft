@@ -299,8 +299,10 @@ import {
   ScrollIndex,
   ScrollOwnership,
   SyncReference,
+  ABSORB_MAX_SHARE,
   ABSORB_MIN_PX,
   absorbResidual,
+  boundAbsorb,
   blockCorrection,
   solveGesture,
   type BlockTop,
@@ -2898,6 +2900,7 @@ function goToPreviewPage(page: number): void {
   scrollOwnership.input();
   suppressPreviewScrollUntil = 0;
   suppressEditorScrollUntil = 0;
+  pageJumpHold = editor.getDoc();
   if (doc.language === "latex" && texpressoShowing()) {
     const target = Math.min(Math.max(1, texpressoPageCount), Math.max(1, Math.round(page)));
     texpresso?.post({ type: "page", page: target });
@@ -5615,6 +5618,7 @@ function texpressoMessage(session: TexpressoSession, message: FrameMessage): voi
       break;
     case "input":
       scrollOwnership.input();
+      pageJumpHold = null;
       suppressPreviewScrollUntil = 0;
       suppressEditorScrollUntil = 0;
       break;
@@ -10294,6 +10298,12 @@ let blinkTimer = 0;
 let caretByPointer = false;
 let suppressPreviewScrollUntil = 0;
 let suppressEditorScrollUntil = 0;
+/**
+ * The source text a page jump was made on. Until the reader's next input (or
+ * an edit) the preview stays on that page: source-to-preview sync answering
+ * the source's own follow-up scroll would otherwise pull the page off the top.
+ */
+let pageJumpHold: string | null = null;
 
 function rebuildAnchors(): void {
   previewAnchors = Array.from(preview.querySelectorAll<HTMLElement>("[data-line]"))
@@ -11743,10 +11753,12 @@ function cancelGestureAbsorb(): void {
  * pair only levels after the reader has scrolled several times that distance.
  *
  * Moving the clicked pane is what the earlier, reverted attempts got wrong, so
- * this one keeps three rules: it waits until the click sequence has ended (a
- * double- or triple-click still lands on its word), any input cancels it, and
- * the row glides rather than jumps, so the eye stays on it. A small leftover is
- * not worth that motion and stays with levelStep(). The HTML guest scrolls by
+ * this one keeps four rules: it waits until the click sequence has ended (a
+ * double- or triple-click still lands on its word), any input cancels it, the
+ * row glides rather than jumps, so the eye stays on it, and it is a nudge
+ * (absorbShift): at most a fifth of the pane, and never so far that the
+ * selection leaves the view. A small leftover is not worth that motion, and
+ * whatever the nudge leaves, stays with levelStep(). The HTML guest scrolls by
  * message, so a gesture inside it never moves its own pane.
  */
 function scheduleGestureAbsorb(point: GesturePoint, residual: number): void {
@@ -11767,9 +11779,41 @@ function scheduleGestureAbsorb(point: GesturePoint, residual: number): void {
       Math.abs(paneScrollTop(point.pane) - from) >= 1
     )
       return;
-    const shift = absorbResidual(residual, from, paneScrollMax(point.pane));
+    const shift = absorbShift(point, absorbResidual(residual, from, paneScrollMax(point.pane)));
     if (shift) animateGestureAbsorb(point, from, shift);
   }, ABSORB_DELAY_MS);
+}
+
+/**
+ * Bound an absorb so what the reader clicked or selected stays in view. In the
+ * source that is the whole selection, measured now; a selection CodeMirror has
+ * not laid out (part of it off screen) is not moved at all.
+ */
+function absorbShift(point: GesturePoint, shift: number): number {
+  if (!shift) return 0;
+  if (point.pane === "source") {
+    const view = editor.view;
+    const { from, to } = view.state.selection.main;
+    const start = view.coordsAtPos(from, 1);
+    const end = to === from ? start : view.coordsAtPos(to, -1);
+    if (!start || !end) return 0;
+    const box = view.scrollDOM.getBoundingClientRect();
+    return boundAbsorb(
+      shift,
+      { top: Math.min(start.top, end.top), bottom: Math.max(start.bottom, end.bottom) },
+      box,
+      2 * view.defaultLineHeight,
+      box.height * ABSORB_MAX_SHARE,
+    );
+  }
+  const box = previewPane.getBoundingClientRect();
+  return boundAbsorb(
+    shift,
+    { top: point.y - 12, bottom: point.y + 12 },
+    box,
+    24,
+    box.height * ABSORB_MAX_SHARE,
+  );
 }
 
 function animateGestureAbsorb(point: GesturePoint, from: number, shift: number): void {
@@ -11991,6 +12035,14 @@ function resolvePinnedGesture(): void {
   levelGesture(pin.point, 1);
 }
 
+/** A page jump still owns the preview: nothing the source does may move it. */
+function pageJumpHolding(): boolean {
+  if (pageJumpHold === null) return false;
+  if (pageJumpHold === editor.getDoc()) return true;
+  pageJumpHold = null;
+  return false;
+}
+
 function queuePaneScroll(direction: SyncPane): void {
   if (compiledUi.logsOpen) return;
   if (!settings.syncScroll || settings.viewMode !== "split" || syncDragging || htmlScrollDragging)
@@ -12004,6 +12056,7 @@ function queuePaneScroll(direction: SyncPane): void {
           ? texpressoScrollTop
           : previewPane.scrollTop;
   if (scrollOwnership.reflected(direction, top, performance.now())) return;
+  if (direction === "source" && pageJumpHolding()) return;
   scrollOwnership.input();
   cancelAnimationFrame(paneSyncFrame);
   const token = renderToken;
@@ -12017,6 +12070,7 @@ function queuePaneScroll(direction: SyncPane): void {
     // A selection reveal owns the source for its short hand-off window; a
     // preview-scroll correction queued before the gesture must not move it away.
     if (direction === "preview" && performance.now() < suppressEditorScrollUntil) return;
+    if (direction === "source" && pageJumpHolding()) return;
     // The frame reports its own scrolling (`viewport`); only the source
     // direction is queued here.
     if (doc.language === "latex" && texpressoShowing()) {
@@ -12047,6 +12101,7 @@ function installPaneSync(): void {
   ] as const) {
     const input = (event: Event): void => {
       scrollOwnership.input();
+      pageJumpHold = null;
       typstPdf?.cancelScrollRestore();
       if (direction === "source") suppressEditorScrollUntil = 0;
       else {
