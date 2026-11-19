@@ -1686,9 +1686,16 @@ const USER_STATE = [
 function enableLatexEngineInSettings() {
   const settingsPath = path.join(appConfigDir(), "settings.json");
   try {
-    const settings = fs.existsSync(settingsPath)
-      ? JSON.parse(fs.readFileSync(settingsPath, "utf8"))
-      : {};
+    const existed = fs.existsSync(settingsPath);
+    const settings = existed ? JSON.parse(fs.readFileSync(settingsPath, "utf8")) : {};
+    // A settings file without the engine fields reads as one written before
+    // XeLaTeX became the default, so the app keeps LuaLaTeX for it. The suite
+    // starts as a new install does (no file at all), so a file created here
+    // carries a new install's engine choice.
+    if (!existed) {
+      settings.latexBundledEngine = "xelatex";
+      settings.latexNativePrefersXelatex = true;
+    }
     settings.latexEnabled = true;
     fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2));
     console.log(`engine   latexEnabled written to ${settingsPath}\n`);
