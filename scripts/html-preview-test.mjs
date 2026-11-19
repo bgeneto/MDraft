@@ -963,6 +963,109 @@ check(
   await frame.evaluate(`location.hash`),
 );
 
+console.log("\n=== paged deck ===");
+// A minimal stand-in for reveal.js's global API: three slides, one shown, a
+// start position read from the URL fragment, `slidechanged` reported
+// synchronously. Each slide is long in the source so the editor must scroll.
+const deckFile = path.join(syncDir, "deck.html");
+const deckSlides = [0, 1, 2]
+  .map(
+    (i) =>
+      `<section><h2>SLIDE-${i}</h2>\n` +
+      Array.from({ length: 40 }, (_, k) => `<p>line ${k} of slide ${i}</p>`).join("\n") +
+      `\n</section>`,
+  )
+  .join("\n");
+fs.writeFileSync(
+  deckFile,
+  `<!doctype html><html><body>
+<div class="reveal"><div class="slides">
+${deckSlides}
+</div></div>
+<script>
+(() => {
+  const slides = [...document.querySelectorAll(".reveal .slides > section")];
+  const handlers = {};
+  let h = Number((/^#\\/(\\d+)/.exec(location.hash) || [])[1] || 0);
+  const show = () => slides.forEach((s, i) => {
+    s.classList.toggle("present", i === h);
+    s.style.display = i === h ? "block" : "none";
+  });
+  show();
+  window.deckStart = h;
+  window.Reveal = {
+    isReady: () => true,
+    on: (name, fn) => (handlers[name] = handlers[name] || []).push(fn),
+    getCurrentSlide: () => slides[h],
+    getIndices: (slide) => ({ h: slide ? slides.indexOf(slide) : h, v: 0 }),
+    slide: (next) => {
+      if (next === h) return;
+      h = next;
+      show();
+      (handlers.slidechanged || []).forEach((fn) => fn({ indexh: h }));
+    },
+  };
+})();
+</script>
+</body></html>`,
+);
+const beforeDeck = await page.evaluate(
+  `document.querySelector('.html-preview-frame.active')?.getAttribute('src') ?? ''`,
+);
+await page.evaluate(
+  `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'open-files',payload:[${JSON.stringify(deckFile)}]})`,
+);
+const deckSrc = await reconnect(beforeDeck);
+async function key(keyName, code, keyCode, modifiers = 0) {
+  for (const type of ["keyDown", "keyUp"])
+    await page.send("Input.dispatchKeyEvent", {
+      type,
+      key: keyName,
+      code,
+      modifiers,
+      windowsVirtualKeyCode: keyCode,
+    });
+}
+// The caret at the end of the source is on the last slide.
+await page.evaluate(`document.querySelector('.cm-content')?.focus()`);
+await key("End", "End", 35, 2);
+await sleep(400);
+check(
+  "the caret's slide is shown in the deck",
+  (await frame.evaluate(`Reveal.getIndices().h`)) === 2,
+  String(await frame.evaluate(`Reveal.getIndices().h`)),
+);
+// The reader changes slide in the guest: the source follows, the caret stays.
+await frame.evaluate(`Reveal.slide(1)`);
+await sleep(400);
+const followed = await page.evaluate(`(() => {
+  const scroller = document.querySelector('.cm-scroller').getBoundingClientRect();
+  const line = [...document.querySelectorAll('.cm-line')].find((el) => el.textContent.includes('SLIDE-1'));
+  if (!line) return null;
+  const box = line.getBoundingClientRect();
+  return { top: Math.round(box.top - scroller.top), height: Math.round(scroller.height) };
+})()`);
+check(
+  "a slide change in the deck brings its source into view",
+  followed !== null && followed.top >= 0 && followed.top < followed.height * 0.5,
+  JSON.stringify(followed),
+);
+check(
+  "following the deck does not move the deck back",
+  (await frame.evaluate(`Reveal.getIndices().h`)) === 1,
+);
+// An edit rebuilds the guest; the new deck starts on the slide that was shown.
+await frame.evaluate(`Reveal.slide(1)`);
+await key("End", "End", 35, 2);
+await page.send("Input.insertText", { text: "\n" });
+await sleep(600);
+const rebuiltSrc = await reconnect(deckSrc);
+check(
+  "a rebuilt deck opens on the slide it showed",
+  rebuiltSrc.endsWith("#/2/0") && (await frame.evaluate(`window.deckStart`)) === 2,
+  rebuiltSrc,
+);
+
 console.log("\n=== web source files ===");
 for (const [extension, content] of [
   ["js", "const message = 'hello';"],

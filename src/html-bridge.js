@@ -71,6 +71,12 @@
   var originalParents = null;
   var alignments = new WeakMap();
 
+  // The document's reveal.js deck once it is ready (see "Paged decks").
+  var deck = null;
+  var deckWatched = false;
+  var deckSteering = false;
+  var pendingLine = null;
+
   var anchors = [];
   var keys = [];
   var layoutQueued = false;
@@ -94,8 +100,13 @@
   function scanAnchors() {
     var found = [];
     var nodes = document.querySelectorAll("[data-mdraft-line]");
+    // A deck lays every slide over the same viewport, and the slides around
+    // the present one still have boxes, transformed far off screen. Only the
+    // slide on screen has positions worth reporting.
+    var slide = deck ? deck.getCurrentSlide() : null;
     for (var i = 0; i < nodes.length; i += 1) {
       var element = nodes[i];
+      if (slide && !slide.contains(element)) continue;
       var line = parseInt(element.getAttribute("data-mdraft-line"), 10);
       if (!isFinite(line)) continue;
       var rect = element.getBoundingClientRect();
@@ -118,7 +129,8 @@
         document.body ? document.body.scrollHeight : 0,
       ),
       client: window.innerHeight,
-      line: lineAtTop(),
+      line: deck ? deckLine() : lineAtTop(),
+      paged: deckPage(),
     };
   }
 
@@ -151,6 +163,7 @@
       height: state.height,
       client: state.client,
       line: state.line,
+      paged: state.paged,
     });
   }
 
@@ -175,6 +188,7 @@
         height: state.height,
         client: state.client,
         line: state.line,
+        paged: state.paged,
         epoch: layoutEpoch,
         probe: scrollDragging ? null : scrollProbe(),
       });
@@ -189,6 +203,129 @@
       else break;
     }
     return found || anchors[0];
+  }
+
+  // -------------------------------------------------------------------------
+  // Paged decks (reveal.js)
+  //
+  // A deck does not scroll: every slide is laid over one viewport and the
+  // reader moves between them. Following the source therefore means changing
+  // slide, through the deck's own API, and a slide change in the guest is
+  // reported to the host as a line. Only the document's global `Reveal` (the
+  // build reveal.js, Quarto and pandoc load) is recognised.
+  // -------------------------------------------------------------------------
+
+  function revealApi() {
+    var api = window.Reveal;
+    if (!api || (typeof api !== "object" && typeof api !== "function")) return null;
+    var needed = ["getIndices", "slide", "on", "isReady", "getCurrentSlide"];
+    for (var i = 0; i < needed.length; i += 1) {
+      if (typeof api[needed[i]] !== "function") return null;
+    }
+    return api;
+  }
+
+  function watchDeck() {
+    var api = revealApi();
+    if (!api || deckWatched) return;
+    deckWatched = true;
+    var start = function () {
+      if (deck) return;
+      deck = api;
+      api.on("slidechanged", pageChanged);
+      api.on("fragmentshown", pageChanged);
+      api.on("fragmenthidden", pageChanged);
+      if (pendingLine !== null) goToLine(pendingLine);
+      pendingLine = null;
+      layout();
+    };
+    try {
+      if (api.isReady()) start();
+      else api.on("ready", start);
+    } catch (error) {
+      /* not the deck API after all */
+    }
+  }
+
+  function deckPage() {
+    if (!deck) return null;
+    var at = deck.getIndices();
+    return {
+      h: at.h | 0,
+      v: at.v | 0,
+      f: typeof at.f === "number" && isFinite(at.f) ? at.f : -1,
+    };
+  }
+
+  function lineOf(element) {
+    var stamped = element && element.closest ? element.closest("[data-mdraft-line]") : null;
+    var line = stamped ? parseInt(stamped.getAttribute("data-mdraft-line"), 10) : NaN;
+    return isFinite(line) ? line : null;
+  }
+
+  // The line the reader is looking at: the fragment just shown, else the slide.
+  function deckLine() {
+    var slide = deck.getCurrentSlide();
+    if (!slide) return 1;
+    var fragment = slide.querySelector(".current-fragment");
+    return lineOf(fragment) || lineOf(slide) || 1;
+  }
+
+  function pageChanged() {
+    if (deck.isOverview && deck.isOverview()) return;
+    // Recomputed now: the anchors belong to the slide that was left.
+    layout();
+    post({ type: "page", line: deckLine(), own: deckSteering, paged: deckPage() });
+  }
+
+  /** The innermost slide holding `element`; a stack stands for its first slide. */
+  function slideOf(element) {
+    var slide = element.closest(".reveal .slides section");
+    if (!slide) return null;
+    var first = slide.querySelector(":scope > section");
+    return first || slide;
+  }
+
+  // Show `element`: its slide, and its fragment if it is one the reader has
+  // not reached yet. Fragments already shown are never hidden again, and the
+  // present slide is left alone when it already shows the element.
+  function showInDeck(element) {
+    var slide = element ? slideOf(element) : null;
+    if (!slide) return;
+    var target = deck.getIndices(slide);
+    var now = deck.getIndices();
+    var fragment = element.closest(".fragment");
+    var index =
+      fragment && slide.contains(fragment)
+        ? parseInt(fragment.getAttribute("data-fragment-index"), 10)
+        : NaN;
+    var same = (target.h | 0) === (now.h | 0) && (target.v | 0) === (now.v | 0);
+    var shown = typeof now.f === "number" ? now.f : -1;
+    if (same && (!isFinite(index) || shown >= index)) return;
+    // The deck reports this change synchronously; it is the host's own.
+    deckSteering = true;
+    try {
+      deck.slide(target.h | 0, target.v | 0, isFinite(index) ? index : undefined);
+    } finally {
+      deckSteering = false;
+    }
+  }
+
+  // The last stamped element at or before `line`, wherever it is in the deck.
+  function goToLine(line) {
+    if (!isFinite(line)) return;
+    var nodes = document.querySelectorAll(".reveal .slides [data-mdraft-line]");
+    var best = null;
+    var bestLine = -1;
+    for (var i = 0; i < nodes.length; i += 1) {
+      var value = parseInt(nodes[i].getAttribute("data-mdraft-line"), 10);
+      if (isFinite(value) && value <= line && value >= bestLine) {
+        best = nodes[i];
+        bestLine = value;
+      }
+    }
+    if (!best && nodes.length) best = nodes[0];
+    showInDeck(best);
   }
 
   function blink(line) {
@@ -240,10 +377,14 @@
 
   window.addEventListener("scroll", queueScroll, { passive: true });
   window.addEventListener("resize", queueLayout);
-  window.addEventListener("load", queueLayout);
+  window.addEventListener("load", function () {
+    watchDeck();
+    queueLayout();
+  });
 
   document.addEventListener("DOMContentLoaded", function () {
     installBlinkStyle();
+    watchDeck();
     layout();
     if (!readySent) {
       readySent = true;
@@ -256,6 +397,7 @@
         height: state.height,
         client: state.client,
         line: state.line,
+        paged: state.paged,
       });
     }
   });
@@ -730,6 +872,8 @@
       clearWords();
       return;
     }
+    // A highlight on a slide that is not on screen is no highlight at all.
+    if (deck) showInDeck(ranges[0].startContainer.parentElement);
     if (key === wordKey && wordTimer) return;
     clearWords();
     wordKey = key;
@@ -809,7 +953,9 @@
       if (raw.charAt(0) === "#") {
         var id = raw.slice(1);
         var destination = id ? document.getElementById(id) : null;
-        if (destination) destination.scrollIntoView({ block: "start" });
+        // Scrolling a deck's hidden overflow would shift every slide.
+        if (destination && deck) showInDeck(destination);
+        else if (destination) destination.scrollIntoView({ block: "start" });
         else if (!id || id.toLowerCase() === "top") window.scrollTo(0, 0);
         // No element by that name: a fragment such as reveal.js's `#/3` is a
         // route the document's own script follows on `hashchange`. Setting it
@@ -850,6 +996,8 @@
     var data = event.data;
     if (!data || data.__mdraft !== TOKEN) return;
     if (data.type === "scrollTo") {
+      // A deck's viewport does not scroll; the host steers it by line.
+      if (deck) return;
       if (data.input !== undefined && data.input !== scrollInput) return;
       var top = Number(data.top);
       if (isFinite(top)) window.scrollTo(0, Math.max(0, top));
@@ -859,13 +1007,23 @@
       var height = Number(data.y);
       if (isFinite(height)) probeY = Math.max(0, Math.min(window.innerHeight, height));
     } else if (data.type === "scrollToLine") {
+      if (deck) {
+        goToLine(Number(data.line));
+        return;
+      }
+      // The deck is still starting: its first slide is not yet laid out.
+      if (revealApi()) {
+        pendingLine = Number(data.line);
+        return;
+      }
       var anchor = anchorForLine(Number(data.line));
       if (anchor) window.scrollTo(0, Math.max(0, anchor.top - SYNC_MARGIN));
     } else if (data.type === "blink") {
       blink(Number(data.line));
     } else if (data.type === "hash") {
       var element = document.getElementById(String(data.id));
-      if (element) element.scrollIntoView({ block: "start" });
+      if (element && deck) showInDeck(element);
+      else if (element) element.scrollIntoView({ block: "start" });
     } else if (data.type === "highlightWords") {
       paintWords(data.ranges);
     } else if (data.type === "keys") {

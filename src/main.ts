@@ -11045,7 +11045,36 @@ function htmlIndexForLine(anchors: HtmlLayout["anchors"], line: number): number 
   return index;
 }
 
+/** The guest is a reveal.js deck: it changes slide instead of scrolling. */
+function htmlDeck(): boolean {
+  return Boolean(htmlPreview.layout()?.paged);
+}
+
+/** The source line at a screen height in the editor. */
+function editorLineAtY(y: number): number {
+  return editor.view.state.doc.lineAt(editor.offsetAtScreenY(y)).number;
+}
+
+/** True while the caret's row is inside the editor's viewport. */
+function caretOnScreen(): boolean {
+  const box = editor.view.coordsAtPos(editor.view.state.selection.main.head);
+  if (!box) return false;
+  const pane = editor.view.scrollDOM.getBoundingClientRect();
+  return box.bottom > pane.top && box.top < pane.bottom;
+}
+
 function syncEditorToHtml(): void {
+  if (htmlDeck()) {
+    // While the caret is on screen its slide stays: typing near the bottom
+    // scrolls the editor, and the line at the top then belongs to the slide
+    // before. Once the reader scrolls it away, the slide at the sync line is
+    // shown. The guest does nothing while that slide is already on screen.
+    if (!settings.syncScroll || settings.viewMode !== "split") return;
+    htmlPreview.scrollToLine(
+      caretOnScreen() ? editor.cursorInfo().line : editorLineAtY(scrollReference("source")),
+    );
+    return;
+  }
   void alignHtmlTextScroll("source").then((handled) => {
     if (!handled) syncEditorToHtmlCoarse();
   });
@@ -11092,7 +11121,14 @@ function syncHtmlToEditorCoarse(layout: HtmlLayout): void {
 
 /** Reveal the caret's block only when it is not already in the guest viewport. */
 function revealHtmlCursor(line: number): void {
-  if (settings.viewMode !== "split" || caretByPointer) return;
+  if (settings.viewMode !== "split") return;
+  // A deck shows the caret's slide, however the caret got there; a click in
+  // the source is the usual way to pick the slide being edited.
+  if (htmlDeck()) {
+    htmlPreview.scrollToLine(line);
+    return;
+  }
+  if (caretByPointer) return;
   const layout = htmlPreview.layout();
   if (!layout || layout.anchors.length < 2) return;
   const index = htmlIndexForLine(layout.anchors, line);
@@ -11935,6 +11971,9 @@ async function levelHtmlGesture(point: GesturePoint, pass = 0): Promise<void> {
     doc.language === "html" &&
     htmlPreview.source() === editor.getDoc();
   if (!gestureSyncAvailable() || doc.language !== "html") return;
+  // A deck cannot be levelled by scrolling; the caret's slide is already
+  // shown by revealHtmlCursor. A click in the deck still levels the source.
+  if (point.pane === "source" && htmlDeck()) return;
   const token = renderToken,
     epoch = scrollOwnership.epoch;
   // Pinned before it is solved, for the same reason as in levelDomGesture: the
@@ -13136,11 +13175,25 @@ function handleHtmlReady(layout: HtmlLayout): void {
   }
   const line = htmlRestoreLine ?? editor.cursorInfo().line;
   htmlRestoreLine = null;
-  if (layout.anchors.length >= 2) {
+  // A deck may still be starting here; the guest holds the line until it is.
+  if (layout.anchors.length >= 2 || layout.paged) {
     suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
     htmlPreview.scrollToLine(line);
   }
   updateActiveOutline();
+}
+
+/**
+ * The reader changed slide in a deck: the source follows to that slide or
+ * fragment, without moving the caret. A change the host asked for is not
+ * followed back.
+ */
+function handleHtmlPage(line: number, own: boolean): void {
+  if (own || doc.language !== "html") return;
+  updateActiveOutline();
+  if (!settings.syncScroll || settings.viewMode !== "split") return;
+  suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+  editor.revealLine(line);
 }
 
 function handleHtmlScroll(layout: HtmlLayout): void {
@@ -14633,6 +14686,7 @@ async function boot(): Promise<void> {
       suppressPreviewScrollUntil = 0;
     },
     onReady: handleHtmlReady,
+    onPage: handleHtmlPage,
     // With no guest of this document on screen the pane is empty, so the
     // failure is said there; over a working guest a toast leaves it readable.
     onError: (message) => {

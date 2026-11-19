@@ -37,7 +37,10 @@ unambiguously, drop that mapping rather than point to an unrelated source word.
 An HTML document's own scripts may split its text after it loads (a math
 renderer, a code highlighter); the guest aligns its current text nodes with the
 text table the host built from the source, so the pieces keep their original
-positions, and text a script replaced stays unmapped.
+positions, and text a script replaced stays unmapped. A reveal.js deck does not
+scroll: the guest steers it through the document's `Reveal` API to the slide of
+a source line, reports a slide the reader opens as a line, and the next frame
+starts on the same slide through the URL fragment reveal.js reads at start.
 Pointer gestures distinguish the pane the reader acted in from the pane that
 follows, so selection and alignment do not feed back into each other.
 
