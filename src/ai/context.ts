@@ -1,8 +1,8 @@
 //! Pure context capture and edit planning for the AI Assistant.
 //!
 //! This module never imports CodeMirror or Tauri: `scripts/ai-unit.mjs` runs it
-//! under Node to prove the paragraph expansion, the continuation spacing, the
-//! block separation, the stale-target guard and the floating-button geometry.
+//! under Node to prove the paragraph expansion, the block separation, the
+//! stale-target guard and the floating-button geometry.
 //! `src/main.ts` supplies the text, the selection offsets and the caret.
 
 import type { AiActionId, AiRequest, AiTurn, DocumentLanguage } from "../api";
@@ -18,7 +18,7 @@ export interface CaptureInput {
 
 export interface Capture {
   language: DocumentLanguage;
-  /** The whole document, kept for the block and continuation rules. */
+  /** The whole document, kept for the block insertion rule. */
   text: string;
   hasSelection: boolean;
   /** The selected passage, trimmed. Empty when nothing is selected. */
@@ -230,37 +230,6 @@ export function resolveAiLanguage(
   return resolvePasteDestination({ saved, language: editorLanguage, buffer }).language;
 }
 
-function isCjk(code: number | undefined): boolean {
-  if (code === undefined) return false;
-  return (
-    (code >= 0x3040 && code <= 0x30ff) ||
-    (code >= 0x3400 && code <= 0x9fff) ||
-    (code >= 0xf900 && code <= 0xfaff) ||
-    (code >= 0xff00 && code <= 0xffef)
-  );
-}
-
-/**
- * The text to insert after `preceding` for Continue.
- *
- * The rule has to handle prose (one space), punctuation (none), an existing
- * newline (none) and CJK, where a space between words would be wrong. Returning
- * only the insertion keeps the caller from rebuilding the document.
- */
-export function joinContinuation(preceding: string, answer: string): string {
-  const right = answer.trim();
-  if (!right) return "";
-  if (!preceding) return right;
-  const last = preceding[preceding.length - 1];
-  if (/\s/.test(last)) return right;
-  if (/^[.,;:!?)\]}>%…—–]/.test(right)) return right;
-  if (/[([{"'“‘/—–]$/.test(last)) return right;
-  if (isCjk(preceding.codePointAt(preceding.length - 1)) || isCjk(right.codePointAt(0))) {
-    return right;
-  }
-  return ` ${right}`;
-}
-
 /**
  * The text to insert at `at` to place `answer` as a new block.
  *
@@ -286,17 +255,6 @@ export function blockInsertion(doc: string, at: number, answer: string): string 
   return `${lead}${body}${tail}`;
 }
 
-/** Where Continue inserts, and what it inserts. */
-export function continuationPlan(capture: Capture, answer: string): ApplyPlan {
-  const at = capture.hasSelection ? capture.selectionTo : capture.caret;
-  return {
-    kind: "insert",
-    from: at,
-    to: at,
-    text: joinContinuation(capture.text.slice(0, at), answer),
-  };
-}
-
 /**
  * What an apply button writes.
  *
@@ -309,7 +267,6 @@ export function applyPlan(capture: Capture, action: AiActionId, answer: string):
   if (!body) return null;
   switch (action) {
     case "continue":
-      return continuationPlan(capture, body);
     case "summarize":
     case "explain":
     case "keyPoints":

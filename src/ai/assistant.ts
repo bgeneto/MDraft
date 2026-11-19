@@ -29,7 +29,6 @@ import {
   buildRequest,
   clampButtonPosition,
   defaultButtonPosition,
-  joinContinuation,
   movedEnough,
   positionFromAnchor,
   targetIsCurrent,
@@ -1244,26 +1243,22 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
   // -------------------------------------------------------------------------
 
   /**
-   * The insertion points of the current capture — the caret (or selection end)
-   * for Insert and the paragraph end for Insert below — mapped through every
-   * edit since. Replace keeps its exact-text check; these keep Insert and Insert
-   * below usable after an edit elsewhere without guessing an offset.
+   * The paragraph end that Insert below targets, mapped through every edit
+   * since capture. A stale answer stays insertable while that paragraph lives;
+   * Replace keeps its exact-text check, so neither has to guess an offset.
    */
-  let anchors: ReturnType<AssistantHost["track"]> | null = null;
+  let paragraphAnchor: ReturnType<AssistantHost["track"]> | null = null;
   function trackAnchors(captured: Capture): void {
-    anchors?.dispose();
-    anchors = host.track([
-      captured.hasSelection ? captured.selectionTo : captured.caret,
-      captured.paragraphTo,
-    ]);
+    paragraphAnchor?.dispose();
+    paragraphAnchor = host.track([captured.paragraphTo]);
   }
-  /** Where an insertion still belongs, or null when its place was deleted. */
-  function anchorAt(index: 0 | 1): number | null {
-    return anchors?.current()[index] ?? null;
+  /** Where Insert below still belongs, or null when its paragraph was deleted. */
+  function anchorAt(): number | null {
+    return paragraphAnchor?.current()[0] ?? null;
   }
   /** Why the stale answer cannot be placed: insertion only while its anchor lives. */
   function staleReason(): string {
-    return anchorAt(1) === null
+    return anchorAt() === null
       ? "The document changed while the answer was arriving, and its paragraph is gone — copy it or open it in a new tab."
       : "The document changed while the answer was arriving — insert it below or into a new tab.";
   }
@@ -1569,13 +1564,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     notesEl.hidden = spec.id !== "improve" || !notes;
     notesText.textContent = notes;
 
-    if (spec.apply === "replace") {
-      resultLabel.textContent = "Answer";
-    } else if (spec.apply === "block") {
-      resultLabel.textContent = "Answer";
-    } else {
-      resultLabel.textContent = "Continuation";
-    }
+    resultLabel.textContent = spec.id === "continue" ? "Continuation" : "Answer";
 
     renderAnswer();
     updateGenerate();
@@ -1794,17 +1783,6 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
       return;
     }
 
-    if (spec.apply === "continue") {
-      footerActions.appendChild(
-        actionButton("Insert", true, () => applyAnswer("insert"), !canApply(), blockedReason),
-      );
-      footerActions.appendChild(newTabButton());
-      footerActions.appendChild(
-        actionButton("Copy", false, () => void copyAnswer(), !answerText.trim()),
-      );
-      return;
-    }
-
     if (spec.apply === "block") {
       footerActions.appendChild(
         actionButton(
@@ -1902,7 +1880,7 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     host.toast(copied ? "Copied to the clipboard." : "The clipboard is unavailable.");
   }
 
-  function applyAnswer(kind: "replace" | "insert" | "below"): void {
+  function applyAnswer(kind: "replace" | "below"): void {
     if (!action || !capture || !answerText.trim()) return;
     if (!host.canWrite()) {
       host.toast("The document is read-only — copy the answer instead.");
@@ -1921,23 +1899,8 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
         to: capture.passageTo,
         text: answerText.trim(),
       };
-    } else if (kind === "insert") {
-      const at = anchorAt(0);
-      if (at === null || at > current.text.length) {
-        setStatus(
-          "The place this answer was meant for was deleted — copy it or open it in a new tab.",
-          true,
-        );
-        return;
-      }
-      plan = {
-        kind: "insert",
-        from: at,
-        to: at,
-        text: joinContinuation(current.text.slice(0, at), answerText),
-      };
     } else {
-      const at = anchorAt(1);
+      const at = anchorAt();
       if (at === null || at > current.text.length) {
         setStatus(
           "The paragraph this answer belongs below was deleted — copy it or open it in a new tab.",
@@ -2118,8 +2081,8 @@ export function createAssistant(pane: HTMLElement, host: AssistantHost): Assista
     // The request was cancelled with its id; the panel must not keep claiming
     // it runs, or the next surface inherits a request it cannot stop.
     if (state === "running") state = "idle";
-    anchors?.dispose();
-    anchors = null;
+    paragraphAnchor?.dispose();
+    paragraphAnchor = null;
     closeHistory();
     paletteOpen = false;
     panelOpen = false;

@@ -25,9 +25,7 @@ import {
   blockInsertion,
   captureContext,
   clampButtonPosition,
-  continuationPlan,
   defaultButtonPosition,
-  joinContinuation,
   movedEnough,
   paragraphRange,
   positionFromAnchor,
@@ -147,7 +145,7 @@ equal(
 equal(
   "understand actions only insert a block",
   ACTIONS.filter((action) => action.apply === "block").map((action) => action.id),
-  ["summarize", "explain", "keyPoints", "critique"],
+  ["continue", "summarize", "explain", "keyPoints", "critique"],
 );
 equal(
   "the three parameterised actions are named",
@@ -509,23 +507,15 @@ equal("the trimmed range ends after the last letter", padded.selectionTo, 7);
 // ---------------------------------------------------------------------------
 
 console.log("\nContinue");
-equal("prose takes one space", joinContinuation("Hello", "world"), " world");
-equal("existing whitespace is kept", joinContinuation("Hello ", "world"), "world");
-equal("a newline already separates", joinContinuation("Hello\n", "world"), "world");
-equal("punctuation takes no space", joinContinuation("Hello", ". And then"), ". And then");
-equal("an opening parenthesis takes no space", joinContinuation("(", "alpha"), "alpha");
-equal("an em dash takes no space", joinContinuation("word—", "next"), "next");
-equal("CJK takes no space", joinContinuation("你好", "世界"), "世界");
-equal("CJK after a full stop still takes no space", joinContinuation("你好。", "世界"), "世界");
-equal("an empty preceding adds nothing", joinContinuation("", "world"), "world");
-equal("an empty answer adds nothing", joinContinuation("Hello", "   "), "");
-
-const continuation = continuationPlan(
+// Continue writes a new passage under the paragraph it was asked from, so it
+// shares the block placement and never joins the selected line.
+const continuation = applyPlan(
   captureContext({ text: "Hello", from: 5, to: 5, caret: 5, language: "markdown" }),
+  "continue",
   "world",
 );
-equal("continue inserts at the caret", continuation.from, 5);
-equal("continue inserts one space", continuation.text, " world");
+equal("continue inserts below the paragraph", continuation?.from, 5);
+equal("continue separates with a blank line", continuation?.text, "\n\nworld\n");
 
 // ---------------------------------------------------------------------------
 // Block insertion

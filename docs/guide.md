@@ -474,9 +474,10 @@ The assistant is off by default. To set it up:
 
 The blue button in the source pane opens a searchable palette. Select text,
 choose an action and press **Generate**. Once an answer arrives, you can copy
-it, replace the selection, insert it or open it in a new tab. Available actions
-include improving, continuing, translating, summarizing, fixing markup syntax and
-converting between Markdown, Typst, HTML, AsciiDoc and LaTeX.
+it, replace the selection, insert it below the current paragraph or open it in a
+new tab. Available actions include improving, continuing, translating,
+summarizing, fixing markup syntax and converting between Markdown, Typst, HTML,
+AsciiDoc and LaTeX.
 The palette's **History** keeps the ten most recent successful answers for the
 current session; it is not saved to disk.
 

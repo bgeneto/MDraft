@@ -1780,20 +1780,24 @@ try {
     ),
   );
   check(
-    "Insert is the primary action",
-    (await footerButtons()).some((b) => b.text === "Insert" && !b.disabled),
+    "Insert below is the primary action",
+    (await footerButtons()).some((b) => b.text === "Insert below" && !b.disabled),
   );
   check(
     "Continue offers New tab",
     (await footerButtons()).some((b) => b.text === "New tab" && !b.disabled),
   );
-  check("Insert places the continuation", await clickFooter("Insert"));
+  check("Insert below places the continuation", await clickFooter("Insert below"));
   const continued = await editorText();
   check("the continuation is in the buffer", continued.includes("and the mock continues."));
   check(
-    "the join rule added a space",
-    /the app\. and the mock continues\./.test(continued),
-    continued.match(/the app\.[^\n]{0,40}/)?.[0] ?? "",
+    "a blank line separates the continuation from the selected paragraph",
+    /open inside the app\.\n\nand the mock continues\./.test(continued),
+    continued.match(/open inside the app\.[\s\S]{0,40}/)?.[0] ?? "",
+  );
+  check(
+    "the continuation did not join the selected line",
+    !/open inside the app\. and the mock continues\./.test(continued),
   );
   await undo();
 

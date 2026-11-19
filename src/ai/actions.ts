@@ -26,15 +26,14 @@ export type AiParameter = "none" | "tone" | "language" | "markup";
  * - `replace`: the captured range can be replaced, with Insert below as the
  *   alternative (every rewrite).
  * - `block`: the answer is a new block after the current paragraph (summary,
- *   explanation, key points, critique).
- * - `continue`: the answer is inserted at the selection end or the caret.
+ *   explanation, key points, critique, and Continue).
  * - `answer`: Copy is primary; Insert below is available (Ask).
  *
  * Every kind can also open the answer in its own tab. That destination never
  * edits the captured document, so it is the one offer that survives a stale
  * target or a read-only buffer.
  */
-export type AiApply = "replace" | "block" | "continue" | "answer";
+export type AiApply = "replace" | "block" | "answer";
 
 export interface AiActionSpec {
   id: AiActionId;
@@ -89,7 +88,7 @@ export const ACTIONS: AiActionSpec[] = [
     keywords: ["continue", "next", "complete", "carry on", "escrever"],
     icon: '<path d="M4 20l6.5-6.5"/><path d="M13.5 4.5l6 6L9 21H3v-6z"/><path d="M14.5 3.5l6 6"/>',
     parameter: "none",
-    apply: "continue",
+    apply: "block",
   },
   {
     id: "improve",

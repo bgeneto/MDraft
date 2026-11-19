@@ -537,8 +537,7 @@ try {
       check(`${label} inserts below`, await clickFooter("Insert below"));
       await undo();
     } else {
-      const buttonLabel =
-        apply === "insert" ? "Insert" : apply === "below" ? "Insert below" : "Replace selection";
+      const buttonLabel = apply === "below" ? "Insert below" : "Replace selection";
       check(`${label} offers ${buttonLabel}`, await clickFooter(buttonLabel));
       await undo();
     }
@@ -555,7 +554,7 @@ try {
     id: "continue",
     label: "Continue writing",
     tag: "mdraft-continuation",
-    apply: "insert",
+    apply: "below",
   });
   await runAction({ id: "expand", label: "Expand", tag: "mdraft-expanded", apply: "replace" });
   await runAction({ id: "shorten", label: "Shorten", tag: "mdraft-shortened", apply: "replace" });

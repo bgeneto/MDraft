@@ -618,9 +618,9 @@ const SUITES = [
     script: "link-target-unit.mjs",
   },
   {
-    // The AI catalog, paragraph expansion, continuation spacing, block
-    // insertion, stale-target guard, button geometry and word diff. Pure
-    // TypeScript modules, no application and no network.
+    // The AI catalog, paragraph expansion, block insertion, stale-target
+    // guard, button geometry and word diff. Pure TypeScript modules, no
+    // application and no network.
     id: "ai-unit",
     title: "AI Assistant (unit)",
     kind: "node",
