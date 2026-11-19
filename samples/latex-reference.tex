@@ -1,8 +1,6 @@
-%! MDraft's built-in LaTeX reference.
-%!
-%! Opened by Help › LaTeX Reference. Every example outside a verbatim block is compiled by the same LuaLaTeX the preview uses, so what this file says about the syntax is what the application actually renders. A built-in document has no folder of its own, so `\includegraphics` and `\input` are shown as source rather than called with a path that could not resolve.
-%!
-%! Prose paragraphs are one source line each, so the editor's soft wrap lays them out at any pane width; a paragraph hard-wrapped at a fixed column leaves a one- or two-word row behind every source line once the pane is narrower than that column.
+% Built-in sample for Help > LaTeX Reference.
+% File and bibliography examples are shown as code so this sample compiles on its own.
+% Keep each prose paragraph on one line so it wraps to the editor pane's width.
 
 \documentclass[11pt]{article}
 \usepackage{amsmath}
@@ -20,58 +18,61 @@
 
 \section{Introduction}
 
-This document is a live sample. LaTeX is a typesetting system: the text below is markup, the lines beginning with a backslash are commands, and LuaLaTeX evaluates both before it lays out a page. Edit any line and the preview recompiles.
+Try the examples by editing the source. With \textsf{Auto-compile} on, the PDF preview updates as you edit. You can also select \textsf{Compile} in the preview toolbar.
 
-The preview draws the PDF the compiler produced, with the real page size, margins and layout. Select text in it to copy it, and click it to jump to the source line that produced it.
+In Split view, clicking a passage in the PDF can take you to the corresponding line in the source. You can also select and copy text from the PDF.
 
 \tableofcontents
 
 \section{Headings and text}
 
-A heading is a command: \verb|\section{...}| is level one, \verb|\subsection{...}| is level two, and \verb|\subsubsection{...}| is level three. The starred form (\verb|\section*{...}|) is unnumbered. The Outline panel reads these commands, so the sidebar and the document cannot disagree.
+Start a section with \verb|\section{Title}|. Within it, use \verb|\subsection| and \verb|\subsubsection|. For an unnumbered section, use \verb|\section*{Title}|. In MDraft, the Outline panel takes you to each heading in the source.
 
-Paragraphs are separated by a blank line.
-A single newline, like the one before this sentence, continues the same paragraph.
-Two backslashes force a line break,\\
-like this. A blank line starts a new paragraph.
+A blank line starts a new paragraph.
+A single newline in the source usually acts like a space.
+Use \verb|\\| to force a line break within a paragraph,\\
+as shown here.
 
-\textbf{Strong}, \emph{emphasis}, \texttt{inline code}, \underline{underline}, \sout{strikethrough}, H\textsubscript{2}O and E = mc\textsuperscript{2} are all part of the markup. A backslash escapes a literal character: \# \$ \% \& \_ are text, not syntax.
+Use \verb|\textbf| for \textbf{bold}, \verb|\emph| for \emph{emphasis}, and \verb|\texttt| for \texttt{monospaced text}. The \verb|\underline| command \underline{underlines text}, and \verb|\sout| from the \verb|ulem| package \sout{strikes it out}.
+
+Use \verb|\textsubscript| for H\textsubscript{2}O and \verb|\textsuperscript| for 1\textsuperscript{st}. To print a percent sign, type \verb|\%|. Use the same pattern for \#, \$, \&, and \_.
 
 \section{Mathematics}
 
-Inline mathematics sits between dollar signs: $e^{i\pi} + 1 = 0$. Display mathematics uses \verb|\[ ... \]|:
+Put math between dollar signs to keep it in the sentence, as in $e^{i\pi} + 1 = 0$. Use \verb|\[ ... \]| to display a formula on its own line.
 
 \[
   \int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}
 \]
 
-A numbered equation uses the \verb|equation| environment, and a multi-line alignment uses \verb|align|:
+Use \verb|equation| for a single numbered equation. To align several lines, use \verb|align| from the \verb|amsmath| package and place \verb|&| at the alignment point on each line.
 
 \begin{align}
   (a + b)^2 &= a^2 + 2ab + b^2 \\
   (a - b)^2 &= a^2 - 2ab + b^2
 \end{align}
 
-Fractions, radicals, sums and integrals are all ordinary commands: $\frac{a}{b}$, $\sqrt{x}$, $\sum_{n=1}^{\infty} \frac{1}{n^2}$, $\lim_{x \to 0} \frac{\sin x}{x}$. The application's own math settings do not apply here: LaTeX typesets its own mathematics.
+Other examples include fractions $\frac{a}{b}$, roots $\sqrt{x}$, sums $\sum_{n=1}^{\infty} \frac{1}{n^2}$, and limits $\lim_{x \to 0} \frac{\sin x}{x}$.
 
 \section{Lists and tables}
 
-An unordered list is the \verb|itemize| environment; an ordered list is \verb|enumerate|. Each entry begins with \verb|\item|.
+Use \verb|itemize| for a bulleted list and \verb|enumerate| for a numbered list. Start each entry with \verb|\item|. To add a sublist, put another list inside an item.
 
 \begin{itemize}
-  \item A first point.
-  \item A second point, with \emph{emphasis}.
+  \item Figures
+  \item Supplementary material
   \begin{itemize}
-    \item A nested point.
+    \item Data and analysis scripts
   \end{itemize}
 \end{itemize}
 
 \begin{enumerate}
-  \item A numbered step.
-  \item Another step.
+  \item Draft the introduction.
+  \item Add the figures.
+  \item Check the references.
 \end{enumerate}
 
-A table is a \verb|tabular| with a column specification: \verb|l| and \verb|c| are left- and centre-aligned columns, and \verb|\hline| draws a rule.
+The \verb|tabular| environment lays out rows and columns. Give each column an alignment using \verb|l|, \verb|c|, or \verb|r| for left, center, or right. Separate cells with \verb|&| and end each row with \verb|\\|. Here, \verb|\hline| draws horizontal rules and the surrounding \verb|table| environment lets LaTeX position the table with its caption.
 
 \begin{table}[htbp]
   \centering
@@ -79,23 +80,23 @@ A table is a \verb|tabular| with a column specification: \verb|l| and \verb|c| a
     \hline
     Command & Purpose \\
     \hline
-    \verb|\textbf| & Strong text \\
+    \verb|\textbf| & Bold text \\
     \verb|\emph| & Emphasis \\
-    \verb|\texttt| & Inline code \\
+    \verb|\texttt| & Monospaced text \\
     \hline
   \end{tabular}
-  \caption{A small table.}
+  \caption{Common text-formatting commands}
 \end{table}
 
-\section{Quotes and verbatim}
+\section{Quotations and code}
 
-The \verb|quote| environment indents a passage:
+Use the \verb|quote| environment to set off a short passage from the surrounding text.
 
 \begin{quote}
-  A quotation is set apart from the surrounding text, without quotation marks of its own.
+  Please send the revised manuscript by Friday so we can check the figures before publication.
 \end{quote}
 
-Verbatim text keeps every character exactly as written, which is how code is shown. The \verb|verbatim| environment is a block; \verb|\verb| is inline.
+Use \verb|verbatim| for a block of code and \verb|\verb| for a short inline example. Both print LaTeX special characters literally.
 
 \begin{verbatim}
 for i in range(3):
@@ -104,32 +105,38 @@ for i in range(3):
 
 \section{Links, references and citations}\label{sec:links}
 
-An external link is \verb|\href{url}{text}|: \href{https://www.latex-project.org/}{the LaTeX project}. A bare URL is \verb|\url{...}|: \url{https://www.latex-project.org/}.
+With the \verb|hyperref| package, use \verb|\href{url}{text}| for a link with its own text, such as \href{https://www.latex-project.org/}{the LaTeX Project}. Use \verb|\url{...}| to print the address itself, as in \url{https://www.latex-project.org/}.
 
-A label marks a place and a reference points at it. This section is labelled \verb|sec:links|, and \verb|\ref{sec:links}| prints its number: see Section~\ref{sec:links}. The \verb|\pageref| command prints the page instead.
+Place \verb|\label{sec:links}| after a section heading to give it a label. Then \verb|Section~\ref{sec:links}| prints Section~\ref{sec:links}. Use \verb|\pageref{sec:links}| for the page number.
 
-A citation reads a bibliography. The engine runs real BibTeX, so a \verb|\cite{...}| key must exist in the \verb|.bib| file named by \verb|\bibliography{...}|. Biber and the full \verb|biblatex| feature set are not available; \verb|biblatex-lite| covers the common cases.
+For a BibTeX bibliography, store your entries in a \verb|.bib| file. Choose a style with \verb|\bibliographystyle{plain}| and add the bibliography with \verb|\bibliography{references}| for a file named \verb|references.bib|. To cite an entry, use its key in \verb|\cite{...}|. For a project that uses Biber, choose an installed TeX distribution with Biber in MDraft's LaTeX preferences.
 
 \section{Including other files}
 
-A large document is split with \verb|\input{chapters/intro}| or \verb|\include{chapters/intro}|.\footnote{The \texttt{.tex} extension is optional.} Paths are relative to the main file's folder, which is also the project root: a reference that escapes it is an error rather than a silent omission.
+Use \verb|\input{intro}| to insert another file, or \verb|\include{intro}| to start it on a new page.\footnote{Both commands look for \texttt{intro.tex} in this example.} In MDraft, write paths relative to the folder containing the main \verb|.tex| file and keep project files in that folder or its subfolders.
 
-An image is \verb|\includegraphics{figures/plot}|, optionally with a size: \verb|\includegraphics[width=0.5\linewidth]{figures/plot}|. The application inserts this command when you paste or drop an image into a \verb|.tex| document.
+Load \verb|graphicx| in the preamble to insert images. This example sets an image to half the line width.
 
-\section{Exporting}
+\begin{verbatim}
+\includegraphics[width=0.5\linewidth]{figures/plot}
+\end{verbatim}
 
-\verb|File > Export > PDF| writes the PDF this preview is showing, byte for byte. It never starts a compile of its own: if the preview is stale, the row is disabled and says so. The preview's own \verb|Save PDF| button writes the same bytes. Native printing is disabled for LaTeX because the PDF already exists.
+MDraft inserts \verb|\includegraphics| when you paste or drop an image into a \verb|.tex| document.
+
+\section{Exporting and printing}
+
+Choose \textsf{File \(\to\) Export \(\to\) PDF} or select \textsf{Save PDF} in the preview toolbar. \textsf{File \(\to\) Print} opens the compiled PDF in your PDF viewer. If the preview is out of date, compile again before exporting or printing.
 
 \section{Completion}
 
-Typing a backslash opens a list of commands; \verb|\begin{| offers environments, \verb|\usepackage{| offers packages, and \verb|\ref{|, \verb|\cite{| and \verb|\includegraphics{| offer the labels, citation keys and image paths this document already uses. \verb|Tab| accepts the highlighted row and still indents when no list is open; \verb|Ctrl+Space| opens the list explicitly and \verb|Escape| closes it.
+Type a backslash to see suggested commands. Start with \verb|\begin{| for environments or \verb|\usepackage{| for packages. For project-specific suggestions, type \verb|\ref{| for labels, \verb|\cite{| for citation keys, or \verb|\includegraphics{| for image paths.
 
-The list never appears in ordinary prose, and nothing it offers leaves this device.
+Press \textsf{Ctrl+Space} to open suggestions, \textsf{Tab} to accept the highlighted item, or \textsf{Esc} to close the list.
 
-\section{When something fails}
+\section{Troubleshooting}
 
-A compile error appears above the preview with the compiler's own message and the line it refers to. The previous successful PDF stays on screen, so a half-finished edit does not blank the page. Fixing the error and waiting a moment recompiles automatically.
+Open \textsf{Logs} in the preview toolbar to read compiler errors and warnings. Click a message with a source location to jump to that line. After fixing an error, select \textsf{Compile} or let Auto-compile rebuild the preview.
 
-The engine is opt-in. If the preview offers \verb|Enable bundled TeX|, the engine files have not been downloaded yet; about 12 MiB of verified files are fetched once, and the TeX packages a document needs are fetched on demand and cached locally. Nothing about your document leaves this device.
+To set up the preview, select \textsf{Enable bundled TeX} or choose an installed TeX distribution in \textsf{Preferences \(\to\) LaTeX}. MDraft downloads and caches packages as needed when you use bundled TeX. Your document is compiled locally.
 
 \end{document}

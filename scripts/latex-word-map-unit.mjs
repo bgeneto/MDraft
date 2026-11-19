@@ -5,12 +5,12 @@ import { latexSourceContent, latexSourceWords } from "../src/latex-word-map.ts";
 
 const reference = readFileSync("samples/latex-reference.tex", "utf8");
 const referenceWords = latexSourceWords(reference);
-const draws = referenceWords.find((word) => word.from === reference.indexOf("draws"));
-assert.equal(reference.slice(draws.from, draws.to), "draws");
-const heading = referenceWords.find(
-  (word) => word.from === reference.indexOf("heading is a command"),
+const updates = referenceWords.find((word) => word.from === reference.indexOf("updates"));
+assert.equal(reference.slice(updates.from, updates.to), "updates");
+const blank = referenceWords.find(
+  (word) => word.from === reference.indexOf("blank line starts a new paragraph"),
 );
-assert.equal(reference.slice(heading.from, heading.to), "heading");
+assert.equal(reference.slice(blank.from, blank.to), "blank");
 
 const source = String.raw`\documentclass{article}
 \newcommand{\badge}{Copper rivers follow amber bridges}
@@ -47,8 +47,8 @@ console.log("LaTeX prose candidate checks passed");
 import { buildPdfWordAnchors } from "../src/pdf-page-build.ts";
 import { PdfPageMap } from "../src/pdf-page-map.ts";
 const lines = [
-  { text: "The preview draws the PDF the compiler produced, with the real page", region: "1:0" },
-  { text: "A heading is a command", region: "1:0" },
+  { text: "the PDF preview updates as you edit", region: "1:0" },
+  { text: "A blank line starts a new paragraph", region: "1:0" },
 ];
 const anchors = await buildPdfWordAnchors(
   "latex",
@@ -56,19 +56,18 @@ const anchors = await buildPdfWordAnchors(
   lines,
 );
 const map = new PdfPageMap(lines, anchors, true);
-const drawsOffset = lines[0].text.indexOf("draws");
-const sourceDraws = reference.indexOf("draws");
-assert.deepEqual(map.sourceRange(0, drawsOffset, 0, drawsOffset + 5), {
+const updatesOffset = lines[0].text.indexOf("updates");
+assert.deepEqual(map.sourceRange(0, updatesOffset, 0, updatesOffset + "updates".length), {
   file: "main.tex",
-  from: sourceDraws,
-  to: sourceDraws + 5,
+  from: updates.from,
+  to: updates.to,
 });
-assert.equal(map.partsForSource("main.tex", sourceDraws, sourceDraws + 5).length, 1);
-const headingOffset = reference.indexOf("A heading is a command");
+assert.equal(map.partsForSource("main.tex", updates.from, updates.to).length, 1);
+const paragraphOffset = reference.indexOf(lines[1].text);
 assert.deepEqual(map.sourceRange(1, 0, 1, lines[1].text.length), {
   file: "main.tex",
-  from: headingOffset,
-  to: headingOffset + lines[1].text.length,
+  from: paragraphOffset,
+  to: paragraphOffset + lines[1].text.length,
 });
 const fake = [{ text: "Copper rivers follow amber bridges", region: "1:0" }];
 const falseMap = new PdfPageMap(

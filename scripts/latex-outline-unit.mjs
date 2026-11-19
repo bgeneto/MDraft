@@ -41,12 +41,12 @@ console.log("=== the shipped LaTeX Reference ===");
     "Headings and text",
     "Mathematics",
     "Lists and tables",
-    "Quotes and verbatim",
+    "Quotations and code",
     "Links, references and citations",
     "Including other files",
-    "Exporting",
+    "Exporting and printing",
     "Completion",
-    "When something fails",
+    "Troubleshooting",
   ];
   check(
     JSON.stringify(names) === JSON.stringify(expected),
@@ -66,14 +66,19 @@ console.log("=== the shipped LaTeX Reference ===");
   );
 
   // The line numbers are what the panel jumps to, and masking must not move them.
+  const lines = source.split(/\r?\n/);
   const introduction = headings.find((heading) => heading.text === "Introduction");
   check(
-    introduction?.line === 21,
+    introduction?.line === lines.indexOf("\\section{Introduction}") + 1,
     "a heading keeps its real source line",
     String(introduction?.line),
   );
   const last = headings[headings.length - 1];
-  check(last.line === 129, "the last heading keeps its real source line", String(last.line));
+  check(
+    last.line === lines.indexOf("\\section{Troubleshooting}") + 1,
+    "the last heading keeps its real source line",
+    String(last.line),
+  );
   check(
     headings.every((heading, index) => index === 0 || heading.line > headings[index - 1].line),
     "the headings are in source order",
