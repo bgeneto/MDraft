@@ -4327,7 +4327,10 @@ async function renderLatexPreview(
     const pdfStarted = perfMark("pdf-start");
     // The reading position of the view being replaced: its pages get their
     // text first, so selection and the first paint do not wait for the rest.
-    await view.render(result.pdf.slice(), { focusPage: typstPdf?.topPosition()?.page });
+    // A cover drawn on a return has no such view; it opens at the frame's page.
+    await view.render(result.pdf.slice(), {
+      focusPage: typstPdf?.topPosition()?.page ?? (coverHit ? texpressoLanding?.page : undefined),
+    });
     perfMeasure("pdf", pdfStarted, { pdfBytes: result.pdf.length });
     if (stagedPdf?.view !== view || !latexDisplayable(value)) {
       // Discarded (tab switch, view mode, a newer staged build) or overtaken.
@@ -4342,7 +4345,11 @@ async function renderLatexPreview(
     latexPreview = value;
     latexProject = latexProjectOf(value);
     latexShownToken = token;
+    // A view being replaced hands its own position on (commitPdfHost); only a
+    // cover drawn into an empty pane takes the frame's remembered page.
+    const coverOpens = coverHit && !typstPdf;
     commitPdfHost(host, view, token);
+    if (coverOpens) texpressoCoverLanding(view);
     // Only a current result follows the editor: an out-of-date one describes
     // older text, its map is not built yet, and scrolling it from the caret
     // moved a reader who was following the end of the document away from it
@@ -4698,6 +4705,30 @@ let texpressoHasPages = false;
 let texpressoCovered = false;
 /** The frame's own scroll offset, as it last reported it. */
 let texpressoScrollTop = 0;
+/**
+ * The page each LaTeX tab was read at when it was left with the frame on
+ * screen. The frame scrolls inside itself, so the pane offset `snapshotDoc`
+ * keeps for every tab says nothing about it; and only one frame lives at a
+ * time, so a return from another project mounts a new one at page 1.
+ */
+const texpressoTabPages = new Map<string, number>();
+/**
+ * The page a newly mounted frame is to open at once it has typeset that far:
+ * the remembered page, or the page of the stored PDF it takes over from.
+ * Without it a return to another project's tab drew the stored PDF where the
+ * reader had left it and then, seconds later, the frame replaced it at page 1.
+ */
+let texpressoLanding: { session: TexpressoSession; page: number } | null = null;
+/** The frame's report of a landing is not a reader's scroll: the editor stays put. */
+let texpressoLandingEchoUntil = 0;
+/** A covered frame still short of the reader's page takes over at the latest then. */
+let texpressoHandOverTimer = 0;
+/**
+ * How long a covered frame may stay short of the stored PDF's page after its
+ * last progress. A long document keeps typesetting past its first paint, so
+ * the page may still come; an edit may also have removed it.
+ */
+const TEXPRESSO_HANDOVER_WAIT_MS = 3000;
 /** The key of the exported result, which never commits to the pane. */
 let latexShadowKey: string | null = null;
 /** The last status the preview wrote, so a live update can redraw it. */
@@ -4911,12 +4942,43 @@ function texpressoArmWait(storeOnly: boolean): void {
   if (!storeOnly) revivePending(latexWaitPhase(""));
 }
 
+/** The page the reader is on in the stored PDF that covers the frame. */
+function texpressoCoverPage(): number {
+  const view = typstPdf;
+  const page = view && !view.isDisposed ? view.visiblePage() : 0;
+  if (page > 0) return page;
+  return texpressoLanding?.session === texpresso ? texpressoLanding.page : 1;
+}
+
 /**
- * The covered frame has finished typesetting: it replaces the stored PDF. The
- * PDF view goes, so a hidden copy does not keep its canvases and map worker.
+ * The covered frame painted or grew. It takes over once it has the page the
+ * reader is on in the stored PDF: its first paint comes at the first pause in
+ * typesetting, often before that page exists, and taking over then showed the
+ * frame's page 1 in place of the reader's page.
+ */
+function texpressoMaybeHandOver(pages: number): void {
+  if (!texpressoCovered || pages <= 0) return;
+  window.clearTimeout(texpressoHandOverTimer);
+  if (pages >= texpressoCoverPage()) {
+    texpressoHandOver();
+    return;
+  }
+  const session = texpresso;
+  texpressoHandOverTimer = window.setTimeout(() => {
+    if (session === texpresso) texpressoHandOver();
+  }, TEXPRESSO_HANDOVER_WAIT_MS);
+}
+
+/**
+ * The covered frame has finished typesetting: it replaces the stored PDF, at
+ * the page the reader was on there. The PDF view goes, so a hidden copy does
+ * not keep its canvases and map worker.
  */
 function texpressoHandOver(): void {
   if (!texpressoCovered) return;
+  window.clearTimeout(texpressoHandOverTimer);
+  const session = texpresso;
+  const page = texpressoCoverPage();
   texpressoCovered = false;
   discardStagedPdf();
   disposeTypstPdf();
@@ -4924,8 +4986,60 @@ function texpressoHandOver(): void {
   preview.replaceChildren();
   texpressoFollowTab();
   if (texpressoShowing()) clearPending();
+  // After the wait ran out the page may never come (an edit removed it): the
+  // frame's last page is the nearest one.
+  texpressoLanding = session ? { session, page } : null;
+  texpressoTryLanding(true);
   syncPreviewFromSource();
-  perfMark("texpresso-handover");
+  perfMark("texpresso-handover", { page });
+}
+
+/**
+ * Bring the frame to its landing page once it is on screen and has typeset
+ * that far. `settle` takes its last page when it has fewer.
+ */
+function texpressoTryLanding(settle = false): void {
+  const landing = texpressoLanding;
+  if (!landing) return;
+  if (landing.session !== texpresso) {
+    texpressoLanding = null;
+    return;
+  }
+  if (!texpressoShowing() || texpressoPageCount <= 0) return;
+  if (texpressoPageCount < landing.page && !settle) return;
+  texpressoLanding = null;
+  // A new frame opens at its top: page 1 needs no jump.
+  const page = Math.min(landing.page, texpressoPageCount);
+  if (page <= 1) return;
+  texpressoLandingEchoUntil = performance.now() + 1000;
+  landing.session.post({ type: "page", page });
+  texpressoPage = page;
+  updatePageChrome();
+}
+
+/** The stored PDF drawn over a new frame opens at the page that frame is to land on. */
+function texpressoCoverLanding(view: TypstPdfPreview): void {
+  const landing = texpressoLanding;
+  if (!texpressoCovered || !landing || landing.session !== texpresso) return;
+  suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
+  view.goToPage(landing.page);
+  updatePageChrome();
+}
+
+/**
+ * Keep the page the frame shows for the tab being left, which its
+ * `previewScroll` cannot hold. Called for LaTeX tabs only.
+ */
+function rememberTexpressoPage(): void {
+  for (const id of texpressoTabPages.keys()) if (!sessions.byId(id)) texpressoTabPages.delete(id);
+  // A stored PDF on screen keeps its place in the pane offset as any PDF does.
+  if (!texpressoShowing()) {
+    texpressoTabPages.delete(doc.id);
+    return;
+  }
+  // A landing still on its way is where the reader is about to be.
+  const landing = texpressoLanding?.session === texpresso ? texpressoLanding.page : null;
+  texpressoTabPages.set(doc.id, landing ?? texpressoPage);
 }
 
 /** Show the frame again for a tab of its project, or hide it for any other. */
@@ -4940,6 +5054,8 @@ function texpressoFollowTab(): void {
 
 function texpressoRelease(): void {
   if (!texpresso) return;
+  window.clearTimeout(texpressoHandOverTimer);
+  texpressoLanding = null;
   void texpresso.dispose();
   texpresso = null;
   texpressoSetPages(false);
@@ -5079,7 +5195,13 @@ function texpressoPrepare(
     // Until the snapshot says whether the store holds this project's PDF, the
     // new frame warms up covered; a miss uncovers it before anything shows.
     texpressoCovered = coverable;
+    // A return to a tab read further down: the stored PDF opens there, and so
+    // does the frame once it has typeset that far.
+    const page = texpressoTabPages.get(doc.id) ?? 1;
+    texpressoLanding = page > 1 ? { session: texpresso, page } : null;
   }
+  // A frame that stayed kept its own place.
+  if (!storeOnly) texpressoTabPages.delete(doc.id);
   texpresso!.open(projectRelativePath(build.root.directory, doc.path, pathKey));
   texpressoShow(settings.viewMode !== "source");
   texpressoChip();
@@ -5600,24 +5722,34 @@ function texpressoMessage(session: TexpressoSession, message: FrameMessage): voi
       }
       // A finished page, not the first one: a half-typeset document must not
       // replace the complete stored PDF.
-      if (message.done && message.pages > 0 && texpressoCovered) texpressoHandOver();
-      else if (message.done) syncPreviewFromSource();
+      if (message.done && message.pages > 0 && texpressoCovered)
+        texpressoMaybeHandOver(message.pages);
+      else if (message.done) {
+        syncPreviewFromSource();
+        texpressoTryLanding();
+      }
       break;
     }
     case "pages":
-      // Only the total: the paint, its sequence and the hand-over stay with
-      // the `painted` report.
+      // Only the total and what waits for it: the paint and its sequence stay
+      // with the `painted` report.
       if (!texpressoHasPages) break;
       preview.dataset.texpressoPages = String(message.pages);
       texpressoPageCount = message.pages;
       texpressoPage = message.pages > 0 ? Math.min(message.pages, Math.max(1, texpressoPage)) : 1;
       updatePageChrome();
+      if (texpressoCovered) texpressoMaybeHandOver(message.pages);
+      else texpressoTryLanding();
       break;
     case "viewport":
       texpressoScrollTop = message.scrollTop;
       if (message.page !== null) texpressoPage = message.page;
       updatePageChrome();
-      if (message.gesture) texpressoAlignSource(message.line, message.file);
+      // A landing is a host jump, which the frame reports as a gesture; the
+      // editor keeps the place the tab switch restored.
+      if (message.gesture && performance.now() < texpressoLandingEchoUntil)
+        texpressoLandingEchoUntil = 0;
+      else if (message.gesture) texpressoAlignSource(message.line, message.file);
       break;
     case "scrolled":
       if (message.scrollTop !== null) {
@@ -5630,6 +5762,10 @@ function texpressoMessage(session: TexpressoSession, message: FrameMessage): voi
       pageJumpHold = null;
       suppressPreviewScrollUntil = 0;
       suppressEditorScrollUntil = 0;
+      // The reader has taken the frame: a landing still waiting for its page
+      // would pull them away, and their next scroll is their own.
+      texpressoLanding = null;
+      texpressoLandingEchoUntil = 0;
       break;
     case "source":
       void texpressoSourceGesture(
@@ -7448,7 +7584,8 @@ function textOf(session: Session): string {
  *
  * EditorState holds the text, the caret and the undo history. Scroll is not in
  * that state, so it is stored beside it. The preview is rebuilt on the way back
- * and only its scroll offset is worth keeping.
+ * and only its scroll offset is worth keeping. The live LaTeX frame scrolls
+ * inside itself; its page is kept apart (`texpressoTabPages`).
  */
 function snapshotDoc(): void {
   if (!editor) return;
@@ -7456,6 +7593,7 @@ function snapshotDoc(): void {
   doc.draft = null;
   doc.editorScroll = editor.view.scrollDOM.scrollTop;
   doc.previewScroll = doc.language === "html" ? htmlScrollTop : previewPane.scrollTop;
+  if (doc.language === "latex") rememberTexpressoPage();
 }
 
 /**

@@ -17,7 +17,8 @@
 //   6. scroll correspondence works in both directions;
 //   7. zoom, both themes and manual mode reach the frame;
 //   8. the frame registers no service worker and requests nothing off-origin;
-//   9. another tab hides the frame instead of restarting the engine;
+//   9. another tab hides the frame instead of restarting the engine, and a
+//      return to another project keeps the page the reader left it at;
 //  10. a click on a link follows it, never the source map: a destination scrolls
 //      the preview, a web address goes to the (stubbed) system opener;
 
@@ -908,9 +909,48 @@ try {
     const d = document.querySelector("#preview")?.dataset;
     return Boolean(d?.latexShadow) && d.latexShadow === d.latexCurrent;
   })()`;
+  // The book's own tab, read further down: the return must come back to that
+  // page, in the stored PDF and in the frame that replaces it, instead of
+  // page 1 once the new frame has typeset.
+  await openFile("samples/latex-perf/book/main.tex");
   check(
     await waitFor(exportCurrent, 180_000, "the book's export for the current text"),
     "the book's export matches its current text before the switch",
+  );
+  const pageField = `document.querySelector(".compiled-pages .compiled-page-field")`;
+  const readingPage = 6;
+  await evaluate(`(() => {
+    const field = ${pageField};
+    field.focus();
+    field.value = "${readingPage}";
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    field.blur();
+  })()`);
+  /** The 1-based page at the top of the current frame, read in the frame itself. */
+  const framePageAtTop = () =>
+    frameEval(`(() => {
+      const box = document.getElementById("pages");
+      const pages = [...document.querySelectorAll("#pages .page")];
+      if (!box || !pages.length) return 0;
+      const y = box.getBoundingClientRect().top + 4;
+      let at = 1;
+      pages.forEach((node, index) => { if (node.getBoundingClientRect().top <= y) at = index + 1; });
+      return at;
+    })()`);
+  const pageWait = async (label) => {
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      if ((await framePageAtTop().catch(() => 0)) === readingPage) return true;
+      await sleep(250);
+    }
+    console.log(`  (timed out waiting for ${label})`);
+    return false;
+  };
+  check(
+    await pageWait("the page jump in the book's frame"),
+    `the book's frame is read at page ${readingPage} before the switch`,
+    String(await framePageAtTop().catch(() => "no frame")),
   );
   const otherSession = Number((await dataset("texpressoSession")) ?? "0");
   // A main document in a folder of its own: one directly in samples/ would
@@ -946,10 +986,26 @@ try {
     Number((await dataset("texpressoSession")) ?? "0") > returnSession,
     "the return mounted a new frame for the book",
   );
+  const coverCovered = await appClass("texpresso-covered");
   check(
-    (await appClass("texpresso-covered")) || (await appClass("texpresso-painted")),
+    coverCovered || (await appClass("texpresso-painted")),
     "the new frame warms up covered (or has already taken over)",
   );
+  if (coverCovered) {
+    check(
+      await waitFor(
+        `${pageField}?.value === "${readingPage}" && document.getElementById("preview-pane").scrollTop > 0`,
+        5_000,
+        "the stored PDF at the reader's page",
+      ),
+      `the stored PDF opens at page ${readingPage}, where the tab was left`,
+      await evaluate(
+        `JSON.stringify({ field: ${pageField}?.value, top: document.getElementById("preview-pane").scrollTop })`,
+      ),
+    );
+  }
+  await sleep(1000);
+  const editorBeforeHandover = await editor(`return Math.round(view.scrollDOM.scrollTop);`);
   check(
     await waitFor(
       `document.querySelector(".app")?.classList.contains("latex-texpresso") && !document.querySelector(".app")?.classList.contains("texpresso-covered") && document.querySelector(".app")?.classList.contains("texpresso-painted")`,
@@ -962,11 +1018,47 @@ try {
     (await evaluate(`document.querySelectorAll("#preview .typst-page").length`)) === 0,
     "the handover drops the stored PDF's view",
   );
+  // The released frame's target can outlive it for a moment; the new frame is
+  // the only one once it has gone.
+  const frameDeadline = Date.now() + 15_000;
+  let frameTargets = [];
+  while (Date.now() < frameDeadline) {
+    frameTargets = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).filter(
+      (entry) => entry.type === "iframe" && /mdraft-tex\.localhost\/texpresso\//.test(entry.url),
+    );
+    if (frameTargets.length === 1) break;
+    await sleep(250);
+  }
+  if (frameTargets.length === 1)
+    frame = await openPage(port, { type: "iframe", match: /mdraft-tex\.localhost\/texpresso\// });
+  check(
+    frameTargets.length === 1 && (await pageWait("the new frame's landing")),
+    `the frame takes over at page ${readingPage}, not page 1`,
+    JSON.stringify({
+      targets: frameTargets.length,
+      frame: await framePageAtTop().catch(() => "no frame"),
+      field: await evaluate(`${pageField}?.value ?? null`),
+    }),
+  );
+  const editorAfterHandover = await editor(`return Math.round(view.scrollDOM.scrollTop);`);
+  check(
+    Math.abs(editorAfterHandover - editorBeforeHandover) <= 2,
+    "the landing leaves the editor where the tab switch restored it",
+    `${editorBeforeHandover} -> ${editorAfterHandover}`,
+  );
   const returnWaits = shownWaits((await waitLog()).slice(waitsBeforeReturn));
   check(
     returnWaits.length === 0,
     "the return never shows the waiting surface",
     JSON.stringify(returnWaits.slice(0, 3)),
+  );
+  // A tab of another kind hides the same frame; coming back shows it where it was.
+  await openFile("samples/feature-tour.md");
+  await openFile("samples/latex-perf/book/main.tex");
+  check(
+    await pageWait("the kept frame's page"),
+    `a frame kept across another tab still shows page ${readingPage}`,
+    String(await framePageAtTop().catch(() => "no frame")),
   );
   // The sections below were written against the chapter tab; it belongs to the
   // same project, so the frame stays.
