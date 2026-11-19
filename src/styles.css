@@ -3607,15 +3607,16 @@ label.optional-tools-row:hover {
   margin-top: 0;
 }
 
-/* Typst preview: the compiler's own pages, one below the other, flush.
-   No gap, no rule, no shadow: the reader is reading a document, not a stack of
-   cards. What separates one page from the next is the paper's own margin, which
-   is part of the page and therefore part of what a PDF export contains. */
+/* Typst preview: the compiler's own pages, one below the other, with a visible
+   break. The gap alone disappears when the paper and the pane share a surface
+   colour, so the shell also draws a rule along each page's top edge. Document
+   mode is a different host (`.typst-document`) and stays continuous. */
 .typst-preview {
   --typst-fit: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
+  gap: 18px;
   padding: 22px 0 40px;
 }
 
@@ -3649,14 +3650,19 @@ label.optional-tools-row:hover {
   align-items: flex-start;
 }
 
-/* The shell owns the fitted size; the page inside keeps the fixed 96 dpi
-   coordinate system PDF.js laid the text layer out in. */
+/* The shell owns the fitted size and the page-break rule; the page inside keeps
+   the fixed 96 dpi coordinate system PDF.js laid the text layer out in. The page
+   is as wide as the pane, so its side shadow is clipped away: what is left is a
+   rule above each page and a soft shadow below it. */
 .typst-page-shell {
   position: relative;
   flex: none;
   width: calc(var(--typst-page-width) * 1px * var(--typst-fit));
   height: calc(var(--typst-page-height) * 1px * var(--typst-fit));
   background: var(--bg);
+  box-shadow:
+    0 -1px 0 var(--border),
+    0 1px 4px rgb(0 0 0 / 22%);
 }
 
 .typst-page {
@@ -3891,6 +3897,9 @@ label.optional-tools-row:hover {
    and PDF.js filling its canvas. */
 [data-theme="dark"] .typst-page-shell {
   background: var(--bg);
+  box-shadow:
+    0 -1px 0 var(--border),
+    0 1px 6px rgb(0 0 0 / 55%);
 }
 
 /* A set of alternatives as buttons, used where picking one redraws the panel. */

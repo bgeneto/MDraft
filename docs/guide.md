@@ -94,10 +94,9 @@ The preview has two views:
   source mapping.
   In the dark theme the pages follow the application: the PDF's white paper and
   black text become the app's dark surface and white. In both themes a page
-  fills the pane's width — its side edges are clipped, and the pages sit flush
-  against each other, so the preview reads as one continuous document rather
-  than a stack of sheets; the only space between two pages is the paper's own
-  margin. The page is rendered at the
+  fills the pane's width — its side edges are clipped. Consecutive pages keep a
+  small gap and a rule along the top edge, so a page break stays visible even
+  when the paper and the pane share a surface colour. The page is rendered at the
   display's pixel density, so text stays crisp on 4K and 5K screens. Because
   PDF.js hands the page over as one raster, figures inside it are inverted with
   the text in the dark theme.

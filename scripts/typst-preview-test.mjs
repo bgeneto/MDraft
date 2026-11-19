@@ -641,9 +641,9 @@ check(
   JSON.stringify(compiledChrome),
 );
 
-// The pages are flush: the second shell starts exactly where the first ends, and
-// neither draws a rule or a shadow. A gap here is the band of pane background the
-// reader sees between two pages, which reads as a divider rather than a document.
+// Pages keep a visible break: a small gap between shells plus the rule the shell
+// draws along its top edge. Document mode is a single article and does not use
+// this host, so it stays continuous.
 const pageGap = await evaluate(`(() => {
   const shells = [...document.querySelectorAll(".typst-page-shell")];
   if (shells.length < 2) return null;
@@ -658,13 +658,13 @@ const pageGap = await evaluate(`(() => {
   };
 })()`);
 check(
-  "consecutive pages sit flush with no gap",
-  pageGap !== null && Math.abs(pageGap.gap) < 1 && pageGap.rowGap === "normal",
+  "consecutive pages keep a small separation",
+  pageGap !== null && Math.abs(pageGap.gap - 18) < 1 && pageGap.rowGap === "18px",
   pageGap ? `gap ${pageGap.gap.toFixed(1)}px, row-gap ${pageGap.rowGap}` : "no second page",
 );
 check(
-  "a page draws no rule or shadow at its edge",
-  pageGap !== null && pageGap.shadow === "none",
+  "a page draws the rule that marks its top edge",
+  pageGap !== null && pageGap.shadow !== "none",
   pageGap ? pageGap.shadow : "no page",
 );
 
