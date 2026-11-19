@@ -1352,12 +1352,14 @@ function latexExportHarness() {
   const release = deferred();
   const requests = [];
   const errors = [];
+  const revoked = [];
   const h = shellHarness(
     [
       "exportWithPandoc",
       "exportLatexWithWriter",
       "openWriterChooser",
       "latexExportSnapshot",
+      "revokeLatexSnapshot",
       "latexExportRequest",
       "exportSource",
       "exportSuggestion",
@@ -1389,10 +1391,12 @@ function latexExportHarness() {
       showWriterChooser: async () => ({ writer: "html", label: "HTML", extension: "html" }),
       api: {
         latexProjectSnapshot: async (root, overlays) => ({
+          projectToken: root,
           mainFile: root.split("/").pop(),
           files: overlays.map((item) => ({ path: item.path, data: item.text })),
           skipped: [],
         }),
+        latexTexpressoRevoke: async (token) => revoked.push(token),
         pandocListWriters: async () => [{ name: "html", label: "HTML", extension: "html" }],
         runExport: async (request) => {
           requests.push(request);
@@ -1426,7 +1430,7 @@ function latexExportHarness() {
     h.context.doc = h.sessions.setActive(session.id);
     h.editor.setDoc(session.savedContent);
   };
-  return { ...h, a, b, md, release, requests, errors, switchTo };
+  return { ...h, a, b, md, release, requests, errors, revoked, switchTo };
 }
 
 for (const [route, run] of [
@@ -1470,6 +1474,11 @@ for (const [route, run] of [
       !h.requests[0].snapshot.files.some((file) => file.path.startsWith("/b/")),
     "the writer chooser keeps project A when the lookup yields to LaTeX B",
     h.errors.join("; "),
+  );
+  check(
+    h.revoked.length === 1 && h.revoked[0] === "/a/main.tex",
+    "Pandoc releases the project route for its captured snapshot",
+    h.revoked.join(", "),
   );
 }
 
