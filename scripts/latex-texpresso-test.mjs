@@ -286,9 +286,11 @@ async function tabCacheProbe() {
     evaluate(`document.getElementById("compiler-problems")?.textContent ?? ""`);
   const expectedProblems = await problemText();
   const pdfHash = process.platform === "win32" ? await printHash() : null;
-  const readingPage = await evaluate(
-    'Math.max(1, Number(document.querySelector(".compiled-page-total").textContent.match(/[0-9]+/)[0]) - 1)',
-  );
+  // The PDF export and the frame's page count arrive independently.
+  const pageTotal =
+    'Number(document.querySelector(".compiled-page-total")?.textContent.match(/[0-9]+/)?.[0])';
+  await requireReady(`${pageTotal} > 0`, "the book's page count");
+  const readingPage = Math.max(1, (await evaluate(pageTotal)) - 1);
   await evaluate(`(() => {
     const input = ${field};
     input.value = "${readingPage}";
