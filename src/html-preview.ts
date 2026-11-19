@@ -16,14 +16,17 @@ import {
   htmlRangesForSource,
   htmlSourceRange,
   htmlScrollAnchors,
+  htmlTextTable,
   readHtmlScrollGeometry,
   type HtmlScrollAnchor,
   type HtmlScrollGeometry,
   type HtmlSelection,
   type HtmlTextFragment,
   type HtmlTextSelection,
+  type HtmlTextTable,
 } from "./html-source-map";
 import bridgeTemplate from "./html-bridge.js?raw";
+import alignTemplate from "./html-text-align.js?raw";
 import { PRINT_READY_SCRIPT } from "./print-ready";
 import { ScrollIndex } from "./scroll-sync";
 
@@ -139,6 +142,8 @@ interface FrameState {
   timer: number;
   /** The word table this frame's copy was built with. */
   fragments: HtmlTextFragment[];
+  /** Its texts per stamp, posted to the guest on `ready`; null when too large. */
+  table: HtmlTextTable | null;
   /** Resolves the render that created this frame; a no-op once settled. */
   settle: (outcome: HtmlRenderOutcome) => void;
 }
@@ -196,6 +201,20 @@ const SKIP_TAGS = new Set([
   "noscript",
 ]);
 
+/** Elements the guest neither counts nor enters when it names a text's parent. */
+const UNCOUNTED_TAGS = new Set(["script", "style", "template", "noscript"]);
+
+/**
+ * Markup a math renderer produces (MathJax 2/3, KaTeX). The guest skips it as
+ * the bridge's `RENDERED` selector does; the two rules must stay identical.
+ */
+function renderedOutput(node: any): boolean {
+  if (node.tagName === "mjx-container") return true;
+  const attrs: Array<{ name: string; value: string }> = node.attrs ?? [];
+  const className = attrs.find((attr) => attr.name === "class")?.value ?? "";
+  return /^(?:MathJax|katex)| (?:MathJax|katex)/.test(className);
+}
+
 function randomToken(): string {
   if (typeof crypto.randomUUID === "function") return crypto.randomUUID();
   const bytes = crypto.getRandomValues(new Uint8Array(16));
@@ -249,9 +268,13 @@ export async function buildHtmlPreview(
   const insertions: Insertion[] = [];
   const fragments: HtmlTextFragment[] = [];
   const counts = new Map<number, number>();
+  // Elements per stamp, counted as html-text-align.js counts them in the guest,
+  // so a text node's parent can be named in both trees.
+  const ordinals = new Map<number, number>();
   let nextStamp = 0;
 
-  const walk = (node: any, stamp: number | null): void => {
+  /** `parent`: -1 for the stamp itself, -2 inside a math renderer's markup. */
+  const walk = (node: any, stamp: number | null, parent: number): void => {
     if (!node) return;
 
     if (node.nodeName === "#text") {
@@ -275,8 +298,25 @@ export async function buildHtmlPreview(
         raw,
         text: node.value ?? "",
         offsets: htmlDecodedOffsets(raw, node.value ?? ""),
+        p: parent,
       });
       return;
+    }
+
+    // The guest counts every element under a stamp except script-like ones and
+    // a math renderer's output, and does not descend into those, into opaque
+    // elements or into nested stamps. Mirror that exactly.
+    const rendered = node.tagName ? renderedOutput(node) : false;
+    let ordinal = -2;
+    if (
+      stamp !== null &&
+      parent !== -2 &&
+      node.tagName &&
+      !UNCOUNTED_TAGS.has(node.tagName) &&
+      !rendered
+    ) {
+      ordinal = ordinals.get(stamp) ?? 0;
+      ordinals.set(stamp, ordinal + 1);
     }
 
     if (node.tagName && addsCrossOrigin(node)) {
@@ -291,6 +331,7 @@ export async function buildHtmlPreview(
     if (node.tagName && SKIP_TAGS.has(node.tagName)) return;
 
     let childStamp = stamp;
+    let childParent = rendered || parent === -2 ? -2 : ordinal;
     if (node.tagName && BLOCK_TAGS.has(node.tagName)) {
       const location = node.sourceCodeLocation;
       const startTag = location?.startTag;
@@ -312,15 +353,16 @@ export async function buildHtmlPreview(
           insertions.push({ at, text: ` data-mdraft-n="${id}"` });
           childStamp = id;
         }
+        childParent = -1;
       }
     }
 
     if (Array.isArray(node.childNodes)) {
-      for (const child of node.childNodes) walk(child, childStamp);
+      for (const child of node.childNodes) walk(child, childStamp, childParent);
     }
-    if (node.content) walk(node.content, childStamp);
+    if (node.content) walk(node.content, childStamp, childParent);
   };
-  walk(document, null);
+  walk(document, null, -1);
 
   const bridge = bridgeMarkup(token, bridgeNonce);
   insertions.push({ at: bridgeInsertOffset(document, source), text: bridge });
@@ -378,8 +420,14 @@ function addsCrossOrigin(node: any): boolean {
   }
 }
 
+// The alignment is a module so the unit test can import it; inside the bridge's
+// classic script it is a plain function in the bridge's own scope.
+const ALIGN_CODE = alignTemplate.replace(/^export function /m, "function ");
+
 function bridgeMarkup(token: string, nonce: string): string {
-  const code = bridgeTemplate.replace('"__MDRAFT_TOKEN__"', JSON.stringify(token));
+  const code = bridgeTemplate
+    .replace('"__MDRAFT_TOKEN__"', JSON.stringify(token))
+    .replace("/* __MDRAFT_ALIGN__ */", () => ALIGN_CODE);
   return `<script nonce="${escapeAttribute(nonce)}">\n${code}\n</script>`;
 }
 
@@ -599,6 +647,9 @@ export function createHtmlPreview(
           old.frame.remove();
         }
       }
+      // Before anything that names text: the guest aligns its current text
+      // nodes (after the document's math or code scripts ran) against it.
+      if (frame.table) postTo(frame, { type: "texts", ...frame.table });
       postTo(frame, { type: "keys", list: accelerators });
       callbacks.onReady(layout);
       frame.settle("current");
@@ -799,6 +850,7 @@ export function createHtmlPreview(
       ready: false,
       timer: 0,
       fragments,
+      table: htmlTextTable(fragments),
       source: "",
       settle: () => {},
     };

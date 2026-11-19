@@ -4,8 +4,9 @@
 //
 // The guest reports a text-node index and a sample, never a source offset. The
 // host turns that into a range through the table built from parse5. These checks
-// pin the two places where the mapping can lie: entities (decoded and raw
-// offsets differ) and a DOM that no longer matches the table (the sample check).
+// pin the places where the mapping can lie: entities (decoded and raw offsets
+// differ), a DOM that no longer matches the table (the sample check), and the
+// guest's alignment after a math renderer or highlighter split the text.
 // No application and no browser are needed.
 
 import {
@@ -14,8 +15,10 @@ import {
   htmlSourceRange,
   rawOffsetForDecoded,
   htmlScrollAnchors,
+  htmlTextTable,
   readHtmlScrollGeometry,
 } from "../src/html-source-map.ts";
+import { alignTextRuns } from "../src/html-text-align.js";
 import { parseFragment } from "parse5";
 
 const checks = [];
@@ -263,6 +266,198 @@ check(
     readHtmlScrollGeometry(null, anchors) === null &&
       readHtmlScrollGeometry({ ...valid, points: {} }, anchors) === null,
     "malformed scroll replies do not throw",
+  );
+}
+
+console.log("\n=== one text node split by a script ===");
+{
+  const raw = "mesma $x$, mas";
+  const fragments = [{ n: 4, index: 0, src0: 30, src1: 30 + raw.length, raw, text: raw }];
+  const pieces = (segments) => ({ ...segments[0], reveal: false, segments });
+  const across = htmlSourceRange(
+    fragments,
+    pieces([
+      { n: 4, index: 0, start: 0, end: 5, sample: "mesma" },
+      { n: 4, index: 0, start: 9, end: 14, sample: ", mas" },
+    ]),
+  );
+  check(
+    across?.from === 30 && across?.to === 44,
+    "pieces on both sides of a formula span the formula's source",
+    JSON.stringify(across),
+  );
+  check(
+    htmlSourceRange(
+      fragments,
+      pieces([
+        { n: 4, index: 0, start: 9, end: 14, sample: ", mas" },
+        { n: 4, index: 0, start: 0, end: 5, sample: "mesma" },
+      ]),
+    ) === null,
+    "pieces of one node out of order are rejected",
+  );
+  check(
+    htmlSourceRange(
+      fragments,
+      pieces([
+        { n: 4, index: 0, start: 0, end: 5, sample: "mesma" },
+        { n: 4, index: 0, start: 2, end: 5, sample: "sma" },
+      ]),
+    ) === null,
+    "overlapping pieces of one node are rejected",
+  );
+}
+
+console.log("\n=== the text table sent to the guest ===");
+{
+  const fragment = (n, index, text, p) => ({ n, index, src0: 0, src1: 0, raw: text, text, p });
+  const table = htmlTextTable([
+    fragment(0, 0, "lead", -1),
+    fragment(2, 0, "a ", -1),
+    fragment(2, 1, "b", 0),
+    fragment(0, 1, "tail", -1),
+  ]);
+  check(
+    JSON.stringify(table) ===
+      JSON.stringify({
+        texts: [["lead", "tail"], null, ["a ", "b"]],
+        parents: [[-1, -1], null, [-1, 0]],
+      }),
+    "texts are grouped by stamp with their parent ordinals; a stamp without text is null",
+    JSON.stringify(table),
+  );
+  check(
+    htmlTextTable([fragment(0, 0, "x".repeat(10), -1)], 5) === null,
+    "a table above the size limit is not sent",
+  );
+  check(
+    htmlTextTable([fragment(0, 1, "skipped", -1)]) === null,
+    "a gap in a stamp's indices refuses the table",
+  );
+}
+
+console.log("\n=== guest alignment after a script rewrote the text ===");
+{
+  // `observed` mirrors what the bridge collects: text, parent ordinal, whether
+  // an element was passed since the previous text node, and whether no later
+  // text with visible characters shares the parent.
+  const seen = (text, parent = -1, element = false, last = false) => ({
+    text,
+    parent,
+    element,
+    last,
+  });
+  const show = (result) => JSON.stringify(result);
+
+  const same = alignTextRuns(["a ", "b"], [-1, 0], [seen("a "), seen("b", 0, true)]);
+  check(
+    show(same) ===
+      show([
+        { index: 0, base: 0 },
+        { index: 1, base: 0 },
+      ]),
+    "an untouched stamp keeps its own positions",
+    show(same),
+  );
+
+  const math = alignTextRuns(
+    ["Em rotação, mesma $\\omega$, mas $v_i$ diferentes."],
+    [-1],
+    [seen("Em rotação, mesma "), seen(", mas ", -1, true), seen(" diferentes.", -1, true, true)],
+  );
+  check(
+    show(math) ===
+      show([
+        { index: 0, base: 0 },
+        { index: 0, base: 26 },
+        { index: 0, base: 37 },
+      ]),
+    "pieces around inline formulas keep their offsets in the original text",
+    show(math),
+  );
+
+  const leading = alignTextRuns(
+    ["$x$ is a variable"],
+    [-1],
+    [seen(" is a variable", -1, true, true)],
+  );
+  check(
+    show(leading) === show([{ index: 0, base: 3 }]),
+    "text after a formula that opened the node is placed after it",
+    show(leading),
+  );
+
+  // <tr><td>$\text{kg}$</td><td>kg</td></tr>: the first cell's text is gone.
+  const cells = alignTextRuns(
+    ["\n", "$\\text{kg}$", "\n", "kg", "\n"],
+    [-1, 0, -1, 1, -1],
+    [seen("\n"), seen("\n", -1, true), seen("kg", 1, true, true), seen("\n", -1, true)],
+  );
+  check(
+    show(cells[2]) === show({ index: 3, base: 0 }),
+    "a cell after a formula cell is not placed inside that formula",
+    show(cells),
+  );
+
+  const suffix = alignTextRuns(["$e^x$e"], [-1], [seen("e", -1, true, true)]);
+  check(
+    show(suffix) === show([{ index: 0, base: 5 }]),
+    "the last piece of a split node prefers the original text's end",
+    show(suffix),
+  );
+
+  const tokens = alignTextRuns(
+    ["const x = 1;"],
+    [-1],
+    [
+      seen("const", 0, true),
+      seen(" x ", -1, true),
+      seen("=", 1, true),
+      seen(" 1;", -1, true, true),
+    ],
+  );
+  check(
+    show(tokens) ===
+      show([
+        { index: 0, base: 0 },
+        { index: 0, base: 5 },
+        { index: 0, base: 8 },
+        { index: 0, base: 9 },
+      ]),
+    "highlighter tokens in new spans map contiguously",
+    show(tokens),
+  );
+
+  const replaced = alignTextRuns(
+    ["standaloneword sample nextword."],
+    [-1],
+    [seen("mutatedword sample nextword.")],
+  );
+  check(show(replaced) === show([null]), "text a script replaced stays unmapped");
+
+  const edited = alignTextRuns(["Hello dear world"], [-1], [seen("world")]);
+  check(
+    show(edited) === show([null]),
+    "text skipped with nothing inserted in its place is not a renderer's work",
+    show(edited),
+  );
+
+  const moved = alignTextRuns(["a $x$ b"], [0], [seen(" b", 3, true, true)]);
+  check(
+    show(moved) === show([null]),
+    "a piece under a different parent after skipped text is refused",
+    show(moved),
+  );
+
+  const generated = alignTextRuns(
+    ["Slide title"],
+    [-1],
+    [seen("Slide title"), seen("3 / 36", -1, true)],
+  );
+  check(
+    show(generated) === show([{ index: 0, base: 0 }, null]),
+    "text a script added stays unmapped without moving the others",
+    show(generated),
   );
 }
 

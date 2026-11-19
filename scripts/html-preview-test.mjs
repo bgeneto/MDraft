@@ -801,6 +801,168 @@ check(
   await sourceMark(),
 );
 
+console.log("\n=== text a math renderer split ===");
+// The inline script does what MathJax and KaTeX auto-render do: each `$…$`
+// leaves its text node and an element takes its place, so every later text
+// node under the same block moves. The table row is one source line so the
+// text before the mark tells which `kg` the guest named.
+const mathFile = path.join(syncDir, "math.html");
+fs.writeFileSync(
+  mathFile,
+  String.raw`<!doctype html><html><body>
+<p id="split">Energia $E = mc^2$ depois da fórmula e $x$ final.</p>
+<table><tr id="cells"><td>$\text{kg}$</td><td>kg</td></tr></table>
+<p><a id="route" href="#/route">route</a></p>
+<script>
+for (const node of [...document.querySelectorAll("p, td")].flatMap((el) => [...el.childNodes])) {
+  if (node.nodeType !== 3 || !node.data.includes("$")) continue;
+  const pieces = document.createDocumentFragment();
+  for (const part of node.data.split(/(\$[^$]+\$)/)) {
+    if (!part) continue;
+    if (part.startsWith("$")) {
+      const math = document.createElement("mjx-container");
+      math.innerHTML = '<svg width="24" height="12"></svg><mjx-assistive-mml><math><mi>x</mi></math></mjx-assistive-mml>';
+      pieces.append(math);
+    } else pieces.append(part);
+  }
+  node.replaceWith(pieces);
+}
+</script>
+</body></html>`,
+);
+// The preference section above left document scripts off; the stub needs them.
+await page.evaluate(`document.getElementById('btn-prefs').click(); 'ok'`);
+await sleep(250);
+await page.evaluate(`(() => {
+  const section = [...document.querySelectorAll('.prefs-section')].find(node => node.textContent.trim() === 'HTML');
+  if (section) section.click();
+  return 'ok';
+})()`);
+await sleep(250);
+await page.evaluate(`(() => {
+  const row = [...document.querySelectorAll('.prefs-row')].find(node => node.textContent.includes('Run scripts in the HTML preview'));
+  const input = row && row.querySelector('input');
+  if (input && !input.checked) input.click();
+  return 'ok';
+})()`);
+await sleep(250);
+await page.evaluate(`document.querySelector('.prefs-close')?.click()`);
+await sleep(600);
+const beforeMath = await page.evaluate(
+  `document.querySelector('.html-preview-frame.active')?.getAttribute('src') ?? ''`,
+);
+await page.evaluate(
+  `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'open-files',payload:[${JSON.stringify(mathFile)}]})`,
+);
+await reconnect(beforeMath);
+check(
+  "the renderer stub replaced the formulas",
+  (await frame.evaluate(`document.querySelectorAll('mjx-container').length`)) === 3,
+);
+for (const word of ["depois", "final"]) {
+  const trip = await htmlTrip(word, "split");
+  check(`a word after an inline formula maps both ways (${word})`, trip.ok, JSON.stringify(trip));
+}
+const cellTrip = await htmlTrip("kg", "cells");
+const markLead = await page.evaluate(`(() => {
+  const mark = document.querySelector('.cm-sync-word');
+  const line = mark?.closest('.cm-line');
+  if (!line) return '';
+  const range = document.createRange();
+  range.setStart(line, 0);
+  range.setEndBefore(mark);
+  return range.toString();
+})()`);
+const paintedCell = await frame.evaluate(`(() => {
+  const h = CSS.highlights.get('mdraft-sync') ?? CSS.highlights.get('mdraft-sync-peak');
+  const range = h ? [...h][0] : null;
+  return range ? range.startContainer.parentElement === document.querySelectorAll('#cells td')[1] : false;
+})()`);
+check(
+  "a cell after a formula cell maps to its own text, not into the formula",
+  cellTrip.ok && markLead.endsWith("</td><td>") && paintedCell === true,
+  JSON.stringify({ cellTrip, markLead, paintedCell }),
+);
+
+// A guest selection across a formula names one source text node twice.
+await dbl(await guestPoint("Energia", "split"));
+await frame.evaluate(`(() => {
+  const p = document.getElementById('split');
+  const r = document.createRange();
+  r.setStart(p.firstChild, 0);
+  const after = p.childNodes[2];
+  r.setEnd(after, after.data.indexOf('depois') + 6);
+  const s = getSelection();
+  s.removeAllRanges();
+  s.addRange(r);
+})()`);
+await sleep(200);
+check(
+  "a guest selection across a formula marks the formula's source too",
+  (await sourceMark()) === "Energia $E = mc^2$ depois",
+  await sourceMark(),
+);
+
+// A source selection across a formula paints the text on both sides of it.
+const sourceEnds = await page.evaluate(`(() => {
+  for (const line of document.querySelectorAll('.cm-line')) {
+    const walker = document.createTreeWalker(line, NodeFilter.SHOW_TEXT);
+    const nodes = [];
+    for (let t = walker.nextNode(); t; t = walker.nextNode()) nodes.push(t);
+    const text = nodes.map((t) => t.data).join('');
+    const start = text.indexOf('Energia $E');
+    if (start < 0) continue;
+    const end = text.indexOf('depois', start) + 6;
+    // The character at the start, or the last one before the end.
+    const point = (at, edge) => {
+      let left = edge ? at - 1 : at;
+      for (const t of nodes) {
+        if (left < t.length) {
+          const r = document.createRange();
+          r.setStart(t, left);
+          r.setEnd(t, left + 1);
+          const b = r.getBoundingClientRect();
+          return { x: edge ? b.right - 1 : b.left + 1, y: b.top + b.height / 2 };
+        }
+        left -= t.length;
+      }
+      return null;
+    };
+    return { from: point(start, false), to: point(end, true) };
+  }
+  return null;
+})()`);
+if (sourceEnds?.from && sourceEnds?.to) {
+  for (const [point, modifiers] of [
+    [sourceEnds.from, 0],
+    [sourceEnds.to, 8],
+  ])
+    for (const type of ["mousePressed", "mouseReleased"])
+      await page.send("Input.dispatchMouseEvent", {
+        type,
+        x: point.x,
+        y: point.y,
+        button: "left",
+        clickCount: 1,
+        modifiers,
+      });
+  await sleep(250);
+}
+check(
+  "a source selection across a formula paints the text on both sides",
+  (await guestPaint()) === "Energia  depois",
+  JSON.stringify({ painted: await guestPaint(), sourceEnds }),
+);
+
+// A fragment that names no element is a route for the document's own script.
+await frame.evaluate(`document.getElementById('route').click()`);
+await sleep(100);
+check(
+  "an in-document route link reaches the document",
+  (await frame.evaluate(`location.hash`)) === "#/route",
+  await frame.evaluate(`location.hash`),
+);
+
 console.log("\n=== web source files ===");
 for (const [extension, content] of [
   ["js", "const message = 'hello';"],
