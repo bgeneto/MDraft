@@ -1376,18 +1376,7 @@ function exportRows(
     });
   }
 
-  rows.push(
-    {
-      // The browser chooses the PDF's path in its own print dialog, so there is
-      // no path for MDraft to reveal or open. Saying so is better than a second
-      // pair of checkboxes that could never be honoured. The direct PDF writer
-      // does know its path and runs these options normally.
-      kind: "note",
-      label: "PDF (opens browser)",
-      text: "These options do not run for it: the browser owns the save path.",
-    },
-    { kind: "heading", label: "Formats" },
-  );
+  rows.push({ kind: "heading", label: "Formats" });
 
   if (formats.length === 0) {
     rows.push({
