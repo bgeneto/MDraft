@@ -53,6 +53,24 @@
     Quote: "'",
   };
 
+  /* __MDRAFT_ALIGN__ */
+
+  var IGNORED_TEXT = "script,style,textarea,title,template,svg,math,noscript";
+  // Output of the document's own math renderer (MathJax 2/3, KaTeX). It is not
+  // counted as structure, so the elements around it keep their ordinals.
+  var RENDERED =
+    'mjx-container,[class^="MathJax"],[class*=" MathJax"],[class^="katex"],[class*=" katex"]';
+  var UNCOUNTED = { script: true, style: true, template: true, noscript: true };
+  var OPAQUE = { svg: true, math: true, textarea: true, title: true };
+
+  // The host's original text table, per stamp: `originalTexts[n][i]` is the
+  // stamp's i-th text node as parse5 saw it, `originalParents[n][i]` its parent
+  // ordinal. Null until the host sends it (or when it was too large to send);
+  // then the guest's own text-node positions are the identities.
+  var originalTexts = null;
+  var originalParents = null;
+  var alignments = new WeakMap();
+
   var anchors = [];
   var keys = [];
   var layoutQueued = false;
@@ -281,23 +299,87 @@
 
   // The host records one entry per text node under a stamped block. The guest
   // reports only that index and the selected characters; it never sees a source
-  // offset. A document whose own scripts rewrote the DOM will fail the host's
+  // offset. A document whose own scripts replaced the text will fail the host's
   // sample check, which is the intended fail-closed result.
   function ownedText(stamp) {
     var nodes = [];
     var walker = document.createTreeWalker(stamp, NodeFilter.SHOW_TEXT);
     for (var text = walker.nextNode(); text; text = walker.nextNode()) {
       var parent = text.parentElement;
-      if (
-        parent.closest("[data-mdraft-n]") !== stamp ||
-        parent.closest("script,style,textarea,title,template,svg,math,noscript")
-      )
-        continue;
+      if (parent.closest("[data-mdraft-n]") !== stamp || parent.closest(IGNORED_TEXT)) continue;
       nodes.push(text);
     }
     return nodes;
   }
 
+  // Text the reader can select that no source text owns: formula output from
+  // the document's renderer, embedded SVG and MathML.
+  function ignoredText(node) {
+    var parent = node.parentElement;
+    return !!parent && !!parent.closest(IGNORED_TEXT + "," + RENDERED);
+  }
+
+  function validTexts(n) {
+    var texts = originalTexts[n];
+    var parents = originalParents[n];
+    if (texts === null || texts === undefined) return { texts: [], parents: [] };
+    if (!Array.isArray(texts) || !Array.isArray(parents) || texts.length !== parents.length)
+      return null;
+    for (var i = 0; i < texts.length; i += 1) {
+      if (typeof texts[i] !== "string" || !Number.isInteger(parents[i])) return null;
+    }
+    return { texts: texts, parents: parents };
+  }
+
+  // The stamp's text nodes aligned with the host's original table, counted the
+  // way `buildHtmlPreview` counts them. Rebuilt when the layout epoch moves; a
+  // node whose text changed since is caught by the live comparison in
+  // `textEntry` and `resolveSpec`. Null when the host sent no table.
+  function stampAlignment(stamp, n) {
+    if (!originalTexts) return null;
+    var cached = alignments.get(stamp);
+    if (cached && cached.epoch === layoutEpoch) return cached;
+    var table = validTexts(n);
+    if (!table) return null;
+    var nodes = [];
+    var observed = [];
+    var count = 0;
+    var element = false;
+    var visit = function (parent, ordinal) {
+      for (var child = parent.firstChild; child; child = child.nextSibling) {
+        if (child.nodeType === 3) {
+          nodes.push(child);
+          observed.push({ text: child.data, parent: ordinal, element: element, last: false });
+          element = false;
+        } else if (child.nodeType === 1) {
+          element = true;
+          var tag = child.localName;
+          if (UNCOUNTED[tag] || child.matches(RENDERED)) continue;
+          var own = count;
+          count += 1;
+          if (!OPAQUE[tag] && !child.hasAttribute("data-mdraft-n")) visit(child, own);
+        }
+      }
+    };
+    visit(stamp, -1);
+    var seen = new Set();
+    for (var i = observed.length - 1; i >= 0; i -= 1) {
+      if (!/\S/.test(observed[i].text)) continue;
+      observed[i].last = !seen.has(observed[i].parent);
+      seen.add(observed[i].parent);
+    }
+    var aligned = {
+      epoch: layoutEpoch,
+      texts: table.texts,
+      nodes: nodes,
+      map: alignTextRuns(table.texts, table.parents, observed),
+    };
+    alignments.set(stamp, aligned);
+    return aligned;
+  }
+
+  // A text node's identity in the host's coordinates: the stamp, the original
+  // text node, and where this node's text starts inside it.
   function textEntry(node) {
     if (!node || node.nodeType !== 3) return null;
     var element = node.parentElement;
@@ -305,8 +387,54 @@
     if (!stamp) return null;
     var n = parseInt(stamp.getAttribute("data-mdraft-n"), 10);
     if (!isFinite(n)) return null;
-    var index = ownedText(stamp).indexOf(node);
-    return index >= 0 ? { n: n, index: index } : null;
+    var aligned = stampAlignment(stamp, n);
+    if (!aligned) {
+      var index = ownedText(stamp).indexOf(node);
+      return index >= 0 ? { n: n, index: index, base: 0 } : null;
+    }
+    var at = aligned.nodes.indexOf(node);
+    var hit = at >= 0 ? aligned.map[at] : null;
+    if (!hit || aligned.texts[hit.index].substr(hit.base, node.data.length) !== node.data)
+      return null;
+    return { n: n, index: hit.index, base: hit.base };
+  }
+
+  // The live pieces of one host range, each checked against the host's sample.
+  // A range across a formula has a piece on each side; none when the text no
+  // longer matches.
+  function resolveSpec(spec, stamps) {
+    if (spec.sample.length !== spec.end - spec.start) return [];
+    var stamp = stamps.get(spec.n);
+    if (stamp === undefined) {
+      stamp = document.querySelector('[data-mdraft-n="' + spec.n + '"]');
+      stamps.set(spec.n, stamp);
+    }
+    if (!stamp) return [];
+    var aligned = stampAlignment(stamp, spec.n);
+    if (!aligned) {
+      var node = ownedText(stamp)[spec.index];
+      return node &&
+        spec.end <= node.length &&
+        node.data.slice(spec.start, spec.end) === spec.sample
+        ? [{ node: node, start: spec.start, end: spec.end }]
+        : [];
+    }
+    var pieces = [];
+    for (var i = 0; i < aligned.nodes.length; i += 1) {
+      var hit = aligned.map[i];
+      if (!hit || hit.index !== spec.index) continue;
+      var piece = aligned.nodes[i];
+      var from = Math.max(spec.start, hit.base);
+      var to = Math.min(spec.end, hit.base + piece.length);
+      if (to <= from) continue;
+      if (
+        piece.data.slice(from - hit.base, to - hit.base) !==
+        spec.sample.slice(from - spec.start, to - spec.start)
+      )
+        return [];
+      pieces.push({ node: piece, start: from - hit.base, end: to - hit.base });
+    }
+    return pieces;
   }
 
   function scrollProbe() {
@@ -326,8 +454,8 @@
             return {
               n: entry.n,
               index: entry.index,
-              start: start,
-              end: end,
+              start: entry.base + start,
+              end: entry.base + end,
               sample: word[0],
             };
         }
@@ -390,7 +518,7 @@
     )
       return;
     var points = [];
-    var nodesByStamp = new Map();
+    var stamps = new Map();
     for (var i = 0; i < data.ranges.length; i += 1) {
       var spec = data.ranges[i];
       if (
@@ -407,18 +535,11 @@
         spec.sample.length > 120
       )
         return;
-      var nodes = nodesByStamp.get(spec.n);
-      if (!nodes) {
-        var stamp = document.querySelector('[data-mdraft-n="' + spec.n + '"]');
-        nodes = stamp ? ownedText(stamp) : [];
-        nodesByStamp.set(spec.n, nodes);
-      }
-      var node = nodes[spec.index];
-      if (!node || spec.end > node.length || node.data.slice(spec.start, spec.end) !== spec.sample)
-        continue;
+      var piece = resolveSpec(spec, stamps)[0];
+      if (!piece) continue;
       var range = document.createRange();
-      range.setStart(node, spec.start);
-      range.setEnd(node, spec.end);
+      range.setStart(piece.node, piece.start);
+      range.setEnd(piece.node, piece.end);
       var box = range.getBoundingClientRect();
       if (box.width && box.height)
         points.push({
@@ -440,7 +561,8 @@
 
   // A pointer gesture: the height that was clicked and, when verified text is
   // under it, that text's identity and the clicked character's row. The identity
-  // is a text-node index, never a source offset; the host owns the mapping.
+  // is a text-node index and an offset inside that text, never a source offset;
+  // the host owns the mapping.
   function reportGesture(x, y) {
     var message = { type: "gesture", y: y };
     var point = document.caretRangeFromPoint && document.caretRangeFromPoint(x, y);
@@ -460,8 +582,8 @@
         if (box.height && y >= box.top - box.height && y <= box.bottom + box.height) {
           message.n = entry.n;
           message.index = entry.index;
-          message.start = start;
-          message.end = end;
+          message.start = entry.base + start;
+          message.end = entry.base + end;
           message.sample = word[0];
           message.at = at - start;
           message.top = box.top;
@@ -500,6 +622,9 @@
       while (start < end && /\s/.test(node.data[start])) start += 1;
       while (end > start && /\s/.test(node.data[end - 1])) end -= 1;
       if (end <= start) continue;
+      // A formula inside the selection has no text of its own in the source
+      // table; the pieces on either side still bound the source range.
+      if (ignoredText(node)) continue;
       var entry = textEntry(node);
       if (!entry || segments.length >= 128) {
         post({ type: "clearSync" });
@@ -508,8 +633,8 @@
       segments.push({
         n: entry.n,
         index: entry.index,
-        start: start,
-        end: end,
+        start: entry.base + start,
+        end: entry.base + end,
         sample: node.data.slice(start, end),
       });
     }
@@ -577,6 +702,9 @@
     }
     var key = JSON.stringify(specs);
     var ranges = [];
+    var stamps = new Map();
+    // Each range is checked on its own: one text node a script replaced must
+    // not hide the words around it that still match.
     for (var i = 0; i < specs.length; i += 1) {
       var spec = specs[i];
       if (
@@ -588,24 +716,19 @@
         spec.start < 0 ||
         spec.end <= spec.start ||
         typeof spec.sample !== "string"
-      ) {
-        clearWords();
-        return;
+      )
+        continue;
+      var pieces = resolveSpec(spec, stamps);
+      for (var p = 0; p < pieces.length; p += 1) {
+        var range = document.createRange();
+        range.setStart(pieces[p].node, pieces[p].start);
+        range.setEnd(pieces[p].node, pieces[p].end);
+        ranges.push(range);
       }
-      var stamp = document.querySelector('[data-mdraft-n="' + spec.n + '"]');
-      var node = stamp ? ownedText(stamp)[spec.index] : null;
-      if (
-        !node ||
-        spec.end > node.length ||
-        node.data.slice(spec.start, spec.end) !== spec.sample
-      ) {
-        clearWords();
-        return;
-      }
-      var range = document.createRange();
-      range.setStart(node, spec.start);
-      range.setEnd(node, spec.end);
-      ranges.push(range);
+    }
+    if (!ranges.length) {
+      clearWords();
+      return;
     }
     if (key === wordKey && wordTimer) return;
     clearWords();
@@ -687,7 +810,12 @@
         var id = raw.slice(1);
         var destination = id ? document.getElementById(id) : null;
         if (destination) destination.scrollIntoView({ block: "start" });
-        else window.scrollTo(0, 0);
+        else if (!id || id.toLowerCase() === "top") window.scrollTo(0, 0);
+        // No element by that name: a fragment such as reveal.js's `#/3` is a
+        // route the document's own script follows on `hashchange`. Setting it
+        // here, not by the default action, keeps a `<base>` from turning it
+        // into a navigation away from the preview.
+        else location.hash = raw;
         return;
       }
       var resolved;
@@ -742,6 +870,13 @@
       paintWords(data.ranges);
     } else if (data.type === "keys") {
       keys = Array.isArray(data.list) ? data.list : [];
+    } else if (data.type === "texts") {
+      // Validated per stamp when it is first used; a malformed stamp keeps the
+      // guest's own positions for that stamp only.
+      var valid = Array.isArray(data.texts) && Array.isArray(data.parents);
+      originalTexts = valid ? data.texts : null;
+      originalParents = valid ? data.parents : null;
+      alignments = new WeakMap();
     }
   });
 

@@ -34,6 +34,10 @@ in-process URI scheme and bridge rather than an application HTTP server.
 Line and word correspondence retain original-source positions across syntax,
 includes, raw HTML, and asynchronous rendering. If a token cannot be aligned
 unambiguously, drop that mapping rather than point to an unrelated source word.
+An HTML document's own scripts may split its text after it loads (a math
+renderer, a code highlighter); the guest aligns its current text nodes with the
+text table the host built from the source, so the pieces keep their original
+positions, and text a script replaced stays unmapped.
 Pointer gestures distinguish the pane the reader acted in from the pane that
 follows, so selection and alignment do not feed back into each other.
 

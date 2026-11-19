@@ -11,6 +11,47 @@ export interface HtmlTextFragment {
   text: string;
   /** null inside an entity expansion; never invent an interior source offset. */
   offsets?: (number | null)[] | null;
+  /**
+   * The ordinal of the text's parent element among the stamp's descendants,
+   * counted as `html-text-align.js` counts them: -1 for the stamp itself, -2
+   * inside markup a math renderer would own.
+   */
+  p?: number;
+}
+
+/** The original text table the guest aligns against, per stamp. */
+export interface HtmlTextTable {
+  texts: (string[] | null)[];
+  parents: (number[] | null)[];
+}
+
+/**
+ * Group the fragments by stamp for the guest. The document's text is sent
+ * once per frame; above `limit` characters nothing is sent and the guest keeps
+ * its own text-node positions.
+ */
+export function htmlTextTable(
+  fragments: readonly HtmlTextFragment[],
+  limit = 4_000_000,
+): HtmlTextTable | null {
+  const texts: (string[] | null)[] = [];
+  const parents: (number[] | null)[] = [];
+  let total = 0;
+  for (const fragment of fragments) {
+    total += fragment.text.length;
+    if (total > limit) return null;
+    while (texts.length <= fragment.n) {
+      texts.push(null);
+      parents.push(null);
+    }
+    const stamp = (texts[fragment.n] ??= []);
+    const ordinals = (parents[fragment.n] ??= []);
+    // Fragments arrive in document order, so `index` is the next slot.
+    if (fragment.index !== stamp.length) return null;
+    stamp.push(fragment.text);
+    ordinals.push(fragment.p ?? -2);
+  }
+  return { texts, parents };
 }
 
 export interface HtmlTextSelection {
@@ -178,7 +219,11 @@ function boundaries(fragment: HtmlTextFragment): (number | null)[] | null {
   return fragment.offsets;
 }
 
-/** Validate every node/sample, including multi-node selections, before painting. */
+/**
+ * Validate every node/sample, including multi-node selections, before painting.
+ * Several segments may name one text node when a script split it (a formula
+ * between them); their offsets must then increase.
+ */
 export function htmlSourceRange(
   fragments: readonly HtmlTextFragment[],
   selection: HtmlSelection,
@@ -188,6 +233,7 @@ export function htmlSourceRange(
   let first = -1,
     last = -1,
     previous = -1,
+    previousEnd = 0,
     length = 0;
   for (const segment of segments) {
     if (
@@ -204,7 +250,8 @@ export function htmlSourceRange(
     const fragment = fragments[index];
     if (
       !fragment ||
-      index <= previous ||
+      index < previous ||
+      (index === previous && segment.start < previousEnd) ||
       segment.end > fragment.text.length ||
       fragment.text.slice(segment.start, segment.end) !== segment.sample
     )
@@ -219,6 +266,7 @@ export function htmlSourceRange(
     if (fragment.src0 + from < last) return null;
     last = fragment.src0 + to;
     previous = index;
+    previousEnd = segment.end;
   }
   return first >= 0 && last > first ? { from: first, to: last } : null;
 }
