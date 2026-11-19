@@ -282,6 +282,9 @@ async function tabCacheProbe() {
     await requireReady("Boolean(window.__tabPrintHash)", "the current PDF bytes", 5_000);
     return evaluate("window.__tabPrintHash");
   }
+  const problemText = () =>
+    evaluate(`document.getElementById("compiler-problems")?.textContent ?? ""`);
+  const expectedProblems = await problemText();
   const pdfHash = process.platform === "win32" ? await printHash() : null;
   const readingPage = await evaluate(
     'Math.max(1, Number(document.querySelector(".compiled-page-total").textContent.match(/[0-9]+/)[0]) - 1)',
@@ -303,12 +306,31 @@ async function tabCacheProbe() {
   const settledCounters = tabProbeProcesses();
   if (pdfHash)
     check((await printHash()) === pdfHash, "cached return exposes the identical printable PDF");
+  check(
+    (await problemText()) === expectedProblems,
+    "cached return restores the same compiler diagnostics",
+  );
   await click(parentName);
   await evaluate(`Object.assign(window.__tabProbe,{titles:[],long:[],snapshots:[]})`);
+  const metricsEnabled = process.env.MDRAFT_TEST_PID && process.platform === "win32";
+  const metrics = async () => {
+    if (!metricsEnabled) return {};
+    const response = await page.send("Performance.getMetrics");
+    return Object.fromEntries(
+      response.result.metrics
+        .filter(({ name }) =>
+          /^(LayoutDuration|RecalcStyleDuration|ScriptDuration|TaskDuration)$/.test(name),
+        )
+        .map(({ name, value }) => [name, value]),
+    );
+  };
+  if (metricsEnabled) await page.send("Performance.enable");
+  const startMetrics = await metrics();
   const times = [];
   for (let pass = 0; pass < 10; pass++) {
     times.push(await click(bookName, bookReady), await click(parentName));
   }
+  const finalMetrics = await metrics();
   const after = await counts();
   check(
     after.mounts === before.mounts && after.work === before.work,
@@ -329,6 +351,12 @@ async function tabCacheProbe() {
       tabP95Ms: p95(times.map((row) => row[0])),
       previewP95Ms: p95(times.map((row) => row[1])),
       browser: await evaluate("JSON.stringify(window.__tabProbe)").then(JSON.parse),
+      rendererMs: Object.fromEntries(
+        Object.entries(finalMetrics).map(([key, value]) => [
+          key,
+          Math.round((value - startMetrics[key]) * 1000),
+        ]),
+      ),
     }),
   );
   const auto = 'document.querySelector(".compiled-toolbar input[type=checkbox]")';

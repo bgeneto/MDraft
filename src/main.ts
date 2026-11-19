@@ -3201,11 +3201,21 @@ function setLatexStatus(message: string, state?: CompiledStatus): void {
   if (phase) phase.textContent = latexWaitPhase(message);
 }
 
+// Diagnostic rows describe immutable output. Reuse the decorated rows when the
+// result returns from the cache, including their links to the compiled sources.
+const latexWarningPanels = new WeakMap<LatexResult, { rootPath: string; panel: HTMLElement }>();
+
 function showLatexWarnings(result: LatexResult, root: { path: string; directory: string }): void {
-  const panel = latexProblemPanel(new LatexBuildError("", result.warnings), root, [
-    ...result.files,
-  ]);
-  panel.querySelector(".latex-log")?.remove();
+  let entry = latexWarningPanels.get(result);
+  if (entry?.rootPath !== root.path) {
+    const panel = latexProblemPanel(new LatexBuildError("", result.warnings), root, [
+      ...result.files,
+    ]);
+    panel.querySelector(".latex-log")?.remove();
+    entry = { rootPath: root.path, panel };
+    latexWarningPanels.set(result, entry);
+  }
+  const { panel } = entry;
   compiledUi.details(panel, result.log, result.warnings.length, false);
   compiledUi.outputReady();
 }
@@ -7778,19 +7788,6 @@ async function displayDoc(preservePdf = false): Promise<void> {
   syncGuest(doc.language);
   resetOutline();
   applyLayout();
-  editor.setSpellcheck(
-    {
-      enabled: settings.spellcheck !== false,
-      language: effectiveSpellingLanguage(),
-      documentLanguage: doc.language,
-      words: [...(settings.spellcheckWords ?? []), ...ignoredSpellingWords()],
-      stringMode: settings.spellcheckStringMode,
-      identifiers: settings.spellcheckIdentifiers,
-      readOnly: doc.readOnly,
-      sessionKey: spellingSessionKey(),
-    },
-    true,
-  );
   resetTokenCount();
   scheduleTokenCount(editor.getDoc(), true);
   void refreshTitle();

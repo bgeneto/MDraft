@@ -30,6 +30,8 @@ function snapshot(files = {}) {
   const entries = Object.entries(files);
   return {
     mainFile: "main.tex",
+    projectToken: "test-project",
+    manifest: { version: 1, files: [], digest: "g" },
     files: entries.map(([path, text]) => ({ path, data: encode(text) })),
     skipped: [],
     generation: "g",
