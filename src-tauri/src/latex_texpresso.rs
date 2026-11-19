@@ -731,6 +731,7 @@ fn table(root: &Path) -> Result<Arc<Table>, String> {
 struct ProjectSession {
     root: PathBuf,
     served: HashMap<String, u64>,
+    captures: usize,
 }
 
 static PROJECT_SESSIONS: LazyLock<Mutex<HashMap<String, ProjectSession>>> =
@@ -745,7 +746,11 @@ pub fn project_token(root: &Path) -> Result<String, String> {
     let mut sessions = PROJECT_SESSIONS
         .lock()
         .map_err(|_| "The preview session registry is unavailable.".to_string())?;
-    if let Some((token, _)) = sessions.iter().find(|(_, session)| session.root == root) {
+    if let Some((token, session)) = sessions
+        .iter_mut()
+        .find(|(_, session)| session.root == root)
+    {
+        session.captures += 1;
         return Ok(token.clone());
     }
     // Native builds also ask for a snapshot; keep abandoned roots bounded.
@@ -760,15 +765,21 @@ pub fn project_token(root: &Path) -> Result<String, String> {
         ProjectSession {
             root,
             served: HashMap::new(),
+            captures: 1,
         },
     );
     Ok(token)
 }
 
-/// Forget a frame's capability. The next frame gets a new token.
+/// Release one capture. A cache probe and a live frame may share the token.
 pub fn revoke_project_token(token: &str) {
-    if let Ok(mut sessions) = PROJECT_SESSIONS.lock() {
-        sessions.remove(token);
+    if let Ok(mut sessions) = PROJECT_SESSIONS.lock()
+        && let Some(session) = sessions.get_mut(token)
+    {
+        session.captures -= 1;
+        if session.captures == 0 {
+            sessions.remove(token);
+        }
     }
 }
 
@@ -1581,6 +1592,14 @@ mod tests {
             .unwrap();
         assert_eq!(bytes, b"project bytes");
         assert!(kind.starts_with("text/plain"), "{kind}");
+        let probe = project_token(&root).unwrap();
+        assert_eq!(probe, token);
+        revoke_project_token(&probe);
+        assert!(
+            serve(&root, &format!("/project/{token}/hello%20world.tex"))
+                .unwrap()
+                .is_ok()
+        );
         revoke_project_token(&token);
         assert!(
             serve(&root, &format!("/project/{token}/hello%20world.tex"))

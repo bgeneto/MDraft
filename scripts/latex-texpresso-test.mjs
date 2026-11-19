@@ -23,6 +23,10 @@
 //      the preview, a web address goes to the (stubbed) system opener;
 
 import { openPage, emitMenu, sleep } from "./cdp-page.mjs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
+import { execFileSync } from "node:child_process";
 
 const port = process.argv[2] ?? "9222";
 
@@ -134,7 +138,260 @@ const enableAndCompile = () => {
   })()`);
 };
 
-try {
+/** Sample the isolated app and descendants without instrumenting their renderers. */
+function tabProbeProcesses() {
+  const pid = Number(process.env.MDRAFT_TEST_PID);
+  if (process.platform !== "win32" || !pid) return null;
+  const query =
+    "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,KernelModeTime,UserModeTime,WorkingSetSize | ConvertTo-Json -Compress";
+  try {
+    const rows = JSON.parse(
+      execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", query], {
+        encoding: "utf8",
+        timeout: 10_000,
+        windowsHide: true,
+        stdio: ["ignore", "pipe", "ignore"],
+      }),
+    );
+    const tree = [pid];
+    for (const id of tree) {
+      for (const child of rows)
+        if (child.ParentProcessId === id && !tree.includes(child.ProcessId)) {
+          tree.push(child.ProcessId);
+        }
+    }
+    const processes = rows.filter((row) => tree.includes(row.ProcessId));
+    return {
+      cpuSeconds:
+        processes.reduce(
+          (sum, row) => sum + Number(row.KernelModeTime) + Number(row.UserModeTime),
+          0,
+        ) / 1e7,
+      workingSetMiB: Math.round(
+        processes.reduce((sum, row) => sum + Number(row.WorkingSetSize), 0) / 1048576,
+      ),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Exercise cache ownership independently of the large font/image fixture. */
+async function tabCacheProbe() {
+  const base = mkdtempSync(join(tmpdir(), "latex-tab-cache-"));
+  const sub = join(base, "book");
+  mkdirSync(sub);
+  const source = (text) =>
+    "\\documentclass{article}\n\\begin{document}\n" + text + "\n\\end{document}\n";
+  const book = join(sub, "cache-book.tex");
+  const parent = join(base, "cache-parent.tex");
+  // Separate main documents, with the book reachable from the parent's manifest.
+  writeFileSync(
+    book,
+    source(Array.from({ length: 299 }, (_, i) => `Book page ${i + 1}`).join("\n\\newpage\n")),
+  );
+  writeFileSync(parent, source("Parent document."));
+  const paths = process.env.MDRAFT_LATEX_TAB_PROBE_FILES
+    ? JSON.parse(process.env.MDRAFT_LATEX_TAB_PROBE_FILES)
+    : [book, parent];
+  const [bookName, parentName] = paths.map((file) => basename(file));
+  const counts = () =>
+    evaluate(`JSON.stringify({
+    mounts: Number(document.getElementById("preview").dataset.texpressoSession || 0),
+    work: window.__tabProbe.work,
+  })`).then(JSON.parse);
+  const current = `document.querySelector(".compiled-save-pdf")?.disabled === false &&
+    Boolean(document.querySelector("#preview")?.dataset.latexCurrent)`;
+  const field = `document.querySelector(".compiled-page-field")`;
+  const names = `document.querySelector('.doc-tab[aria-selected="true"] .doc-tab-name')?.textContent`;
+  const selected = (name) => `${names} === ${JSON.stringify(name)}`;
+  const requireReady = async (condition, label, timeout = 120_000) => {
+    if (!(await waitFor(condition, timeout, label))) throw Error(label);
+  };
+  async function open(absolute, name) {
+    await evaluate(
+      `window.__TAURI_INTERNALS__.invoke("plugin:event|emit", { event: "open-files", payload: ${JSON.stringify([absolute])} })`,
+    );
+    await requireReady(selected(name), `open ${name}`, 20_000);
+    await requireReady(current, `current PDF for ${name}`);
+  }
+  async function click(name, ready = current) {
+    const xy = await evaluate(`(() => {
+      const label = [...document.querySelectorAll(".doc-tab-name")].find(n => n.textContent === ${JSON.stringify(name)});
+      label.scrollIntoView({block:"nearest",inline:"nearest"});
+      const r = label.getBoundingClientRect();
+      return {x:r.x+r.width/2,y:r.y+r.height/2};
+    })()`);
+    const start = performance.now();
+    await page.send("Input.dispatchMouseEvent", {
+      ...xy,
+      type: "mousePressed",
+      button: "left",
+      clickCount: 1,
+    });
+    await page.send("Input.dispatchMouseEvent", {
+      ...xy,
+      type: "mouseReleased",
+      button: "left",
+      clickCount: 1,
+    });
+    await requireReady(selected(name), `switch to ${name}`, 5_000);
+    const tabMs = performance.now() - start;
+    await requireReady(ready, `read ${name}`, 5_000);
+    return [Math.round(tabMs), Math.round(performance.now() - start)];
+  }
+  await requireReady('Boolean(document.querySelector(".cm-content"))', "editor at startup", 30_000);
+  if (!(await invoke("latex_engine_status")).previewInstalled) await invoke("install_texpresso");
+  await enableAndCompile();
+  await evaluate(`(() => {
+    const probe = window.__tabProbe = {work:0, titles:[], long:[], snapshots:[]};
+    new PerformanceObserver(list => {
+      for (const e of list.getEntries()) if (/^mdraft:latex:(texpresso-project-sync|typeset-start)$/.test(e.name)) probe.work++;
+    }).observe({type:"mark"});
+    new PerformanceObserver(list => {
+      for (const e of list.getEntries()) {
+        if (e.name === "mdraft:latex:window-title") probe.titles.push(Math.round(e.duration));
+        if (e.name === "mdraft:latex:snapshot-ipc") probe.snapshots.push(Math.round(e.duration));
+      }
+    }).observe({type:"measure"});
+    new PerformanceObserver(list => {
+      for (const e of list.getEntries()) probe.long.push(Math.round(e.duration));
+    }).observe({type:"longtask"});
+  })()`);
+  await open(paths[0], bookName);
+  // Capture the same bytes the Print menu would send. The stub keeps the test
+  // inside the staged WebView and never opens a print dialog.
+  await evaluate(`(() => {
+    const fetch = window.fetch;
+    window.fetch = async function (input, options) {
+      const url = new URL(typeof input === "string" ? input : input.url, location.href);
+      if (url.hostname === "ipc.localhost" && url.pathname === "/print_compiled_pdf") {
+        const { data } = JSON.parse(options.body);
+        const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(data));
+        window.__tabPrintHash = Array.from(new Uint8Array(hash)).join(",");
+        return new Response(JSON.stringify("isolated-test.pdf"), {
+          headers: { "Content-Type": "application/json", "Tauri-Response": "ok" },
+        });
+      }
+      return fetch.call(window, input, options);
+    };
+  })()`);
+  async function printHash() {
+    await evaluate("window.__tabPrintHash = null");
+    await emitMenu(page, "file.print");
+    await requireReady("Boolean(window.__tabPrintHash)", "the current PDF bytes", 5_000);
+    return evaluate("window.__tabPrintHash");
+  }
+  const problemText = () =>
+    evaluate(`document.getElementById("compiler-problems")?.textContent ?? ""`);
+  const expectedProblems = await problemText();
+  const pdfHash = process.platform === "win32" ? await printHash() : null;
+  // The PDF export and the frame's page count arrive independently.
+  const pageTotal =
+    'Number(document.querySelector(".compiled-page-total")?.textContent.match(/[0-9]+/)?.[0])';
+  await requireReady(`${pageTotal} > 0`, "the book's page count");
+  const readingPage = Math.max(1, (await evaluate(pageTotal)) - 1);
+  await evaluate(`(() => {
+    const input = ${field};
+    input.value = "${readingPage}";
+    input.dispatchEvent(new Event("input", {bubbles:true}));
+    input.dispatchEvent(new KeyboardEvent("keydown", {key:"Enter",bubbles:true}));
+  })()`);
+  await requireReady(`${field}?.value === "${readingPage}"`, "the original reading page", 5_000);
+  await open(paths[1], parentName);
+  const before = await counts();
+  const bookReady = `${current} && ${field}?.value === "${readingPage}" &&
+    document.querySelectorAll("#preview .typst-page").length > 0`;
+  const initialCounters = tabProbeProcesses();
+  const first = await click(bookName, bookReady);
+  if (initialCounters) await sleep(Math.max(0, 10_000 - first[1]));
+  const settledCounters = tabProbeProcesses();
+  if (pdfHash)
+    check((await printHash()) === pdfHash, "cached return exposes the identical printable PDF");
+  check(
+    (await problemText()) === expectedProblems,
+    "cached return restores the same compiler diagnostics",
+  );
+  await click(parentName);
+  await evaluate(`Object.assign(window.__tabProbe,{titles:[],long:[],snapshots:[]})`);
+  const metricsEnabled = process.env.MDRAFT_TEST_PID && process.platform === "win32";
+  const metrics = async () => {
+    if (!metricsEnabled) return {};
+    const response = await page.send("Performance.getMetrics");
+    return Object.fromEntries(
+      response.result.metrics
+        .filter(({ name }) =>
+          /^(LayoutDuration|RecalcStyleDuration|ScriptDuration|TaskDuration)$/.test(name),
+        )
+        .map(({ name, value }) => [name, value]),
+    );
+  };
+  if (metricsEnabled) await page.send("Performance.enable");
+  const startMetrics = await metrics();
+  const times = [];
+  for (let pass = 0; pass < 10; pass++) {
+    times.push(await click(bookName, bookReady), await click(parentName));
+  }
+  const finalMetrics = await metrics();
+  const after = await counts();
+  check(
+    after.mounts === before.mounts && after.work === before.work,
+    "twenty warm switches start no frame, project sync or PDF export",
+    JSON.stringify({ before, after }),
+  );
+  const p95 = (values) => values.sort((a, b) => a - b)[Math.ceil(values.length * 0.95) - 1];
+  console.log(
+    "TAB_CACHE_TIMINGS",
+    JSON.stringify({
+      firstMs: first,
+      readingPage,
+      tenSecondCpu:
+        initialCounters && settledCounters
+          ? Number((settledCounters.cpuSeconds - initialCounters.cpuSeconds).toFixed(2))
+          : null,
+      workingSetMiB: [initialCounters?.workingSetMiB, settledCounters?.workingSetMiB],
+      tabP95Ms: p95(times.map((row) => row[0])),
+      previewP95Ms: p95(times.map((row) => row[1])),
+      browser: await evaluate("JSON.stringify(window.__tabProbe)").then(JSON.parse),
+      rendererMs: Object.fromEntries(
+        Object.entries(finalMetrics).map(([key, value]) => [
+          key,
+          Math.round((value - startMetrics[key]) * 1000),
+        ]),
+      ),
+    }),
+  );
+  const auto = 'document.querySelector(".compiled-toolbar input[type=checkbox]")';
+  await evaluate(`${auto}.click()`);
+  await click(bookName, bookReady);
+  check((await counts()).mounts === before.mounts, "manual mode restores the correct book PDF");
+  await evaluate(`${auto}.click()`);
+  if (!process.env.MDRAFT_LATEX_TAB_PROBE_FILES) {
+    await editor('view.dispatch({changes:{from:view.state.doc.length, insert:"\\n% edited\\n"}})');
+    await requireReady(
+      `document.getElementById("preview").dataset.texpressoSession === "${before.mounts + 1}"`,
+      "the edited book to start a frame",
+      10_000,
+    );
+    await click(parentName);
+    check(
+      await evaluate(`Boolean(${selected(parentName)} && ${current})`),
+      "a second click can leave the edited book during compilation",
+    );
+    await click(bookName, "true");
+    check(
+      await waitFor(
+        `${current} && document.querySelector(".app.latex-texpresso") &&
+        ${field}?.value === "${readingPage}"`,
+        120_000,
+        "the live book to restore its reading page",
+      ),
+      "the edited book hands back to live rendering at the same page",
+    );
+  }
+}
+
+async function fullSuite() {
   console.log("=== the backend switch mounts its own frame ===");
 
   await waitFor(`Boolean(document.querySelector(".cm-content"))`, 30_000, "the editor");
@@ -206,6 +463,7 @@ try {
     "the preview engine and digest table are installed",
   );
   await enableAndCompile();
+  if (!(await findFrame())) await emitMenu(page, "view.latexCompile");
   const booted = await waitFor(
     `document.querySelector("#preview")?.dataset.texpressoReady === "1"`,
     120_000,
@@ -899,169 +1157,75 @@ try {
     `${pathsBeforeSwitch} -> ${pathsAfterSwitch}`,
   );
 
-  console.log("=== a return to another project shows its stored PDF ===");
-  // Each project has its own frame, so a switch between two main documents
-  // mounts a new one. With the exact PDF stored, that PDF is drawn at once and
-  // the new frame warms up under it instead of behind "Typesetting…".
-  const appClass = (name) =>
-    evaluate(`document.querySelector(".app")?.classList.contains(${JSON.stringify(name)})`);
+  console.log("=== an unchanged cross-project return uses only the stored PDF ===");
+  const bookPath = "samples/latex-perf/book/main.tex";
+  // The parent project's manifest includes the book's path. It is still an
+  // independent root, so it may never inherit the parent frame in manual mode.
+  const parentPath = "samples/latex-perf/small.tex";
   const exportCurrent = `(() => {
-    const d = document.querySelector("#preview")?.dataset;
-    return Boolean(d?.latexShadow) && d.latexShadow === d.latexCurrent;
-  })()`;
-  // The book's own tab, read further down: the return must come back to that
-  // page, in the stored PDF and in the frame that replaces it, instead of
-  // page 1 once the new frame has typeset.
-  await openFile("samples/latex-perf/book/main.tex");
-  check(
-    await waitFor(exportCurrent, 180_000, "the book's export for the current text"),
-    "the book's export matches its current text before the switch",
-  );
+  const d = document.querySelector("#preview")?.dataset;
+  return Boolean(d?.latexCurrent) && document.querySelector(".compiled-save-pdf")?.disabled === false;
+})()`;
   const pageField = `document.querySelector(".compiled-pages .compiled-page-field")`;
-  const readingPage = 6;
+  const sessionCount = async () => Number((await dataset("texpressoSession")) ?? "0");
+  await openFile(bookPath);
+  check(
+    await waitFor(exportCurrent, 180_000, "the book's PDF"),
+    "the book is ready before leaving",
+  );
+  const readingPage = Number(
+    await frameEval(`Math.max(1, document.querySelectorAll("#pages .page").length - 1)`),
+  );
   await evaluate(`(() => {
-    const field = ${pageField};
-    field.focus();
-    field.value = "${readingPage}";
-    field.dispatchEvent(new Event("input", { bubbles: true }));
-    field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    field.blur();
-  })()`);
-  /** The 1-based page at the top of the current frame, read in the frame itself. */
-  const framePageAtTop = () =>
-    frameEval(`(() => {
-      const box = document.getElementById("pages");
-      const pages = [...document.querySelectorAll("#pages .page")];
-      if (!box || !pages.length) return 0;
-      const y = box.getBoundingClientRect().top + 4;
-      let at = 1;
-      pages.forEach((node, index) => { if (node.getBoundingClientRect().top <= y) at = index + 1; });
-      return at;
-    })()`);
-  const pageWait = async (label) => {
-    const deadline = Date.now() + 10_000;
-    while (Date.now() < deadline) {
-      if ((await framePageAtTop().catch(() => 0)) === readingPage) return true;
-      await sleep(250);
-    }
-    console.log(`  (timed out waiting for ${label})`);
-    return false;
-  };
+  const field = ${pageField};
+  field.focus();
+  field.value = "${readingPage}";
+  field.dispatchEvent(new Event("input", { bubbles: true }));
+  field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  field.blur();
+})()`);
   check(
-    await pageWait("the page jump in the book's frame"),
-    `the book's frame is read at page ${readingPage} before the switch`,
-    String(await framePageAtTop().catch(() => "no frame")),
+    await waitFor(`${pageField}?.value === "${readingPage}"`, 5_000, "the book's reading page"),
+    `the book is read at page ${readingPage}`,
   );
-  const otherSession = Number((await dataset("texpressoSession")) ?? "0");
-  // A main document in a folder of its own: one directly in samples/ would
-  // make every sample, the book included, part of its project.
-  await openFile("samples/latex-engines/plain.tex");
+  const beforeParent = await sessionCount();
+  await openFile(parentPath);
   check(
     await waitFor(
-      `Number(document.querySelector("#preview")?.dataset.texpressoSession ?? 0) > ${otherSession} && ${exportCurrent}`,
+      `Number(document.querySelector("#preview")?.dataset.texpressoSession ?? 0) > ${beforeParent} && ${exportCurrent}`,
       180_000,
-      "the second project's own frame and export",
+      "the parent project's PDF",
     ),
-    "another project mounts its own frame and exports",
+    "an independent project mounts and exports on its first open",
   );
-  const returnSession = Number((await dataset("texpressoSession")) ?? "0");
-  const waitsBeforeReturn = (await waitLog()).length;
-  await openFile("samples/latex-perf/book/main.tex");
+  const parentSession = await sessionCount();
+  await openFile(bookPath);
   check(
     await waitFor(
-      `document.querySelectorAll("#preview .typst-page").length > 0`,
+      `${exportCurrent} && ${pageField}?.value === "${readingPage}" &&
+      document.querySelectorAll("#preview .typst-page").length > 0`,
       5_000,
-      "the stored PDF",
+      "the stored PDF at the reading page",
     ),
-    "the return draws the stored PDF within seconds",
-    await evaluate(`JSON.stringify({
-      status: document.getElementById("status-file")?.textContent,
-      app: document.querySelector(".app")?.className,
-      label: document.querySelector(".compiled-toolbar .compiled-state-label")?.textContent,
-      data: { ...document.querySelector("#preview")?.dataset },
-      pending: document.querySelector(".preview-pending .preview-pending-phase")?.textContent ?? null,
-    })`),
+    "the stored PDF restores the reading page",
   );
-  check(
-    Number((await dataset("texpressoSession")) ?? "0") > returnSession,
-    "the return mounted a new frame for the book",
+  check((await sessionCount()) === parentSession, "the unchanged book starts no replacement frame");
+
+  // An edit in the cached reader is what brings back a live frame. Keep the
+  // cached page visible until the engine has reached the reader's place.
+  await editor(
+    `view.dispatch({ changes: {from: view.state.doc.length, insert: "\\n% warm return edit\\n"} });`,
   );
-  const coverCovered = await appClass("texpresso-covered");
-  check(
-    coverCovered || (await appClass("texpresso-painted")),
-    "the new frame warms up covered (or has already taken over)",
-  );
-  if (coverCovered) {
-    check(
-      await waitFor(
-        `${pageField}?.value === "${readingPage}" && document.getElementById("preview-pane").scrollTop > 0`,
-        5_000,
-        "the stored PDF at the reader's page",
-      ),
-      `the stored PDF opens at page ${readingPage}, where the tab was left`,
-      await evaluate(
-        `JSON.stringify({ field: ${pageField}?.value, top: document.getElementById("preview-pane").scrollTop })`,
-      ),
-    );
-  }
-  await sleep(1000);
-  const editorBeforeHandover = await editor(`return Math.round(view.scrollDOM.scrollTop);`);
   check(
     await waitFor(
-      `document.querySelector(".app")?.classList.contains("latex-texpresso") && !document.querySelector(".app")?.classList.contains("texpresso-covered") && document.querySelector(".app")?.classList.contains("texpresso-painted")`,
-      300_000,
-      "the frame to take over",
+      `Number(document.querySelector("#preview")?.dataset.texpressoSession ?? 0) === ${parentSession + 1} &&
+     ${exportCurrent} && document.querySelector(".app.latex-texpresso") && ${pageField}?.value === "${readingPage}"`,
+      360_000,
+      "the live frame at the saved page after an edit",
     ),
-    "the frame takes over once it has typeset",
+    "the first edit starts one frame and preserves the reading page",
   );
-  check(
-    (await evaluate(`document.querySelectorAll("#preview .typst-page").length`)) === 0,
-    "the handover drops the stored PDF's view",
-  );
-  // The released frame's target can outlive it for a moment; the new frame is
-  // the only one once it has gone.
-  const frameDeadline = Date.now() + 15_000;
-  let frameTargets = [];
-  while (Date.now() < frameDeadline) {
-    frameTargets = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).filter(
-      (entry) => entry.type === "iframe" && /mdraft-tex\.localhost\/texpresso\//.test(entry.url),
-    );
-    if (frameTargets.length === 1) break;
-    await sleep(250);
-  }
-  if (frameTargets.length === 1)
-    frame = await openPage(port, { type: "iframe", match: /mdraft-tex\.localhost\/texpresso\// });
-  check(
-    frameTargets.length === 1 && (await pageWait("the new frame's landing")),
-    `the frame takes over at page ${readingPage}, not page 1`,
-    JSON.stringify({
-      targets: frameTargets.length,
-      frame: await framePageAtTop().catch(() => "no frame"),
-      field: await evaluate(`${pageField}?.value ?? null`),
-    }),
-  );
-  const editorAfterHandover = await editor(`return Math.round(view.scrollDOM.scrollTop);`);
-  check(
-    Math.abs(editorAfterHandover - editorBeforeHandover) <= 2,
-    "the landing leaves the editor where the tab switch restored it",
-    `${editorBeforeHandover} -> ${editorAfterHandover}`,
-  );
-  const returnWaits = shownWaits((await waitLog()).slice(waitsBeforeReturn));
-  check(
-    returnWaits.length === 0,
-    "the return never shows the waiting surface",
-    JSON.stringify(returnWaits.slice(0, 3)),
-  );
-  // A tab of another kind hides the same frame; coming back shows it where it was.
-  await openFile("samples/feature-tour.md");
-  await openFile("samples/latex-perf/book/main.tex");
-  check(
-    await pageWait("the kept frame's page"),
-    `a frame kept across another tab still shows page ${readingPage}`,
-    String(await framePageAtTop().catch(() => "no frame")),
-  );
-  // The sections below were written against the chapter tab; it belongs to the
-  // same project, so the frame stays.
+  await attachFrame();
   await openFile("samples/latex-perf/book/chapters/ch06.tex");
 
   console.log("=== recompile from scratch ===");
@@ -1544,6 +1708,11 @@ try {
     "the bundled engine menu offers no pdfLaTeX",
     JSON.stringify(labels),
   );
+}
+
+try {
+  if (process.env.MDRAFT_LATEX_TAB_PROBE === "1") await tabCacheProbe();
+  else await fullSuite();
 } catch (error) {
   check(false, `uncaught: ${error.message}`);
 } finally {

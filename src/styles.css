@@ -3674,6 +3674,9 @@ label.optional-tools-row:hover {
   transform: scale(var(--typst-fit));
   transform-origin: top left;
   background: var(--bg);
+  /* Shell size comes from the PDF viewport. Off-screen text and links can
+     defer their layout when the view is reattached on a tab return. */
+  content-visibility: auto;
   /* The canvas screen-blends with this surface; keep that blend inside the
      page instead of letting it reach the shell or the pane. */
   isolation: isolate;

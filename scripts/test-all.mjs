@@ -423,6 +423,18 @@ const SUITES = [
     safeWithInstalledApp: true,
   },
   {
+    id: "latex-tab-cache",
+    title: "LaTeX cached tab returns",
+    kind: "cdp",
+    script: "latex-texpresso-test.mjs",
+    doc: "samples/latex-engines/plain.tex",
+    env: { MDRAFT_LATEX_TAB_PROBE: "1" },
+    safeWithInstalledApp: true,
+    optIn: true,
+    origin: true,
+    reuseProfile: true,
+  },
+  {
     // The production preview (docs/architecture.md): its
     // own frame on `mdraft-tex`, correspondence, its own PDF export, zoom,
     // themes, manual mode, privacy and the switch back. Opt-in because it needs

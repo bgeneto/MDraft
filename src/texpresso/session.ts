@@ -110,7 +110,7 @@ export class TexpressoSession {
     );
     frame.ready.then(
       (info) => {
-        if (frame !== this.frame) return;
+        if (frame !== this.frame || this.broken) return;
         this.info = info;
         frame.post({
           type: "init",
@@ -172,14 +172,15 @@ export class TexpressoSession {
    * changed are sent, binaries as transferred buffers, removals by name.
    */
   sync(prepared: PreparedProject, active: string | null): void {
+    const previousToken = this.projectToken;
+    this.projectToken = prepared.projectToken;
     this.project = prepared;
     this.active = active;
-    if (!this.ready) return;
-    this.sendProject(prepared, false);
+    if (this.ready) this.sendProject(prepared, false);
+    if (previousToken) this.handlers.revokeToken?.(previousToken);
   }
 
   private sendProject(prepared: PreparedProject, replace: boolean): void {
-    this.projectToken = prepared.projectToken;
     if (replace) {
       this.projectFetched.clear();
       this.fetchedStamps.clear();
@@ -430,10 +431,12 @@ export class TexpressoSession {
     window.clearInterval(this.watchdog);
     this.broken = true;
     this.queued = [];
-    await this.frame.dispose();
-    if (this.projectToken) {
-      this.handlers.revokeToken?.(this.projectToken);
-      this.projectToken = null;
+    const token = this.projectToken;
+    this.projectToken = null;
+    try {
+      await this.frame.dispose();
+    } finally {
+      if (token) this.handlers.revokeToken?.(token);
     }
   }
 }

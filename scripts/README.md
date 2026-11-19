@@ -40,7 +40,7 @@ license files. Private records and source captures must remain outside this tree
 | `optimize-site-images.py` | `--check` validates canonical public WebP sizes/container metadata using Python only; `--write --source <private-captures>` needs Pillow; `MDRAFT_CAPTURE_DIR` can provide that explicit source |
 | `preview-group-prototype.mjs` | Test-only grouping helpers imported by the performance suite; never application code |
 | `preview-native-compare.mjs` | `[port]`; CDP/native preview comparison run by the isolated test harness |
-| `latex-texpresso-test.mjs` | `[port]`; opt-in isolated TeXpresso layer (needs `MDRAFT_TEXPRESSO_MIRROR` and `MDRAFT_TEXPRESSO_ENGINE`): frame boot, correspondence, export, a return to another project drawing its stored PDF while the new frame warms up, the split Compile menu's Recompile from Scratch (new session, cleared logs, status), links followed instead of mapped (a destination scrolls the preview, a web address reaches a stubbed opener), privacy and the switch back |
+| `latex-texpresso-test.mjs` | `[port]`; opt-in isolated TeXpresso layer (needs `MDRAFT_TEXPRESSO_MIRROR` and `MDRAFT_TEXPRESSO_ENGINE`): frame boot, correspondence, export, an unchanged return drawing its stored PDF without starting another frame, followed by a real edit that starts live rendering, the split Compile menu's Recompile from Scratch (new session, cleared logs, status), links followed instead of mapped (a destination scrolls the preview, a web address reaches a stubbed opener), privacy and the switch back |
 | `latex-texpresso-limits-test.mjs` | `[port]`; opt-in isolated layer `latex-texpresso-limits` (needs `MDRAFT_TEXPRESSO_MIRROR` and `MDRAFT_TEXPRESSO_ENGINE`): the XeLaTeX preview draws virtual fonts (T1 Times and Charter: no font warning, inked pixels on the page canvas); a build the engine abandons (the frame's `Failed after …: The engine ran out of memory`, forced at the export) reads PDF with errors with a partial PDF, Export › PDF and Print off and the installed-TeX route in Logs; that verdict releases the frame and draws the partial PDF with PDF.js, an edit then starts no build, and Compile starts a new frame that reads PDF ready again, after which edits build again |
 | `latex-pdf-image-test.mjs` | `[port]`; opt-in isolated layer `latex-pdf-image` (needs `MDRAFT_TEXPRESSO_MIRROR` and `MDRAFT_TEXPRESSO_ENGINE`): the TeXpresso preview draws a PDF figure with pdf.js (no `renderer: cannot load image`, the figure's pixels on the page) and the frame's own export carries it |
 | `latex-pdf-image-fixture.mjs` | No arguments; writes the git-ignored `samples/latex-pdf-image/figures/swatch.pdf` that the `latex-pdf-image` layer includes (the runner calls it as the layer's `prepare` step, because the repository refuses committed PDFs) |
@@ -62,6 +62,14 @@ license files. Private records and source captures must remain outside this tree
 GUI/CDP tests require an isolated test app and the fixture the harness selects.
 They must not reset a user's settings/profile. Node's WebSocket CDP scripts enable
 Runtime, await promises, check exceptionDetails and exit nonzero on failed checks.
+
+The opt-in `latex-tab-cache` layer runs twenty warm tab switches, a manual
+return to a different LaTeX root, and a switch away from a live compile. It logs
+tab and preview latency, title IPC, snapshot timings and renderer long tasks.
+It uses the local TeXpresso mirror and temporary synthetic documents by default.
+For a read-only benchmark of existing projects, pass
+`MDRAFT_LATEX_TAB_PROBE_FILES` as a JSON array containing the book and parent
+document paths in that order.
 
 ## npm command inventory
 

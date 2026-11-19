@@ -1391,19 +1391,16 @@ export function createEditor(host: HTMLElement, options: EditorOptions = {}): Ed
       // Drop a grammar promise that belongs to the buffer we just left.
       languageGeneration += 1;
       resetSpellLanguage();
-      // setState does not run the update listener, so the word cache — which
-      // lives beside the view, not in the state — would otherwise keep counting
-      // the previous document.
-      view.setState(state);
-      // The restored state carries the parse context it was captured with. A
-      // document that has since been replaced by another one leaves ranges that
-      // lie outside this buffer, and the next text change throws while mapping
-      // them. Discard it here; displayDoc installs the session's own grammar
-      // afterwards, which parses the document that is actually on screen.
-      view.dispatch({ effects: languageCompartment.reconfigure([]) });
-      // `setState` does not run field updates, so the restored state can still
-      // carry the previous tab's preview highlight.
-      view.dispatch({ effects: syncRangeEffect.of(null) });
+      // Clear the captured parse context and preview highlight before mounting
+      // the state. A restored parse context can hold ranges from the old view.
+      // Applying these effects to the live view would lay out the buffer again.
+      const restored = state.update({
+        effects: [languageCompartment.reconfigure([]), syncRangeEffect.of(null)],
+      }).state;
+      // setState bypasses the update listener, so rebind the view's word count.
+      view.setState(restored);
+      // applyLayout must reapply current spelling preferences to this state.
+      spellKey = "";
       rebuildWordCache(view.state.doc);
       const applyScroll = () => {
         view.scrollDOM.scrollTop = scrollTop;

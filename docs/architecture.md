@@ -65,7 +65,11 @@ engine bytes are pinned by SHA-256, and PhiTeX's frame keeps `connect-src
 'self'` while Rust fetches its package packs. The TeXpresso frame's bounded
 project manifest lets the engine fetch a file it actually opens through a
 per-frame capability on the same origin, without predicting every package's file
-names; PhiTeX receives the bounded project snapshot directly. Native builds copy
+names; PhiTeX receives the bounded project snapshot directly. The live LaTeX frame paints pages independently of the complete PDF used for
+export and print. A tab return validates the project identity and snapshot
+before mounting a frame. An exact cache hit restores the PDF at the reading
+page, or keeps the already current live frame for the same project. A different
+or edited project starts a frame when it has work. Native builds copy
 that manifest into a session workspace, reuse its auxiliary files and caches,
 and decide another pass or a bibliography tool from the generated file state. Project files are copied, never
 hard-linked. Shell escape and project executables remain disabled. Native tools
