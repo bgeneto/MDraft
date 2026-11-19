@@ -101,6 +101,11 @@ export type FrameMessage =
   | { type: "ack"; seq: number; file: string; length: number; hash: number }
   | { type: "status"; busy: boolean; problems: TexpressoProblem[] | null }
   | { type: "painted"; seq: number; done: boolean; pages: number }
+  /**
+   * The frame's page count changed after its paint was reported: a long
+   * document keeps typesetting past the pause that ended the paint wait.
+   */
+  | { type: "pages"; pages: number }
   | {
       type: "viewport";
       scrollTop: number;
@@ -225,6 +230,8 @@ export function parseFrameMessage(data: unknown): FrameMessage | null {
       return int(m.seq) && typeof m.done === "boolean" && int(m.pages)
         ? { type: "painted", seq: m.seq, done: m.done, pages: m.pages }
         : null;
+    case "pages":
+      return int(m.pages) && m.pages >= 0 ? { type: "pages", pages: m.pages } : null;
     case "viewport": {
       // Older frames predate `page`; their reports stay usable without it.
       const page =

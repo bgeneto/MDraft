@@ -297,6 +297,31 @@ try {
       `document.documentElement.dataset.mdraftTrace ?? "(no trace)"`,
     ).catch(() => "(no trace)")}`,
   );
+  console.log("=== the page total follows the whole document ===");
+  // The first paint is reported once the canvas count holds still briefly; a
+  // long document keeps typesetting after that pause, and the toolbar's total
+  // must follow it to the end instead of freezing at the first pause.
+  const typesetDeadline = performance.now() + 180_000;
+  while (
+    performance.now() < typesetDeadline &&
+    (await frameEval(`document.getElementById("status")?.classList.contains("busy") ?? false`))
+  )
+    await sleep(500);
+  await sleep(1500);
+  const pageTotals = {
+    frame: await frameEval(`document.querySelectorAll("#pages .page").length`),
+    host: await evaluate(
+      `Number(document.querySelector("#preview")?.dataset.texpressoPages ?? "0")`,
+    ),
+    strip: await evaluate(`document.querySelector(".compiled-page-total")?.textContent ?? ""`),
+  };
+  check(
+    pageTotals.frame > 1 &&
+      pageTotals.host === pageTotals.frame &&
+      pageTotals.strip.includes(String(pageTotals.frame)),
+    "the page total is the frame's page count once typesetting ends",
+    JSON.stringify(pageTotals),
+  );
   // The stored PDF is the reader's document: a fresh export of the idle frame
   // has the same pages and the same text.
   await emitMenu(page, "view.latexTexpressoExport");

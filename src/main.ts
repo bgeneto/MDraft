@@ -5604,6 +5604,15 @@ function texpressoMessage(session: TexpressoSession, message: FrameMessage): voi
       else if (message.done) syncPreviewFromSource();
       break;
     }
+    case "pages":
+      // Only the total: the paint, its sequence and the hand-over stay with
+      // the `painted` report.
+      if (!texpressoHasPages) break;
+      preview.dataset.texpressoPages = String(message.pages);
+      texpressoPageCount = message.pages;
+      texpressoPage = message.pages > 0 ? Math.min(message.pages, Math.max(1, texpressoPage)) : 1;
+      updatePageChrome();
+      break;
     case "viewport":
       texpressoScrollTop = message.scrollTop;
       if (message.page !== null) texpressoPage = message.page;

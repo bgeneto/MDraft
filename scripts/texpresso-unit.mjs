@@ -210,6 +210,8 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     // A frame with no page laid out still reports its scroll position.
     { v: 1, type: "viewport", scrollTop: 0, page: null, file: null, line: null, gesture: true },
     { v: 1, type: "scrolled", seq: 5, scrollTop: null },
+    // The page count after the paint, as a long document keeps typesetting.
+    { v: 1, type: "pages", pages: 412 },
     { v: 1, type: "source", file: null, from: 0, to: 0, detail: 1 },
     {
       v: 1,
@@ -254,6 +256,9 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
       problems: [{ file: "m", line: 1, column: 1, severity: "info", message: "x" }],
     },
     { v: 1, type: "painted", seq: 1, done: true },
+    { v: 1, type: "pages", pages: -1 },
+    { v: 1, type: "pages", pages: "27" },
+    { v: 1, type: "pages" },
     { v: 1, type: "viewport", scrollTop: "12", file: null, line: null, gesture: false },
     { v: 1, type: "viewport", scrollTop: 0, page: 0, file: null, line: null, gesture: false },
     { v: 1, type: "viewport", scrollTop: 0, page: 1.5, file: null, line: null, gesture: false },

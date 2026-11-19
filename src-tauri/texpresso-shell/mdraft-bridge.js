@@ -704,10 +704,32 @@
       if (sent) return;
       sent = true;
       positions.clear();
-      post({ type: "painted", seq, done, pages: document.querySelectorAll("#pages .page").length });
+      reportedPages = document.querySelectorAll("#pages .page").length;
+      post({ type: "painted", seq, done, pages: reportedPages });
     };
     requestAnimationFrame(() => requestAnimationFrame(postNow));
     setTimeout(postNow, 250);
+  };
+  /**
+   * The page count after the paint was reported. The paint ends at the first
+   * pause in the canvas count, but a long document keeps typesetting after it
+   * (and an edit may drop pages): without this the host's page total stays
+   * at whatever the first pause showed. Null until the first paint.
+   */
+  let reportedPages = null;
+  let pagesTimer = 0;
+  const reportPages = () => {
+    pagesTimer = 0;
+    if (reportedPages === null) return;
+    const pages = document.querySelectorAll("#pages .page").length;
+    if (pages === reportedPages) return;
+    reportedPages = pages;
+    post({ type: "pages", pages });
+  };
+  const watchPages = (box) => {
+    new MutationObserver(() => {
+      if (!pagesTimer) pagesTimer = setTimeout(reportPages, 250);
+    }).observe(box, { childList: true, subtree: true });
   };
   // The engine reports its progress through `#pages`: the paint is judged from
   // the canvases that are actually on screen (`awaitPages`). The worker is not
@@ -1344,6 +1366,7 @@
     document.body.dataset.view = "pdf";
     guardScroll(box);
     installScroll(box);
+    watchPages(box);
     installInput();
     if (!missing.includes("editor")) installClicks();
     installLinks();
