@@ -185,10 +185,11 @@ async function tabCacheProbe() {
     "\\documentclass{article}\n\\begin{document}\n" + text + "\n\\end{document}\n";
   const book = join(sub, "cache-book.tex");
   const parent = join(base, "cache-parent.tex");
+  const bookPages = 299;
   // Separate main documents, with the book reachable from the parent's manifest.
   writeFileSync(
     book,
-    source(Array.from({ length: 299 }, (_, i) => `Book page ${i + 1}`).join("\n\\newpage\n")),
+    source(Array.from({ length: bookPages }, (_, i) => `Book page ${i + 1}`).join("\n\\newpage\n")),
   );
   writeFileSync(parent, source("Parent document."));
   const paths = process.env.MDRAFT_LATEX_TAB_PROBE_FILES
@@ -259,6 +260,56 @@ async function tabCacheProbe() {
     }).observe({type:"longtask"});
   })()`);
   await open(paths[0], bookName);
+  // The PDF export and the frame's page count arrive independently.
+  const pageTotal =
+    'Number(document.querySelector(".compiled-page-total")?.textContent.match(/[0-9]+/)?.[0])';
+  await requireReady(`${pageTotal} > 0`, "the book's page count");
+  if (!process.env.MDRAFT_LATEX_TAB_PROBE_FILES) {
+    await requireReady(`${pageTotal} === ${bookPages}`, "the full book's page count");
+    const bookFrame = await openPage(port, { type: "iframe", match: /mdraft-tex\.localhost/ });
+    const reportPages = (pages) =>
+      bookFrame.evaluate(`parent.postMessage({v:1,type:"pages",pages:${pages}},
+        new URLSearchParams(location.search).get("host"))`);
+    try {
+      const before = await counts();
+      // Send the provisional and final totals from the frame with a tab switch
+      // between them, independent of typesetting speed.
+      await reportPages(bookPages - 1);
+      await requireReady(`${pageTotal} === ${bookPages - 1}`, "the provisional total", 5_000);
+      const note = join(base, "cache-note.md");
+      writeFileSync(note, "A Markdown tab.\n");
+      await invoke("plugin:event|emit", { event: "open-files", payload: [note] });
+      await requireReady(
+        `${selected(basename(note))} && document.querySelector(".texpresso-host")?.hidden`,
+        "the Markdown tab to hide the book frame",
+        5_000,
+      );
+      await evaluate(`(() => {
+        const source = document.querySelector(".texpresso-frame").contentWindow;
+        function receive(event) {
+          if (event.source !== source || event.data?.type !== "pages" || event.data.pages !== ${bookPages}) return;
+          window.removeEventListener("message", receive);
+          window.__tabProbe.latePages = event.data.pages;
+        }
+        window.addEventListener("message", receive);
+      })()`);
+      await reportPages(bookPages);
+      await requireReady(
+        `window.__tabProbe.latePages === ${bookPages}`,
+        "the hidden page report",
+        5_000,
+      );
+      await click(bookName, `${current} && document.querySelector(".app.latex-texpresso")`);
+      const total = await evaluate(pageTotal);
+      check(
+        (await counts()).mounts === before.mounts && total === bookPages,
+        "an unchanged live frame restores the count it reported while hidden",
+        `${total} of ${bookPages}`,
+      );
+    } finally {
+      bookFrame.close();
+    }
+  }
   // Capture the same bytes the Print menu would send. The stub keeps the test
   // inside the staged WebView and never opens a print dialog.
   await evaluate(`(() => {
@@ -286,10 +337,6 @@ async function tabCacheProbe() {
     evaluate(`document.getElementById("compiler-problems")?.textContent ?? ""`);
   const expectedProblems = await problemText();
   const pdfHash = process.platform === "win32" ? await printHash() : null;
-  // The PDF export and the frame's page count arrive independently.
-  const pageTotal =
-    'Number(document.querySelector(".compiled-page-total")?.textContent.match(/[0-9]+/)?.[0])';
-  await requireReady(`${pageTotal} > 0`, "the book's page count");
   const readingPage = Math.max(1, (await evaluate(pageTotal)) - 1);
   await evaluate(`(() => {
     const input = ${field};

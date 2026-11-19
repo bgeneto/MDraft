@@ -4992,8 +4992,19 @@ function texpressoShow(visible: boolean): void {
   texpressoHostElement().hidden = !visible;
   app.classList.toggle("latex-texpresso", texpressoShown);
   app.classList.toggle("texpresso-covered", visible && texpressoCovered);
-  if (texpressoShown) preview.dataset.latexBackend = "texpresso";
-  else delete preview.dataset.latexBackend;
+  if (texpressoShown) {
+    preview.dataset.latexBackend = "texpresso";
+    texpressoPresentPages();
+  } else {
+    delete preview.dataset.latexBackend;
+    updatePageChrome();
+  }
+}
+
+function texpressoPresentPages(): void {
+  preview.dataset.texpressoPages = String(texpressoPageCount);
+  app.classList.toggle("texpresso-painted", texpressoHasPages);
+  if (texpressoHasPages && texpressoShowing()) clearPending();
   updatePageChrome();
 }
 
@@ -5108,18 +5119,15 @@ function texpressoRelease(): void {
   texpresso = null;
   texpressoOwner = null;
   texpressoKey = null;
-  texpressoSetPages(false);
+  texpressoResetPages();
   texpressoShow(false);
 }
 
-/** Record whether the frame has a page; the stylesheet keeps the surface off a drawn page. */
-function texpressoSetPages(on: boolean): void {
-  texpressoHasPages = on;
-  app.classList.toggle("texpresso-painted", on);
-  if (!on) {
-    texpressoPage = 1;
-    texpressoPageCount = 0;
-  }
+function texpressoResetPages(): void {
+  texpressoHasPages = false;
+  texpressoPage = 1;
+  texpressoPageCount = 0;
+  app.classList.remove("texpresso-painted");
   updatePageChrome();
 }
 
@@ -5221,7 +5229,7 @@ function texpressoPrepare(build: LatexBuildRequest): boolean {
       build.root.directory,
       texpressoHandlers,
     );
-    texpressoSetPages(false);
+    texpressoResetPages();
     texpressoSessionCount += 1;
     preview.dataset.texpressoSession = String(texpressoSessionCount);
     texpressoLog = [];
@@ -5676,6 +5684,15 @@ const texpressoHandlers = {
   },
   onMessage(session: TexpressoSession, message: FrameMessage): void {
     if (session !== texpresso) return;
+    if (message.type === "pages" && !texpressoHasPages) return;
+    // A retained frame can finish while hidden and only reports a count once.
+    // Save it for that frame's return before deciding which tab can show it.
+    if (message.type === "painted" || message.type === "pages") {
+      const pages = message.pages;
+      texpressoPageCount = pages;
+      texpressoPage = pages > 0 ? Math.min(pages, Math.max(1, texpressoPage)) : 1;
+      texpressoHasPages ||= pages > 0;
+    }
     if (!texpressoShown && !texpressoCovered && !previewCovers(texpressoOwner)) return;
     texpressoMessage(session, message);
   },
@@ -5746,15 +5763,7 @@ function texpressoMessage(session: TexpressoSession, message: FrameMessage): voi
         preview.dataset.texpressoE2p = String(Math.round(ms));
       }
       preview.dataset.texpressoPainted = String(message.seq);
-      preview.dataset.texpressoPages = String(message.pages);
-      texpressoPageCount = message.pages;
-      texpressoPage = message.pages > 0 ? Math.min(message.pages, Math.max(1, texpressoPage)) : 1;
-      updatePageChrome();
-      // The first page is the end of the wait: the frame is content now.
-      if (message.pages > 0 && !texpressoHasPages) {
-        texpressoSetPages(true);
-        if (texpressoShowing()) clearPending();
-      }
+      texpressoPresentPages();
       // A finished page, not the first one: a half-typeset document must not
       // replace the complete stored PDF.
       if (message.done && message.pages > 0 && texpressoCovered)
@@ -5768,11 +5777,7 @@ function texpressoMessage(session: TexpressoSession, message: FrameMessage): voi
     case "pages":
       // Only the total and what waits for it: the paint and its sequence stay
       // with the `painted` report.
-      if (!texpressoHasPages) break;
-      preview.dataset.texpressoPages = String(message.pages);
-      texpressoPageCount = message.pages;
-      texpressoPage = message.pages > 0 ? Math.min(message.pages, Math.max(1, texpressoPage)) : 1;
-      updatePageChrome();
+      texpressoPresentPages();
       if (texpressoCovered) texpressoMaybeHandOver(message.pages);
       else texpressoTryLanding();
       break;
