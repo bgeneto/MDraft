@@ -1398,6 +1398,7 @@ function applyLayout(): void {
     "--editor-max-width",
     width > 0 ? `${width}px` : "none",
   );
+  document.documentElement.style.setProperty("--editor-line-padding", width > 0 ? "28px" : "8px");
 
   const zoom = zoomFactor();
   document.documentElement.style.setProperty("--preview-zoom", String(zoom));

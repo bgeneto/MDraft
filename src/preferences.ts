@@ -2044,6 +2044,7 @@ function buildSections(
         {
           kind: "select",
           label: "Content Width",
+          help: "Narrow, Comfortable and Wide cap the content width; they look the same when the pane is narrower than their limits. Full width fills the pane and uses smaller side margins in the source editor.",
           options: [
             ["860", "Narrow"],
             ["980", "Comfortable"],

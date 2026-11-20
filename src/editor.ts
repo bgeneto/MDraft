@@ -456,8 +456,8 @@ const baseTheme = EditorView.theme({
   // Horizontal padding belongs on the line, not on `.cm-content`. CodeMirror
   // measures the full-width rectangles of a multi-line selection from the
   // `.cm-line` padding (`RectangleMarker.forRange`), so padding on the content
-  // box made a selection paint into the 28px margin as a strip left of the text.
-  ".cm-line": { padding: "0 28px" },
+  // box made a selection paint into the margin as a strip left of the text.
+  ".cm-line": { padding: "0 var(--editor-line-padding, 28px)" },
   ".cm-gutters": { backgroundColor: "transparent", border: "none" },
   // Padding on the line would otherwise widen every line-level background.
   // Keep the active-line tint inside the text column, as it was when the
