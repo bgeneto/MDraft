@@ -637,21 +637,12 @@
       }, { passive: true });
       let told = "";
       const pick = () => setTimeout(() => {
-        const rn = root2.getRootNode();
-        const sel = rn.getSelection?.() ?? document.getSelection();
-        if (!sel || sel.isCollapsed || !sel.rangeCount) return;
         const out = /* @__PURE__ */ new Map();
-        for (let i = 0; i < sel.rangeCount; i++) {
-          for (const r of sel.getRangeAt(i).getClientRects()) {
-            for (const s of this.slots) {
-              const b = s.el.getBoundingClientRect();
-              if (r.bottom < b.top || r.top > b.bottom || r.right < b.left || r.left > b.right) continue;
-              const k = Number(s.el.dataset.k), sx = this.size.w / b.width, sy = this.size.h / b.height;
-              const list = out.get(k) ?? [];
-              list.push([(r.left - b.left) * sx, (r.top - b.top) * sy, r.width * sx, r.height * sy]);
-              out.set(k, list);
-            }
-          }
+        for (const { slot, box } of this.selectedTextBoxes()) {
+          const k = Number(slot.el.dataset.k);
+          const rects = out.get(k) ?? [];
+          rects.push(box);
+          out.set(k, rects);
         }
         if (!out.size) return;
         const sel2 = [...out].map(([k, rects]) => ({ k, rects }));
@@ -1706,7 +1697,7 @@
      * The editor's selection on the pages: `marks` highlighted until the next
      * call ([] clears), scrolled to only if none of them is on screen.
      */
-    marks(marks) {
+    marks(marks, scroll = true) {
       for (const m of this.root.querySelectorAll(".sel")) m.remove();
       const { w, h } = this.size;
       let first, seen = false;
@@ -1725,12 +1716,27 @@
           if (r.bottom > v.top && r.top < v.bottom) seen = true;
         }
       }
-      if (first && !seen) this.scroller.scrollTo({ top: first.offsetTop + first.parentElement.offsetTop - this.scroller.clientHeight / 3, behavior: "auto" });
+      if (scroll && first && !seen) this.scroller.scrollTo({ top: first.offsetTop + first.parentElement.offsetTop - this.scroller.clientHeight / 3, behavior: "auto" });
     }
     /** The selection the pages' text is in (the panel's shadow root's, where the browser keeps one). */
     selection() {
       const rn = this.root.getRootNode();
       return rn.getSelection?.() ?? this.root.ownerDocument.getSelection();
+    }
+    selectionRanges() {
+      const selection = this.selection();
+      if (!selection) return [];
+      const root2 = this.root.getRootNode();
+      if (root2 instanceof ShadowRoot && !root2.getSelection && selection.getComposedRanges) {
+        return selection.getComposedRanges({ shadowRoots: [root2] }).flatMap(({ startContainer, startOffset, endContainer, endOffset }) => {
+          if (!this.root.contains(startContainer) || !this.root.contains(endContainer)) return [];
+          const range = this.root.ownerDocument.createRange();
+          range.setStart(startContainer, startOffset);
+          range.setEnd(endContainer, endOffset);
+          return range.collapsed ? [] : [range];
+        });
+      }
+      return selection.isCollapsed ? [] : Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i));
     }
     /**
      * The place in the pages' text a point on the screen selects to (text.ts's
@@ -1758,33 +1764,36 @@
       if (!c) return null;
       return { node: texts2[c.i].firstChild, off: c.off, k, line: lines2[c.i] };
     }
-    /** The text selected on the pages, as blocks a line (`.mark.seltext`), the old ones gone. */
-    drawSelection() {
-      for (const m of this.root.querySelectorAll(".seltext")) m.remove();
-      const rn = this.root.getRootNode();
-      const sel = rn.getSelection?.() ?? this.root.ownerDocument.getSelection();
-      if (!sel || sel.isCollapsed || !sel.rangeCount) return;
-      const { w, h } = this.size;
-      for (let i = 0; i < sel.rangeCount; i++) {
-        const r = sel.getRangeAt(i);
-        for (const s of this.slots) {
-          if (!r.intersectsNode(s.el)) continue;
-          ensureText(s.el);
-          for (const t of s.el.querySelectorAll("text")) {
-            const l = LAYER_LINES.get(t);
-            if (!l || !l.text || !r.intersectsNode(t)) continue;
-            const node = t.firstChild;
-            const from2 = node && r.startContainer === node ? r.startOffset : 0;
-            const to = node && r.endContainer === node ? r.endOffset : l.text.length;
+    /** The layout of the selected SVG text is also the geometry for reverse sync. */
+    selectedTextBoxes() {
+      const boxes2 = [];
+      for (const range of this.selectionRanges()) {
+        for (const slot of this.slots) {
+          if (!range.intersectsNode(slot.el)) continue;
+          ensureText(slot.el);
+          for (const text of slot.el.querySelectorAll("text")) {
+            const line = LAYER_LINES.get(text);
+            if (!line?.text || !range.intersectsNode(text)) continue;
+            const from2 = range.startContainer === text.firstChild ? range.startOffset : 0;
+            const to = range.endContainer === text.firstChild ? range.endOffset : line.text.length;
             if (to <= from2) continue;
-            const x0 = l.xs?.[from2] ?? l.x, x1 = l.rs?.[to - 1] ?? l.x + l.w;
-            const m = document.createElement("div");
-            m.className = "mark seltext";
-            const top = l.y - l.size * 0.8, ht = l.size * 1.05;
-            Object.assign(m.style, { left: `${x0 / w * 100}%`, top: `${top / h * 100}%`, width: `${(x1 - x0) / w * 100}%`, height: `${ht / h * 100}%` });
-            s.el.append(m);
+            const x = line.xs?.[from2] ?? line.x;
+            const right = line.rs?.[to - 1] ?? line.x + line.w;
+            boxes2.push({ slot, box: [x, line.y - line.size * 0.8, right - x, line.size * 1.05] });
           }
         }
+      }
+      return boxes2;
+    }
+    /** The text selected on the pages, as blocks a line (`.mark.seltext`). */
+    drawSelection() {
+      for (const mark of this.root.querySelectorAll(".seltext")) mark.remove();
+      const { w, h } = this.size;
+      for (const { slot, box: [x, y, width, height] } of this.selectedTextBoxes()) {
+        const mark = document.createElement("div");
+        mark.className = "mark seltext";
+        Object.assign(mark.style, { left: x / w * 100 + "%", top: y / h * 100 + "%", width: width / w * 100 + "%", height: height / h * 100 + "%" });
+        slot.el.append(mark);
       }
     }
     /** Esc: the highlights gone (the editor's selection and cursor's word, a double-click's place, find's matches) and the text selected on the pages; whether there were any. */
@@ -3651,7 +3660,7 @@ li.folded > .phx-row .phx-fold::before { content: "\u25B8"; }
     /** One frame at time `t`, `dt` ms after the last: false once at rest. */
     tick(t, dt) {
       const want = [0, 0];
-      let busy2 = false;
+      let busy = false;
       for (const i of [0, 1]) {
         const to = this.target(i, t);
         const u = dt > 0 ? (to - this.prev[i]) / dt : 0;
@@ -3659,7 +3668,7 @@ li.folded > .phx-row .phx-fold::before { content: "\u25B8"; }
         this.prev[i] = to;
         const held = [...this.holds.values()].some((h) => h.axis === i);
         if (!held && Math.abs(to - a.x) < 0.1 && Math.abs(a.v) < 3e-3) a.x = to, a.v = 0;
-        else busy2 = true;
+        else busy = true;
         this.ax[i] = a;
         want[i] = Math.round(a.x) - this.done[i];
       }
@@ -3678,8 +3687,8 @@ li.folded > .phx-row .phx-fold::before { content: "\u25B8"; }
       const z = this.target(2, t);
       if (z !== this.prev[2]) this.host.zoom?.(Math.exp(z - this.prev[2]));
       this.prev[2] = z;
-      if ([...this.holds.values()].some((h) => h.axis === 2)) busy2 = true;
-      return busy2;
+      if ([...this.holds.values()].some((h) => h.axis === 2)) busy = true;
+      return busy;
     }
   };
   function zoomAnchor(r, p) {
@@ -3739,7 +3748,7 @@ li.folded > .phx-row .phx-fold::before { content: "\u25B8"; }
       if (reduced()) return void scroll(axis ? 0 : dir * n * LINE, axis ? dir * n * LINE : 0);
       if (!e.repeat || !glide.holding(e.code || e.key)) glide.press(e.code || e.key, axis, dir, n);
     };
-    const zoom = (e, dir, n) => {
+    const zoom2 = (e, dir, n) => {
       if (!t.zoomBy) return t.zoom(ZOOM_STEP ** (dir * n));
       const instant = reduced();
       if (e.repeat && !instant && glide.holding(e.code || e.key)) return;
@@ -3826,11 +3835,11 @@ li.folded > .phx-row .phx-fold::before { content: "\u25B8"; }
           case "K":
           case "+":
           case "=":
-            zoom(e, 1, n);
+            zoom2(e, 1, n);
             break;
           case "J":
           case "-":
-            zoom(e, -1, n);
+            zoom2(e, -1, n);
             break;
           case "0":
           case "w":
@@ -7068,6 +7077,9 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
     /** The host's look, and whether the panel has a bar of its own (VS Code, the watch, floating). */
     kind;
     ownBar;
+    showOpening;
+    fitWidthPadding;
+    fitFactor = 1;
     $ = (sel) => this.root.querySelector(sel);
     words;
     constructor(ev, store, opts = {}) {
@@ -7077,6 +7089,8 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
       const vscode = /\bvscode-/.test(document.body?.className ?? "");
       this.kind = opts.host ?? (vscode ? "vscode" : "overleaf");
       this.ownBar = !!opts.header;
+      this.showOpening = opts.opening !== false;
+      this.fitWidthPadding = opts.fitWidthPadding;
       const host = document.createElement("phitex-preview");
       this.root = host.attachShadow({ mode: "open" });
       const item2 = (id, name, label, sub = "", cls = "") => html`<button type="button" role="menuitem" id="${id}" class="${cls || null}">${name ? html`<span class="icon">${name}</span>` : html`<span class="check"></span>`}<span>${label}</span>${sub ? html`<span class="sub">${sub}</span>` : ""}</button>`;
@@ -8106,7 +8120,7 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
      * page's own place and size (before, it could come up at 0 x 0 in the corner).
      */
     sheetUp(now = false) {
-      if (this.opened || this.anim || !this.wasShown) return;
+      if (!this.showOpening || this.opened || this.anim || !this.wasShown) return;
       const st = this.$("#stage");
       if (st.clientWidth < 40 || st.clientHeight < 40) return void requestAnimationFrame(() => this.firstPending() && this.sheetUp(now));
       const el = this.$("#opening");
@@ -8191,18 +8205,18 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
       });
       const a = this.anim;
       const stop = () => this.anim === a && this.stopSheet();
-      const viewer = this.$("#viewer");
+      const viewer2 = this.$("#viewer");
       let exited = false;
       const exit = () => {
         if (exited || this.anim !== a) return;
         exited = true;
         mo.disconnect();
-        void a.done(viewer.querySelector(".slot canvas") ?? void 0).then(stop);
+        void a.done(viewer2.querySelector(".slot canvas") ?? void 0).then(stop);
         setTimeout(stop, 1600);
       };
-      const mo = new MutationObserver(() => viewer.querySelector(".slot canvas") && exit());
-      if (viewer.querySelector(".slot canvas")) exit();
-      else mo.observe(viewer, { childList: true, subtree: true }), setTimeout(exit, 800);
+      const mo = new MutationObserver(() => viewer2.querySelector(".slot canvas") && exit());
+      if (viewer2.querySelector(".slot canvas")) exit();
+      else mo.observe(viewer2, { childList: true, subtree: true }), setTimeout(exit, 800);
     }
     /** The sheet gone (played out, or a card in its place). */
     stopSheet() {
@@ -8368,9 +8382,11 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
       const st = this.stageSize ??= { w: this.$("#stage").clientWidth, h: this.$("#stage").clientHeight };
       const real = (v, or) => v !== void 0 && Number.isFinite(v) && v > 0 ? v : or;
       const pw = real(this.last?.w, 595), ph = real(this.last?.h, 842);
-      const width = Math.max(real(st.w, 0) - 40, 200) / (pw * (96 / 72));
-      const s = z === "fit" ? width : Math.min(width, Math.max(real(st.h, 0) - 24, 100) / (ph * (96 / 72)));
-      return Math.min(8, Math.max(0.25, s));
+      const padding = this.fitWidthPadding ?? 20;
+      const minimumWidth = this.fitWidthPadding === void 0 ? 200 : 1;
+      const width = Math.max(real(st.w, 0) - 2 * padding, minimumWidth) / (pw * (96 / 72));
+      const s = z === "fit" ? width * this.fitFactor : Math.min(width, Math.max(real(st.h, 0) - 24, 100) / (ph * (96 / 72)));
+      return Math.min(8, Math.max(this.fitWidthPadding === void 0 ? 0.25 : 0.1, s));
     }
     goPage(k) {
       this.viewer.goTo(k);
@@ -8579,8 +8595,9 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
     pdf() {
       this.ev.onPdf();
     }
-    zoomTo(z) {
+    zoomTo(z, fitFactor = 1) {
       this.zoomNow = null;
+      this.fitFactor = fitFactor;
       this.prefs.zoom = zoomOf(z);
       this.zoomShown();
       this.save();
@@ -9024,7 +9041,7 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
         }
       );
       if (ev.onBoxes) look.push({ id: "underline", label: "Show them on the PDF", help: "A wavy line under each one, and a mark beside the scrollbar", kind: "toggle", value: this.culpritsOn, disabled: keep, set: pref("underline", (on) => this.culpritsShown(on)) });
-      const problems = KINDS.map(([k, name]) => ({
+      const problems2 = KINDS.map(([k, name]) => ({
         id: `kind-${k}`,
         label: name,
         help: KIND_HELP[k],
@@ -9032,7 +9049,7 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
         value: !this.hiddenKinds.has(k),
         set: (on) => void (!!on === this.hiddenKinds.has(k) && this.toggleKind(k))
       }));
-      if (ev.onBoxes) problems.push(look.splice(look.findIndex((r) => r.id === "underline"), 1)[0]);
+      if (ev.onBoxes) problems2.push(look.splice(look.findIndex((r) => r.id === "underline"), 1)[0]);
       const build2 = [];
       if (ev.onDebug) build2.push({ id: "debug", label: "Debug check", help: "Compare with a fresh build every 5 s (this session only)", kind: "toggle", value: this.debugOn, set: () => this.toggleDebug() });
       build2.push({ id: "reload", label: "Reload the files", help: "Read the project's files again", kind: "action", button: "Reload", set: () => (this.settings(false), void ev.onReload()) });
@@ -9044,7 +9061,7 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
         { title: "Appearance", rows: look },
         { title: "Colour lines", rows: this.waspRows() },
         { title: "Links", rows: this.linkRows() },
-        { title: "Warnings/Errors", rows: problems },
+        { title: "Warnings/Errors", rows: problems2 },
         { title: "Build", rows: build2 },
         { title: "Packages", rows: [] },
         { title: "Updates and tips", rows: tips }
@@ -9692,7 +9709,11 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
       const text = await this.ev.onLog?.().catch((e) => `Couldn't read the log: ${e instanceof Error ? e.message : String(e)}`);
       pre.textContent = text ?? "No log yet: the first build hasn't finished.";
     }
+    updateFitOverflow() {
+      this.$("#stage").classList.toggle("fit", (this.zoomNow ?? this.prefs.zoom) === "fit" && this.fitFactor <= 1);
+    }
     redraw() {
+      this.updateFitOverflow();
       this.viewer?.redraw();
       if (this.viewer) requestAnimationFrame(() => this.drawScrollMarks());
     }
@@ -9723,8 +9744,8 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
       this.ev.onGotoRange?.(file, from2, to, focus);
     }
     /** The editor's selection on the pages ([] clears). */
-    marks(marks) {
-      this.viewer.marks(marks);
+    marks(marks, scroll = true) {
+      this.viewer.marks(marks, scroll);
     }
     /** Collaborators' cursors on the pages ([] clears). */
     others(marks) {
@@ -9765,7 +9786,7 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
       this.walkEnd();
       this.$("#empty").hidden = true;
       this.$("#stage").classList.remove("stale");
-      this.$("#stage").classList.toggle("fit", (this.zoomNow ?? this.prefs.zoom) === "fit");
+      this.updateFitOverflow();
       if (this.viewer.pages <= k) this.viewer.layout(Array.from({ length: Math.max(n, k + 1) }, (_, i) => i === k && hash || `?${i}`));
       this.viewer.set(k, img, hash ?? null);
       this.sheetDown();
@@ -10274,8 +10295,14 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
      * (discovery, first paint, then the incremental program), nothing kept from
      * the last job but the packages already fetched.
      */
-    async clean(files) {
-      for (const [f, t] of Object.entries(files)) if (f !== this.open) this.files[f] = t;
+    async clean(files, main2) {
+      if (main2 === void 0) {
+        for (const [f, t] of Object.entries(files)) if (f !== this.open) this.files[f] = t;
+      } else {
+        this.files = { ...files };
+        this.batches.clear();
+        this.main = main2;
+      }
       for (const n of [...this.pkg.unavailable, ...(this.pkg.failed ?? []).map((f) => f.name)]) this.asked.delete(n);
       this.pkg.unavailable = [];
       this.pkg.failed = [];
@@ -10676,6 +10703,16 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
       })();
     }
     glyphGen = 0;
+    /** The source origins of one laid-out page, reusing the viewer's cache. */
+    sourceGlyphs(page) {
+      if (!this.opened || page < 0 || page >= this.hashes.length) return Promise.resolve([]);
+      return this.glyphsOf(page);
+    }
+    /** Pages with origins for a source byte offset, when the build has found them. */
+    async sourcePages(file, at, stale) {
+      const result = await this.untilMade({ op: "page_of", file, at }, stale);
+      return result?.ok && Array.isArray(result.json?.pages) ? result.json.pages : [];
+    }
     glyphsOf(k) {
       const key = `${k}:${this.hashes[k] ?? ""}`;
       const have = this.glyphCache.get(key);
@@ -10765,12 +10802,15 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
      * selection clears them). [`selectSource`]'s, and an LSP editor's
      * (`{event: "select"}`).
      */
+    selectionGeneration = 0;
     async selectBytes(file, a, b) {
-      if (!this.opened) return;
+      const generation = ++this.selectionGeneration;
       if (a === b) return this.sink.marks?.([]);
+      if (!this.opened) return;
       const out = [];
       for (let k = 0; k < Math.max(this.hashes.length, this.pages); k++) {
         const all = this.cached(k) ?? await this.glyphsOf(k);
+        if (generation !== this.selectionGeneration) return;
         const hit = all.filter((g) => g.file === file && !g.synth && g.start < b && g.end > a);
         if (hit.length) out.push({ k, boxes: boxes(hit, all) });
       }
@@ -11553,10 +11593,10 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
     async request(op) {
       const o = op;
       if (o.op === "png") {
-        const zoom = typeof o.scale === "number" && o.scale > 0;
-        const p = await this.strips.page(o.page ?? 0, zoom ? o.scale : this.panel.pixelsPerPoint(), zoom ? o.view ?? null : this.panel.pageView(o.page ?? 0)).catch((e) => (console.warn("[phitex] page", e), null));
+        const zoom2 = typeof o.scale === "number" && o.scale > 0;
+        const p = await this.strips.page(o.page ?? 0, zoom2 ? o.scale : this.panel.pixelsPerPoint(), zoom2 ? o.view ?? null : this.panel.pageView(o.page ?? 0)).catch((e) => (console.warn("[phitex] page", e), null));
         if (!p) return { ok: false, json: { error: "no such page" } };
-        if (!zoom) this.painted();
+        if (!zoom2) this.painted();
         return { ok: true, canvas: p.el, size: [p.w, p.h], links: p.links };
       }
       return this.t.request(op);
@@ -11590,6 +11630,65 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
     return b.byteOffset === 0 && b.byteLength === b.buffer.byteLength ? b.buffer : b.slice().buffer;
   }
 
+  // src/source-map.ts
+  var segmenter = null;
+  function wordSegmenter() {
+    const IntlAny = Intl;
+    if (!IntlAny.Segmenter) return null;
+    segmenter ??= new IntlAny.Segmenter(void 0, { granularity: "word" });
+    return segmenter;
+  }
+  function lineBounds(source, offset) {
+    let start = 0;
+    for (let i = Math.min(offset, source.length) - 1; i >= 0; i -= 1) {
+      if (source.charCodeAt(i) === 10) {
+        start = i + 1;
+        break;
+      }
+    }
+    let end = source.length;
+    for (let i = Math.max(offset, 0); i < source.length; i += 1) {
+      if (source.charCodeAt(i) === 10) {
+        end = i;
+        break;
+      }
+    }
+    return { start, end };
+  }
+  function wordAt(source, offset) {
+    if (offset < 0 || offset > source.length) return null;
+    const line = lineBounds(source, offset);
+    const slice = source.slice(line.start, line.end);
+    const local = offset - line.start;
+    const splitter = wordSegmenter();
+    if (splitter) {
+      for (const part3 of splitter.segment(slice)) {
+        const end = part3.index + part3.segment.length;
+        if (part3.index <= local && local < end) {
+          return part3.isWordLike ? { from: line.start + part3.index, to: line.start + end } : null;
+        }
+        if (part3.index > local) break;
+      }
+      return null;
+    }
+    let from2 = local;
+    let to = local;
+    const isWord = (ch) => /[\p{L}\p{N}_]/u.test(ch);
+    while (from2 > 0 && isWord(slice[from2 - 1])) from2 -= 1;
+    while (to < slice.length && isWord(slice[to])) to += 1;
+    return to > from2 ? { from: line.start + from2, to: line.start + to } : null;
+  }
+
+  // src/texpresso/protocol.ts
+  function textHash(text) {
+    let value = 2166136261;
+    for (let i = 0; i < text.length; i += 1) {
+      value ^= text.charCodeAt(i);
+      value = Math.imul(value, 16777619);
+    }
+    return value >>> 0;
+  }
+
   // src-tauri/phitex-shell/main.ts
   var V = 1;
   var PROTOCOL_HOST = new URLSearchParams(location.search).get("host") ?? window.location.origin;
@@ -11605,14 +11704,6 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
     trace(text);
     console.log("[phitex]", text);
   };
-  function textHash(text) {
-    let value = 2166136261;
-    for (let i = 0; i < text.length; i += 1) {
-      value ^= text.charCodeAt(i);
-      value = Math.imul(value, 16777619);
-    }
-    return value >>> 0;
-  }
   var WorkerCore = class {
     next = 1;
     waiting = /* @__PURE__ */ new Map();
@@ -11662,87 +11753,37 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
   };
   var pane = document.getElementById("pane");
   var texts = /* @__PURE__ */ new Map();
-  var binaries = /* @__PURE__ */ new Map();
   var main = "main.tex";
-  var active = null;
-  var openCb;
-  var changesCb;
-  var projectResolve = () => {
-  };
-  var projectReady = new Promise((resolve) => projectResolve = resolve);
-  var projectStarted = false;
   var lastSeq = 0;
-  var busy = false;
+  var lastSettledSeq = 0;
   var pageCount = 0;
-  var lastStatus = null;
-  var selectionAt = 0;
-  var pageSizes = /* @__PURE__ */ new Map();
-  var viewportTimer = 0;
-  var viewportBusy = false;
-  var pendingKind = "click";
-  var pendingY = null;
-  var startedAt = performance.now();
+  var hasPainted = false;
+  var disposed = false;
   var hostEditor = {
-    loadProject: async () => {
-      await projectReady;
-      log(`loadProject main=${main} files=${texts.size}`);
-      return { ...Object.fromEntries(texts) };
-    },
+    loadProject: async () => Object.fromEntries(texts),
     mainFile: () => main,
-    onOpen: (callback) => {
-      openCb = callback;
+    // The frame acknowledges transactions immediately and syncs their combined text in batches.
+    onOpen: () => {
     },
-    onChanges: (callback) => {
-      changesCb = callback;
-    },
-    resend: (file) => {
-      const text = texts.get(file);
-      if (text !== void 0) openCb?.(file, text);
-    },
-    ready: () => {
-      log("editor host ready");
+    onChanges: () => {
     }
   };
   var panel = new Panel(
     {
       onPage: (page) => {
-        pageCount = Math.max(pageCount, page + 1);
-        post({
-          type: "viewport",
-          scrollTop: stage()?.scrollTop ?? 0,
-          page: null,
-          file: null,
-          line: null,
-          gesture: false
-        });
+        void session.setPage(page);
+        scheduleViewport();
       },
       onNeed: (page) => void session?.fetch(page),
       onPdf: () => void exportPdf(),
       onMain: (value) => {
         main = value;
       },
-      onReload: () => void session?.reopen(),
-      onClean: () => void session?.clean({ ...Object.fromEntries(texts) }),
-      onGoto: (file, line) => {
-        const text = texts.get(file);
-        if (text === void 0) return;
-        const at = offsetOfLine(text, line);
-        pendingKind = "double";
-        void session?.follow(file, at);
-      },
-      onGotoRange: (file, from2, to) => postSource(file, from2, to, false, pendingKind, null),
-      onSyncSource: (page, x, y) => {
-        pendingKind = "double";
-        pendingY = null;
-        void session?.toSource(page, x, y);
-      },
-      onSelectPage: (selection) => {
-        selectionAt = performance.now();
-        if (!selection.length) return;
-        pendingKind = "select";
-        pendingY = null;
-        void session?.selectPage(selection);
-      },
+      onReload: () => void runTypeset(() => session.reopen()),
+      onClean: () => void runTypeset(() => session.clean(Object.fromEntries(texts), main)),
+      onGoto: (file, line) => queueReveal({ file, line, y: reference, seq: null }),
+      onSyncSource: (page, x, y) => void clickSource(page, x, y, 2),
+      onSelectPage: (selection) => void selectPage(selection),
       onLink: (uri) => post({ type: "link", uri }),
       onSource: async (file) => texts.get(file) ?? null,
       onLog: async () => await session?.log() ?? null,
@@ -11756,6 +11797,8 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
       tips: false,
       keys: false,
       outline: false,
+      opening: false,
+      fitWidthPadding: 16,
       words: {
         byline: "",
         badge: "",
@@ -11775,40 +11818,57 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
   );
   var panelHost = document.querySelector("phitex-preview");
   var panelStyle = document.createElement("style");
-  panelStyle.textContent = ".win.docked > .bar{display:none!important}.byline{display:none!important}.opening{display:none!important}.strips{display:none!important}.win > header{display:none!important}";
+  panelStyle.textContent = `
+  .win.docked > .bar, .byline, .opening, .strips, .win > header { display: none !important; }
+  .win.docked #stage { background: var(--mdraft-pane, #e9edf2); overflow-anchor: none; }
+  .viewer { display: flow-root; }
+  .slot { margin: 16px auto; }
+  .slot .mark.sel { background: var(--mdraft-sync, rgba(255, 193, 7, 0.3)); box-shadow: none; }
+  #viewer[data-blink] .mark.sel { animation: mdraft-pulse 500ms ease-in-out 4; }
+  @keyframes mdraft-pulse { 50% { background: var(--mdraft-sync-peak, rgba(255, 167, 0, 0.55)); } }
+  @media (prefers-reduced-motion: reduce) {
+    #viewer[data-blink] .mark.sel { animation: none; }
+  }
+`;
   panelHost.shadowRoot.append(panelStyle);
   panel.dock(pane);
   panel.shown(true);
   panel.zoomTo("fit");
-  var stage = () => panelHost.shadowRoot?.querySelector("#stage") ?? null;
+  var stage = panelHost.shadowRoot.querySelector("#stage");
+  var viewer = panelHost.shadowRoot.querySelector("#viewer");
   var stripPanel = {
     pixelsPerPoint: () => panel.pixelsPerPoint(),
     pageView: (page) => panel.pageView(page),
     painted: (ms) => {
       panel.painted(ms);
-      postPainted(false);
     }
   };
   var core = new WorkerCore(`phitex-${Math.random().toString(36).slice(2)}`);
   var pages = new StripPages(core, stripPanel, panel.stripsChip());
-  var session;
   var sink = {
     page: (image2, k, n, hash) => {
-      if (image2) pageSizes.set(k, { w: image2.w, h: image2.h });
       panel.page(image2, k, n, hash);
+      if (image2 && !hasPainted) {
+        hasPainted = true;
+        post({ type: "painted", seq: lastSeq, done: false, pages: pageCount });
+        updateStatus();
+      }
+      scheduleViewport();
     },
-    layout: (hashes, previews) => panel.layout(hashes, previews),
+    layout: (hashes, previews) => {
+      panel.layout(hashes, previews);
+      if (pageCount === hashes.length) return;
+      pageCount = hashes.length;
+      post({ type: "pages", pages: pageCount });
+      updateStatus();
+      scheduleViewport();
+    },
     opening: () => panel.opening(),
     status: (status) => {
       lastStatus = status;
-      pageCount = Math.max(pageCount, status.pages);
-      panel.status(status);
-      postStatus();
-    },
-    busy: (on) => {
-      busy = on;
-      panel.busy(on);
-      postStatus();
+      problems = previewProblems(status);
+      problemSignature = JSON.stringify(problems);
+      updateStatus();
     },
     preparing: (on) => panel.preparing(on),
     warmup: (value) => panel.warmup(value),
@@ -11818,16 +11878,9 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
     streaming: (value) => panel.streaming(value),
     painted: (ms) => panel.painted(ms),
     buildTime: (ms, first) => panel.buildTime(ms, first),
-    buildParts: (parts, beside) => panel.buildParts(parts, beside),
-    joinedLate: (first, builds, last) => panel.joinedLate(first, builds, last),
     latency: (summary, details) => panel.latency(summary, details),
     packages: (packages) => panel.packages(packages),
-    files: (names, skipped, took) => panel.files(names, skipped, took),
-    docName: (name) => panel.docName(name),
-    news: (version, text) => panel.news(version, text),
-    goto: (file, from2, to, focus) => postSource(file, from2, to, focus === true, pendingKind, pendingY),
-    marks: (marks) => panel.marks(marks),
-    mark: (k, boxes2, scroll) => panel.mark(k, boxes2, scroll),
+    marks: (marks) => panel.marks(marks, false),
     others: (marks) => panel.others(marks),
     engine: (engine) => panel.engine(engine),
     error: (message) => {
@@ -11839,88 +11892,109 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
     check: (result) => panel.check(result),
     mains: (names, value) => panel.mains(names, value)
   };
-  session = new PreviewSession(hostEditor, pages, sink, {
+  var session = new PreviewSession(hostEditor, pages, sink, {
     checkEveryMs: 0,
     engine: () => "xelatex"
   });
   window.__phitex = { session, panel, pages, core, texts };
+  var EDIT_QUIET_MS = 140;
+  var EDIT_MAX_WAIT_MS = 450;
+  var dirtyFiles = /* @__PURE__ */ new Set();
+  var firstEditAt = 0;
+  var lastEditAt = -Infinity;
+  var batchTimer = 0;
+  var idleTimer = 0;
+  var work = Promise.resolve();
+  var workCount = 0;
+  var buildMs = 0;
+  var lastStatus = null;
+  var appliedStatus = null;
+  var problems = [];
+  var problemSignature = "[]";
+  var sentProblems = "";
+  var sentBusy = false;
   pages.onEvent((event) => {
     switch (event.event) {
-      case "settled": {
-        busy = false;
-        postStatus();
-        postPainted(true);
-        const ms = Math.round(performance.now() - startedAt);
-        const pagesNow = event.pages ?? pageCount;
-        log(`typeset ${pagesNow} page${pagesNow === 1 ? "" : "s"} in ${Math.round(event.ms ?? 0)} ms`);
-        void session?.log().then((line) => {
-          if (!line) return;
-          for (const text of line.split("\n").slice(-80)) if (text.trim()) trace(text);
-        });
-        break;
-      }
-      case "page":
-        pageCount = Math.max(pageCount, event.pages ?? 1);
-        postPainted(false);
-        break;
-      case "building":
-        busy = event.on === true;
-        panel.busy(busy);
-        postStatus();
-        break;
-      case "progress":
-        if (event.phase === "fetching") {
-          const fetched = event.done ?? 0;
-          trace(`fetching packages (${fetched})`);
-        }
-        break;
-      case "diagnostics":
-        postStatus();
+      case "settled":
+        if (event.settling) return;
+        buildMs = event.ms ?? 0;
         break;
       default:
-        break;
+        return;
     }
+    updateStatus();
   });
-  function postStatus() {
-    const problems = (lastStatus?.diagnostics ?? []).filter((item2) => item2.severity === "error" || item2.severity === "warning").map((item2) => ({
+  function previewProblems(status) {
+    return (status.diagnostics ?? []).filter((item2) => item2.severity === "error" || item2.severity === "warning").map((item2) => ({
       file: item2.file ?? "",
       line: item2.line ?? 0,
       column: 0,
       severity: item2.severity === "error" ? "error" : "warning",
       message: item2.message
     }));
-    post({ type: "status", busy, problems });
   }
-  function postPainted(done2) {
-    post({ type: "painted", seq: lastSeq, done: done2, pages: pageCount });
+  function hasTypesetWork() {
+    return workCount > 0 || dirtyFiles.size > 0;
   }
-  function postSource(file, from2, to, focus, kind, y) {
-    const text = texts.get(file);
-    if (text === void 0) return;
-    const a = charOffset(text, from2);
-    const b = charOffset(text, to);
-    post({
-      type: "source",
-      file,
-      from: a,
-      to: b,
-      detail: kind === "double" ? 2 : 1,
-      y,
-      drag: kind === "select",
-      precision: "exact"
+  function updateStatus() {
+    if (disposed) return;
+    window.clearTimeout(idleTimer);
+    const remaining = lastEditAt + EDIT_QUIET_MS - performance.now();
+    const working = hasTypesetWork();
+    const busy = working || remaining > 0;
+    if (!working && busy) idleTimer = window.setTimeout(updateStatus, remaining);
+    if (!busy && lastStatus && appliedStatus !== lastStatus) {
+      panel.status(lastStatus);
+      appliedStatus = lastStatus;
+    }
+    if (busy !== sentBusy || problemSignature !== sentProblems) {
+      if (busy !== sentBusy) panel.busy(busy);
+      post({ type: "status", busy, problems: problemSignature === sentProblems ? null : problems });
+      sentBusy = busy;
+      sentProblems = problemSignature;
+    }
+    if (busy || !hasPainted || !pageCount || lastSeq <= lastSettledSeq) return;
+    lastSettledSeq = lastSeq;
+    post({ type: "painted", seq: lastSeq, done: true, pages: pageCount });
+    log("typeset " + pageCount + " pages in " + Math.round(buildMs) + " ms");
+  }
+  function runTypeset(run) {
+    workCount += 1;
+    updateStatus();
+    work = work.then(async () => {
+      if (!disposed) await run();
+    }).catch((error) => sink.error(String(error))).finally(() => {
+      workCount -= 1;
+      scheduleEdits();
+      updateStatus();
     });
-    if (focus) {
-    }
+    return work;
   }
-  function offsetOfLine(text, line) {
-    const target = Math.max(1, Math.round(line));
-    let at = 0;
-    for (let n = 1; n < target; n += 1) {
-      const next = text.indexOf("\n", at);
-      if (next < 0) return text.length;
-      at = next + 1;
-    }
-    return at;
+  function scheduleEdits() {
+    window.clearTimeout(batchTimer);
+    if (disposed || workCount || !dirtyFiles.size) return;
+    const due = Math.min(firstEditAt + EDIT_MAX_WAIT_MS, lastEditAt + EDIT_QUIET_MS);
+    batchTimer = window.setTimeout(() => void flushEdits(), Math.max(0, due - performance.now()));
+  }
+  function queueEdit(file) {
+    lastEditAt = performance.now();
+    if (!dirtyFiles.size) firstEditAt = lastEditAt;
+    dirtyFiles.add(file);
+    clearMarks();
+    scheduleEdits();
+    updateStatus();
+  }
+  function flushEdits() {
+    window.clearTimeout(batchTimer);
+    if (!dirtyFiles.size) return work;
+    const files = [...dirtyFiles].map((file) => [file, texts.get(file)]);
+    dirtyFiles.clear();
+    return runTypeset(async () => {
+      for (const [file, text] of files) {
+        if (text !== void 0) session.sync(file, text);
+      }
+      await session.flush();
+    });
   }
   function ack(seq, file, length, hash) {
     post({ type: "ack", seq, file, length, hash });
@@ -11930,139 +12004,96 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
     for (const [from2, to, insert] of changes) {
       text = text.slice(0, from2) + insert + text.slice(to);
     }
-    texts.set(file, text);
     return text;
   }
-  function startProject() {
-    if (projectStarted) return;
-    projectStarted = true;
-    log(`startProject main=${main} files=${texts.size}`);
-    projectResolve();
-    session?.start().catch((error) => {
-      post({ type: "error", message: `the preview could not start: ${String(error)}` });
-    });
-  }
-  function applyProject(message) {
+  var projectStarted = false;
+  function applyProject(message, seq) {
     if (message.replace) {
       texts.clear();
-      binaries.clear();
+      lineIndexes.clear();
     }
-    const changed = {};
-    for (const file of message.files ?? []) {
+    const changed = [];
+    for (const file of message.files) {
       if (typeof file.text === "string") {
         texts.set(file.path, file.text);
-        changed[file.path] = file.text;
+        changed.push(file.path);
       } else if (file.bytes) {
-        const bytes = new Uint8Array(file.bytes);
-        binaries.set(file.path, bytes);
-        void core.binary(file.path, bytes);
+        void core.binary(file.path, new Uint8Array(file.bytes));
       }
     }
-    for (const name of message.remove ?? []) {
-      texts.delete(name);
-      binaries.delete(name);
+    let removedText = false;
+    for (const file of message.remove) {
+      if (texts.delete(file)) removedText = true;
+      lineIndexes.delete(file);
     }
-    main = message.main ?? main;
-    active = message.active ?? active;
-    lastSeq = typeof message.seq === "number" ? message.seq : lastSeq;
-    log(`project main=${main} active=${active} files=${texts.size}`);
-    ack(lastSeq, active ?? main, -1, 0);
-    const first = !projectStarted;
-    startProject();
-    if (!first) {
-      if (message.replace) {
-        void session?.clean({ ...Object.fromEntries(texts) });
-      } else if (Object.keys(changed).length) {
-        session?.refresh(changed);
-      }
+    const replace = message.replace || removedText || message.main !== main;
+    main = message.main;
+    session.open = message.active;
+    lastSeq = seq;
+    if (!projectStarted) {
+      projectStarted = true;
+      void runTypeset(() => session.start());
+    } else if (replace) {
+      dirtyFiles.clear();
+      clearMarks();
+      const snapshot = Object.fromEntries(texts);
+      const root2 = main;
+      void runTypeset(() => session.clean(snapshot, root2));
+    } else {
+      for (const file of changed) queueEdit(file);
+      updateStatus();
     }
-    if (active && texts.has(active)) openCb?.(active, texts.get(active));
+    ack(seq, message.active ?? main, -1, 0);
   }
   window.addEventListener("message", (event) => {
     if (event.source !== window.parent || event.origin !== PROTOCOL_HOST) return;
     const message = event.data;
-    if (!message || message.v !== V || typeof message.type !== "string") return;
-    const seq = typeof message.seq === "number" ? message.seq : 0;
+    if (disposed || !message || message.v !== V) return;
+    const { seq } = message;
     switch (message.type) {
-      case "init": {
-        const theme = message.theme ?? { dark: false };
-        panel.theme(theme.dark ? "dark" : "light");
-        panel.darkPdf(theme.dark ? "on" : "off");
-        if (typeof message.zoom === "number" && message.zoom > 0)
-          panel.zoomTo(message.zoom === 1 ? "fit" : String(message.zoom));
+      case "init":
+        applyTheme(message.theme);
+        applyZoom(message.zoom);
+        setReference(message.reference);
         break;
-      }
       case "project":
-        applyProject({ ...message, seq });
+        applyProject(message, seq);
         break;
-      case "edit": {
-        const file = String(message.file);
-        const changes = message.changes;
-        const text = applyEdit(file, changes);
-        lastSeq = seq;
-        ack(seq, file, text.length, textHash(text));
-        changesCb?.(
-          file,
-          changes.map(([from2, to, insert]) => ({ from: from2, to, text: insert })),
-          text.length,
-          textSum(text)
-        );
-        break;
-      }
+      case "edit":
       case "text": {
-        const file = String(message.file);
-        const text = String(message.text);
+        const { file } = message;
+        const text = message.type === "text" ? message.text : applyEdit(file, message.changes);
         texts.set(file, text);
+        lineIndexes.delete(file);
         lastSeq = seq;
+        queueEdit(file);
         ack(seq, file, text.length, textHash(text));
-        if (file === active) openCb?.(file, text);
-        else session?.refresh({ [file]: text });
         break;
       }
-      case "open": {
-        active = String(message.file);
-        if (texts.has(active)) openCb?.(active, texts.get(active));
+      case "open":
+        session.open = message.file;
         break;
-      }
-      case "select": {
-        const file = String(message.file);
-        const from2 = Number(message.from);
-        const to = Number(message.to);
-        trace(`select ${file} ${from2}-${to}`);
-        void session?.selectSource(file, from2, to);
+      case "select":
+        if (!hasTypesetWork()) selectSource(message.file, message.from, message.to, message.blink);
         break;
-      }
       case "clear":
-        void session?.selectBytes("", 0, 0);
+        clearMarks();
         break;
-      case "reveal": {
-        const file = String(message.file);
-        const text = texts.get(file);
-        if (text === void 0) break;
-        pendingKind = "double";
-        void session?.follow(file, offsetOfLine(text, Number(message.line)));
+      case "reveal":
+        queueReveal({ file: message.file, line: message.line, y: message.y, seq });
         break;
-      }
       case "reference":
+        setReference(message.y);
         break;
-      case "page": {
-        const target = Math.floor(Number(message.page));
-        if (Number.isFinite(target) && target >= 1) {
-          jumpToPage(target);
-          scheduleViewport();
-        }
+      case "page":
+        if (Number.isInteger(message.page) && message.page >= 1) jumpToPage(message.page);
         break;
-      }
       case "zoom":
-        if (typeof message.factor === "number" && message.factor > 0)
-          panel.zoomTo(message.factor === 1 ? "fit" : String(message.factor));
+        applyZoom(message.factor);
         break;
-      case "theme": {
-        const theme = message.theme ?? { dark: false };
-        panel.theme(theme.dark ? "dark" : "light");
-        panel.darkPdf(theme.dark ? "on" : "off");
+      case "theme":
+        applyTheme(message.theme);
         break;
-      }
       case "export":
         void exportPdf(seq);
         break;
@@ -12075,20 +12106,29 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
   });
   async function exportPdf(seq = 0) {
     const started = performance.now();
-    const pdf = await session?.pdf();
+    await flushEdits();
+    if (disposed) return;
+    const revision = lastSeq;
+    const pdf = await session.pdf();
     if (!pdf) {
       post({ type: "error", seq, message: "the preview has no PDF yet" });
       return;
     }
+    const output = await session.log();
+    if (output && revision === lastSeq) {
+      for (const line of output.split("\n").slice(-80)) if (line.trim()) trace(line);
+    }
     const copy = pdf.slice();
-    post(
-      { type: "pdf", seq, pdf: copy.buffer, ms: performance.now() - started },
-      [copy.buffer]
-    );
+    post({ type: "pdf", seq, pdf: copy.buffer, ms: performance.now() - started }, [copy.buffer]);
   }
   async function dispose(seq) {
     try {
-      session?.stop();
+      disposed = true;
+      window.clearTimeout(batchTimer);
+      window.clearTimeout(idleTimer);
+      window.cancelAnimationFrame(viewportFrame);
+      window.cancelAnimationFrame(revealFrame);
+      session.stop();
       pages.close();
       core.close();
       panel.shown(false);
@@ -12098,55 +12138,90 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
       post({ type: "disposed", seq });
     }
   }
-  stage()?.addEventListener("pointerdown", () => post({ type: "input" }));
-  function scheduleViewport() {
-    if (viewportTimer) return;
-    viewportTimer = window.setTimeout(() => {
-      viewportTimer = 0;
-      void reportViewport();
-    }, 120);
+  function applyTheme(theme) {
+    panel.theme(theme.dark ? "dark" : "light");
+    panel.darkPdf(theme.dark ? "on" : "off");
+    panelHost.style.setProperty("--mdraft-pane", theme.pane);
+    panelHost.style.setProperty("--mdraft-sync", theme.sync);
+    panelHost.style.setProperty("--mdraft-sync-peak", theme.peak);
   }
-  stage()?.addEventListener("scroll", scheduleViewport, { passive: true });
-  stage()?.addEventListener("click", (event) => {
-    if (event.detail !== 1) return;
-    if (performance.now() - selectionAt < 250) return;
-    const spot = panel.spot();
-    if (!spot) return;
-    pendingKind = "click";
-    pendingY = null;
-    void session?.toSource(spot.k, spot.x, spot.y);
-  });
-  var jumped = null;
-  function pageSlots(area) {
-    return [...area.querySelectorAll(".slot[data-k]")];
+  var zoom = 1;
+  function applyZoom(factor) {
+    if (!Number.isFinite(factor) || factor <= 0 || factor === zoom) return;
+    zoom = factor;
+    clearScrollInput();
+    panel.zoomTo("fit", factor);
+    scheduleViewport();
   }
-  function jumpToPage(page) {
-    const area = stage();
-    if (!area) return;
-    const slots = pageSlots(area);
-    if (!slots.length) {
-      panel.goPage(page - 1);
-      return;
+  var marked = false;
+  function selectSource(file, from2, to, blink) {
+    if (!texts.has(file)) return;
+    marked = true;
+    viewer.toggleAttribute("data-blink", blink);
+    void session.selectSource(file, from2, to);
+  }
+  function clearMarks() {
+    if (!marked) return;
+    marked = false;
+    viewer.removeAttribute("data-blink");
+    void session.selectBytes("", 0, 0);
+  }
+  var lineIndexes = /* @__PURE__ */ new Map();
+  function lineIndex(file) {
+    const text = texts.get(file);
+    if (text === void 0) return null;
+    const cached = lineIndexes.get(file);
+    if (cached?.text === text) return cached;
+    const bytes = new TextEncoder().encode(text);
+    const starts = [0];
+    for (let i = 0; i < bytes.length; i += 1) if (bytes[i] === 10) starts.push(i + 1);
+    const index = { text, starts, bytes: bytes.length };
+    lineIndexes.set(file, index);
+    return index;
+  }
+  function sourceLine(starts, byte) {
+    let lo = 0;
+    let hi = starts.length;
+    while (lo < hi) {
+      const mid = lo + hi >> 1;
+      if (starts[mid] <= byte) lo = mid + 1;
+      else hi = mid;
     }
-    const wanted = Math.min(slots.length, page);
-    const slot = slots[wanted - 1];
-    const max = area.scrollHeight - area.clientHeight;
-    const top = wanted === 1 ? 0 : Math.ceil(
-      slot.getBoundingClientRect().top - area.getBoundingClientRect().top + area.scrollTop
-    );
-    area.scrollTop = Math.max(0, Math.min(max, top));
-    jumped = { page: wanted, top: area.scrollTop };
+    return lo;
   }
-  function pageAtTop(area) {
-    const slots = pageSlots(area);
-    if (!slots.length) return null;
-    const scrollTop = area.scrollTop;
-    if (jumped && Math.abs(jumped.top - scrollTop) <= 2 && jumped.page <= slots.length)
-      return jumped.page;
-    jumped = null;
-    const max = area.scrollHeight - area.clientHeight;
-    if (max > 0 && scrollTop >= max - 1) return slots.length;
-    const y = area.getBoundingClientRect().top + 4;
+  async function pageAnchors(page) {
+    const glyphs3 = await session.sourceGlyphs(page);
+    const byFile = /* @__PURE__ */ new Map();
+    for (const g of glyphs3) {
+      if (!g.file || g.synth || g.end <= g.start) continue;
+      const source = lineIndex(g.file);
+      if (!source || g.start < 0 || g.end > source.bytes) continue;
+      const line = sourceLine(source.starts, g.start);
+      let lines2 = byFile.get(g.file);
+      if (!lines2) byFile.set(g.file, lines2 = /* @__PURE__ */ new Map());
+      const y = g.y - 8;
+      const previous = lines2.get(line);
+      if (!previous || y < previous.y) lines2.set(line, { file: g.file, line, y });
+    }
+    return [...byFile.values()].flatMap((lines2) => [...lines2.values()]);
+  }
+  function surrounding(anchors, key, at) {
+    let before;
+    let after;
+    for (const anchor of anchors) {
+      const value = anchor[key];
+      if (value <= at && (!before || value > before[key])) before = anchor;
+      if (value >= at && (!after || value < after[key])) after = anchor;
+    }
+    return { before, after };
+  }
+  function between(a, b, x, start, end) {
+    return a === b ? start : start + (x - a) / (b - a) * (end - start);
+  }
+  function pageSlots() {
+    return viewer.querySelectorAll(".slot[data-k]");
+  }
+  function pageAt(slots, y) {
     let lo = 0;
     let hi = slots.length;
     while (lo < hi) {
@@ -12154,80 +12229,317 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
       if (slots[mid].getBoundingClientRect().top <= y) lo = mid + 1;
       else hi = mid;
     }
-    return Math.max(1, lo);
+    return Math.max(0, lo - 1);
+  }
+  var cssPoints = () => panel.pixelsPerPoint() / window.devicePixelRatio;
+  var maxScroll = () => Math.max(0, stage.scrollHeight - stage.clientHeight);
+  var reference = 0;
+  var inputUntil = 0;
+  var observedTop = stage.scrollTop;
+  var jumped = null;
+  var viewportFrame = 0;
+  var viewportBusy = false;
+  var viewportStamp = 0;
+  var viewportGesture = false;
+  var viewportPending = false;
+  function setReference(y) {
+    if (!Number.isFinite(y) || reference === Math.max(0, y)) return;
+    reference = Math.max(0, y);
+    viewportStamp += 1;
+  }
+  function clearScrollInput() {
+    inputUntil = 0;
+    viewportGesture = false;
+    viewportStamp += 1;
+  }
+  function writeScroll(top) {
+    clearScrollInput();
+    stage.scrollTop = Math.max(0, Math.min(top, maxScroll()));
+    observedTop = stage.scrollTop;
+    scheduleViewport();
+    return observedTop;
+  }
+  function jumpToPage(page) {
+    const slots = pageSlots();
+    if (!slots.length) return;
+    cancelReveal();
+    const wanted = Math.min(slots.length, page);
+    const top = wanted === 1 ? 0 : Math.ceil(
+      slots[wanted - 1].getBoundingClientRect().top - stage.getBoundingClientRect().top + stage.scrollTop
+    );
+    jumped = { page: wanted, top: writeScroll(top) };
+    scheduleViewport(true);
+  }
+  function scheduleViewport(gesture = false) {
+    viewportPending = true;
+    viewportGesture ||= gesture;
+    if (disposed || viewportFrame || viewportBusy) return;
+    viewportFrame = window.requestAnimationFrame(() => void reportViewport());
   }
   async function reportViewport() {
-    const area = stage();
-    if (!area || !session) return;
-    if (viewportBusy) {
-      scheduleViewport();
-      return;
-    }
-    let page = -1;
-    let fraction = 0;
-    for (let k = 0; k < Math.max(pageCount, pageSizes.size); k += 1) {
-      const view = panel.pageView(k);
-      if (!view) continue;
-      page = k;
-      fraction = Math.max(0, view[1]);
-      break;
-    }
-    const current2 = pageAtTop(area);
-    if (page < 0) {
-      post({
-        type: "viewport",
-        scrollTop: area.scrollTop,
-        page: current2,
-        file: null,
-        line: null,
-        gesture: true
-      });
-      return;
-    }
-    const size2 = pageSizes.get(page);
-    if (!size2) return;
+    viewportFrame = 0;
+    viewportPending = false;
     viewportBusy = true;
+    const gesture = viewportGesture;
+    const stamp = viewportStamp;
+    const revision = lastSeq;
+    viewportGesture = false;
     try {
-      const y = Math.min(size2.h - 2, Math.max(2, fraction * size2.h + 4));
-      const source = await session.sourceOf([
-        { k: page, rects: [[0, y, size2.w * 0.8, Math.max(24, size2.h * 0.08)]] }
-      ]);
-      if (!source) {
-        post({
-          type: "viewport",
-          scrollTop: area.scrollTop,
-          page: current2,
-          file: null,
-          line: null,
-          gesture: true
-        });
-        return;
+      const slots = pageSlots();
+      const top = stage.scrollTop;
+      const edge = stage.getBoundingClientRect().top;
+      const current2 = !slots.length ? null : jumped && Math.abs(jumped.top - top) <= 2 && jumped.page <= slots.length ? jumped.page : maxScroll() > 0 && top >= maxScroll() - 1 ? slots.length : pageAt(slots, edge + 4) + 1;
+      let file = null;
+      let line = null;
+      if (current2 !== null && gesture && !hasTypesetWork()) {
+        const height = edge + Math.min(reference, stage.clientHeight);
+        let k = pageAt(slots, height);
+        if (slots[k].getBoundingClientRect().bottom < height && k + 1 < slots.length) k += 1;
+        const y = (height - slots[k].getBoundingClientRect().top) / cssPoints();
+        const { before, after } = surrounding(await pageAnchors(k), "y", y);
+        const closest = before && (!after || y - before.y <= after.y - y) ? before : after;
+        if (closest) {
+          file = closest.file;
+          line = before && after && before.file === after.file && before.line <= after.line ? between(before.y, after.y, y, before.line, after.line) : closest.line;
+        }
       }
-      const text = texts.get(source.file);
-      if (text === void 0) return;
-      const at = charOffset(text, source.start);
-      const line = text.slice(0, at).split("\n").length;
-      post({
-        type: "viewport",
-        scrollTop: area.scrollTop,
-        page: current2,
-        file: source.file,
-        line,
-        gesture: true
-      });
-    } catch {
+      if (!disposed && stamp === viewportStamp && revision === lastSeq) {
+        post({ type: "viewport", scrollTop: top, page: current2, file, line, gesture });
+      }
     } finally {
       viewportBusy = false;
+      if (viewportPending) scheduleViewport();
     }
   }
+  var pendingReveal = null;
+  var revealStamp = 0;
+  var revealFrame = 0;
+  var revealBusy = false;
+  function cancelReveal() {
+    revealStamp += 1;
+    pendingReveal = null;
+  }
+  function queueReveal(request) {
+    if (!Number.isFinite(request.line) || !Number.isFinite(request.y)) return;
+    revealStamp += 1;
+    clearScrollInput();
+    pendingReveal = request;
+    scheduleReveal();
+  }
+  function scheduleReveal() {
+    if (disposed || revealBusy || revealFrame || !pendingReveal) return;
+    revealFrame = window.requestAnimationFrame(() => void revealSource());
+  }
+  async function revealSource() {
+    revealFrame = 0;
+    const request = pendingReveal;
+    if (!request) return;
+    pendingReveal = null;
+    revealBusy = true;
+    const stamp = revealStamp;
+    const revision = lastSeq;
+    const stale = () => disposed || stamp !== revealStamp || revision !== lastSeq || hasTypesetWork();
+    try {
+      const top = stale() ? null : await locateSource(request, stale);
+      if (disposed || stamp !== revealStamp || revision !== lastSeq) return;
+      if (top !== null && !stale()) {
+        jumped = null;
+        const actual = writeScroll(top);
+        if (request.seq !== null) post({ type: "scrolled", seq: request.seq, scrollTop: actual });
+      } else if (request.seq !== null) {
+        post({ type: "scrolled", seq: request.seq, scrollTop: null });
+      }
+    } finally {
+      revealBusy = false;
+      scheduleReveal();
+    }
+  }
+  async function locateSource({ file, line, y }, stale) {
+    const source = lineIndex(file);
+    const slots = pageSlots();
+    if (!source || !slots.length || line < 1 || Math.floor(line) > source.starts.length) return null;
+    if (file === main && line <= 1) return 0;
+    const edge = stage.getBoundingClientRect().top;
+    const here = pageAt(slots, edge + y);
+    const placement = async (page) => {
+      if (!slots[page] || stale()) return null;
+      const anchors = (await pageAnchors(page)).filter((anchor) => anchor.file === file);
+      const { before, after } = surrounding(anchors, "line", line);
+      if (before && after && before.y <= after.y) {
+        return {
+          page,
+          distance: after.line - before.line,
+          point: between(before.line, after.line, line, before.y, after.y)
+        };
+      }
+      const closest = before && (!after || line - before.line <= after.line - line) ? before : after;
+      if (!closest || Math.abs(closest.line - line) > 1) return null;
+      return { page, distance: 2 + Math.abs(closest.line - line), point: closest.y };
+    };
+    let best = await placement(here);
+    const checked = /* @__PURE__ */ new Set([here]);
+    const tryPages = async (pages2) => {
+      for (const page of pages2) {
+        if (checked.has(page) || stale()) continue;
+        checked.add(page);
+        const candidate = await placement(page);
+        if (candidate && (!best || candidate.distance < best.distance)) best = candidate;
+      }
+    };
+    if (!best || best.distance > 1) await tryPages([here - 1, here + 1]);
+    if ((!best || best.distance > 3) && !stale()) {
+      const at = source.starts[Math.floor(line) - 1];
+      await tryPages(await session.sourcePages(file, at, stale));
+    }
+    if (!best || stale()) return null;
+    const box = slots[best.page].getBoundingClientRect();
+    return stage.scrollTop + box.top + best.point * cssPoints() - y;
+  }
+  var gestureStamp = 0;
+  var doubleClickStamp = -1;
+  var pressed = null;
+  var pointerDragged = false;
+  function readerInput() {
+    cancelReveal();
+    gestureStamp += 1;
+    clearScrollInput();
+    inputUntil = performance.now() + 500;
+    jumped = null;
+    post({ type: "input" });
+  }
+  async function clickSource(k, x, y, detail) {
+    if (hasTypesetWork()) return;
+    const slot = pageSlots()[k];
+    if (!slot) return;
+    const height = slot.getBoundingClientRect().top + y * cssPoints();
+    const revision = lastSeq;
+    const gesture = ++gestureStamp;
+    if (detail === 2) doubleClickStamp = gesture;
+    const glyphs3 = (await session.sourceGlyphs(k)).filter((g) => g.file && !g.synth);
+    if (disposed || gesture !== gestureStamp || revision !== lastSeq || hasTypesetWork()) return;
+    const glyph = nearest(glyphs3, x, y);
+    if (!glyph?.file) return;
+    const offsets = glyphOffsets(glyph.file, glyph.start, glyph.end);
+    if (!offsets) return;
+    const onGlyph = Math.abs(glyph.y - 3 - y) <= 7 && Math.abs(glyph.x + 2.5 - x) <= 8;
+    if (detail === 2 && !onGlyph) return;
+    const word = detail === 2 ? wordAt(texts.get(glyph.file), offsets.from) : null;
+    const range = word && word.from <= offsets.from && word.to >= offsets.to ? word : offsets;
+    post({
+      type: "source",
+      file: glyph.file,
+      from: range.from,
+      to: detail === 2 ? range.to : range.from,
+      detail,
+      y: onGlyph ? height : null,
+      drag: false,
+      // Several printed glyphs can carry the same source range. Only a
+      // single-character origin can place the exact caret on a plain click.
+      precision: !onGlyph ? "none" : detail === 2 || offsets.to - offsets.from === 1 ? "exact" : "line"
+    });
+  }
+  function glyphOffsets(file, start, end) {
+    const source = lineIndex(file);
+    if (!source || start < 0 || end <= start || end > source.bytes) return null;
+    return { from: charOffset(source.text, start), to: charOffset(source.text, end) };
+  }
+  async function selectPage(selection) {
+    if (!selection.length || hasTypesetWork() || doubleClickStamp === gestureStamp) return;
+    const revision = lastSeq;
+    const gesture = ++gestureStamp;
+    const found = await session.sourceOf(selection);
+    if (!found || disposed || gesture !== gestureStamp || revision !== lastSeq || hasTypesetWork())
+      return;
+    const offsets = glyphOffsets(found.file, found.start, found.end);
+    if (!offsets) return;
+    post({
+      type: "source",
+      file: found.file,
+      ...offsets,
+      detail: 1,
+      y: null,
+      drag: true,
+      precision: "exact"
+    });
+  }
+  stage.addEventListener("pointerdown", (event) => {
+    pressed = { x: event.clientX, y: event.clientY };
+    pointerDragged = false;
+    readerInput();
+  });
+  window.addEventListener(
+    "pointermove",
+    (event) => {
+      if (pressed && Math.hypot(pressed.x - event.clientX, pressed.y - event.clientY) > 4)
+        pointerDragged = true;
+    },
+    { passive: true }
+  );
+  window.addEventListener("pointerup", () => pressed = null);
+  window.addEventListener("pointercancel", () => pressed = null);
+  stage.addEventListener(
+    "wheel",
+    (event) => {
+      readerInput();
+      if ((event.ctrlKey || event.metaKey) && !event.target.closest(".peek")) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        const unit = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? stage.clientHeight : 1;
+        post({ type: "zoom-wheel", deltaY: event.deltaY * unit });
+      }
+    },
+    { capture: true, passive: false }
+  );
+  stage.addEventListener("touchstart", readerInput, { passive: true });
+  stage.addEventListener("keydown", readerInput);
+  stage.addEventListener(
+    "scroll",
+    () => {
+      const top = stage.scrollTop;
+      if (observedTop === top) return;
+      observedTop = top;
+      viewportStamp += 1;
+      const gesture = !!pressed || performance.now() < inputUntil;
+      if (gesture) inputUntil = performance.now() + 500;
+      scheduleViewport(gesture);
+    },
+    { passive: true }
+  );
+  stage.addEventListener("click", (event) => {
+    if (event.detail !== 1 || pointerDragged || event.defaultPrevented) return;
+    if (!event.target.closest(".slot")) return;
+    const spot = panel.spot();
+    if (spot) void clickSource(spot.k, spot.x, spot.y, 1);
+  });
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape") post({ type: "key", key: "Escape" });
   });
   post({ type: "ready", engine: "xetex", jspi: false, backend: "phitex", missing: [] });
   log("frame started");
 })();
-//! MDraft's PhiTeX frame.
+//! Position mapping between the rendered preview and the source document.
 //!
+//! The preview is HTML; the source is text. This module answers the two
+//! questions word-level sync needs, in both directions:
+//! - "this text node, at this offset — which source characters produced it?"
+//! - "this source range — where does it live in the preview?"
+//! It owns no rendering. An **emitter** describes what it knows, and there are
+//! two kinds of knowledge:
+//! - `fragments` are exact: a rendered run and the source range that produced
+//!   it. Markdown emits them because `marked` hands back each token's raw slice.
+//! - `blocks` are approximate but bounded: a source range per anchored element.
+//!   AsciiDoc emits them because its AST carries lines, not columns, so the text
+//!   inside a block is located by a forward search instead.
+//! Both are plain data. `bindWordMap` connects them to the live DOM after the
+//! HTML is inserted, which keeps a render result free of node references and
+//! lets the whole table be rebuilt on every render.
+//! The messages between MDraft and the TeXpresso frame, protocol 1.
+//! The frame side is `src-tauri/texpresso-shell/mdraft-bridge.js`. Every message
+//! carries the protocol version and a sequence number; replies name the sequence
+//! they answer. Positions are UTF-16 offsets into LF-normalised text, or
+//! fractional 1-based lines. Nothing here touches the DOM, so the validation is
+//! unit-testable in Node.
+//! MDraft's PhiTeX frame.
 //! The frame hosts PhiTeX's `PreviewSession` and `Panel` on the single-thread
 //! `core1.wasm` worker. It speaks MDraft's existing preview protocol, so the
 //! host's toolbar, wait surface, source gestures, selection, export and print

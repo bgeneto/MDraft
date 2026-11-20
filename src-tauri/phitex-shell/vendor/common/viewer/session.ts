@@ -659,8 +659,14 @@ export class PreviewSession {
    * (discovery, first paint, then the incremental program), nothing kept from
    * the last job but the packages already fetched.
    */
-  async clean(files: Record<string, string>): Promise<void> {
-    for (const [f, t] of Object.entries(files)) if (f !== this.open) this.files[f] = t;
+  async clean(files: Record<string, string>, main?: string): Promise<void> {
+    if (main === undefined) {
+      for (const [f, t] of Object.entries(files)) if (f !== this.open) this.files[f] = t;
+    } else {
+      this.files = { ...files };
+      this.batches.clear();
+      this.main = main;
+    }
     for (const n of [...this.pkg.unavailable, ...(this.pkg.failed ?? []).map((f) => f.name)]) this.asked.delete(n);
     this.pkg.unavailable = [];
     this.pkg.failed = [];
@@ -1126,6 +1132,18 @@ export class PreviewSession {
   }
   private glyphGen = 0;
 
+  /** The source origins of one laid-out page, reusing the viewer's cache. */
+  sourceGlyphs(page: number): Promise<readonly Glyph[]> {
+    if (!this.opened || page < 0 || page >= this.hashes.length) return Promise.resolve([]);
+    return this.glyphsOf(page);
+  }
+
+  /** Pages with origins for a source byte offset, when the build has found them. */
+  async sourcePages(file: string, at: number, stale: () => boolean): Promise<number[]> {
+    const result = await this.untilMade({ op: "page_of", file, at }, stale);
+    return result?.ok && Array.isArray(result.json?.pages) ? result.json.pages : [];
+  }
+
   private glyphsOf(k: number): Promise<Glyph[]> {
     // (by the page's hash: an unchanged page keeps its glyphs, mapped through edits)
     const key = `${k}:${this.hashes[k] ?? ""}`;
@@ -1236,12 +1254,16 @@ export class PreviewSession {
    * selection clears them). [`selectSource`]'s, and an LSP editor's
    * (`{event: "select"}`).
    */
+  private selectionGeneration = 0;
+
   async selectBytes(file: string, a: number, b: number): Promise<void> {
-    if (!this.opened) return;
+    const generation = ++this.selectionGeneration;
     if (a === b) return this.sink.marks?.([]);
+    if (!this.opened) return;
     const out: { k: number; boxes: [number, number, number, number][] }[] = [];
     for (let k = 0; k < Math.max(this.hashes.length, this.pages); k++) {
       const all = this.cached(k) ?? (await this.glyphsOf(k));
+      if (generation !== this.selectionGeneration) return;
       const hit = all.filter((g) => g.file === file && !g.synth && g.start < b && g.end > a);
       if (hit.length) out.push({ k, boxes: boxes(hit, all) });
     }

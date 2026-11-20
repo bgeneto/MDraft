@@ -7,9 +7,9 @@
 // The engine files must be the installed archive (or an extracted copy). The
 // script serves the frame and its files on loopback, proxies Shelf pack
 // requests, drives MiniBrowser through WebKitWebDriver, and proves the protocol
-// the host uses: ready, page paint, single/double-click source, selection
-// marks, logs and PDF export. Set MDRAFT_PHITEX_TEST_TEX to a fixture and
-// MDRAFT_PHITEX_SKIP_GESTURES=1 for a document-only check (links, minted);
+// the host uses: fit width, two-way scrolling, Unicode source selection,
+// edit batching, logs and PDF export. MDRAFT_PHITEX_TEST_TEX runs a
+// document-only check (links, minted), as does MDRAFT_PHITEX_SKIP_GESTURES=1;
 // MDRAFT_PHITEX_PDF_OUT saves the exported bytes for inspection. Linux only;
 // SKIPs when WebKitWebDriver is absent.
 
@@ -86,39 +86,285 @@ const mainSource = fixture
   ? readFileSync(fixture, "utf8")
   : String.raw`\documentclass{article}
 \usepackage{amsmath}
+% café 😀 before the source positions
 \begin{document}
-Hello PhiTeX, $\int_0^1 x^2\,dx$.
-\section{A section}\label{s}
-Some text with a \ref{s}.
+First page with a paragraph and $\int_0^1 x^2\,dx$.
+\newpage
+\noindent This sentence has matching words.\par
+Below it another anchor to check scrolling.\par
+The third anchor is on this same page.
+\newpage
+One final page to test navigation.
 \end{document}`;
-const skipGestures = process.env.MDRAFT_PHITEX_SKIP_GESTURES === "1";
+const skipGestures = !!fixture || process.env.MDRAFT_PHITEX_SKIP_GESTURES === "1";
 const pdfOut = process.env.MDRAFT_PHITEX_PDF_OUT ?? null;
+
+function exerciseFrame(source, skip) {
+  const frame = document.getElementById("f");
+  const replies = [];
+  const checks = [];
+  window.__checks = checks;
+  let nextSeq = 1;
+  const send = (message) => {
+    const seq = nextSeq++;
+    frame.contentWindow.postMessage({ v: 1, seq, ...message }, location.origin);
+    return seq;
+  };
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  async function until(read, message, ms = 10000) {
+    const deadline = performance.now() + ms;
+    while (performance.now() < deadline) {
+      const value = await read();
+      if (value) return value;
+      await wait(40);
+    }
+    throw new Error(message);
+  }
+
+  async function exercise(projectSeq) {
+    const paint = await until(
+      () => replies.find((m) => m.type === "painted" && m.seq === projectSeq && m.done && m.pages),
+      "the original project did not finish painting",
+      25000,
+    );
+    checks.push([paint.pages >= (skip ? 1 : 3), "the document was typeset", String(paint.pages)]);
+    if (skip) {
+      send({ type: "export" });
+      return;
+    }
+
+    const doc = frame.contentDocument;
+    const shadow = doc.querySelector("phitex-preview").shadowRoot;
+    const stage = shadow.querySelector("#stage");
+    const { session, panel } = frame.contentWindow.__phitex;
+    const slot = await until(() => shadow.querySelector(".slot[data-k='1']"), "page 2 missing");
+    const width = () => slot.getBoundingClientRect().width;
+    const fits = (factor) => Math.abs(width() - (stage.clientWidth - 32) * factor) <= 2;
+    await until(() => fits(1), "the first render did not fit the width");
+    checks.push([true, "startup uses 16 px side gutters"]);
+    send({ type: "zoom", factor: 1.25 });
+    await until(() => fits(1.25), "125% did not use the pane's fit width");
+    frame.style.width = "460px";
+    await until(
+      () => stage.clientWidth <= 460 && fits(1.25),
+      "the zoom did not follow the resized pane",
+    );
+    checks.push([true, "relative zoom followed a pane resize"]);
+    send({ type: "zoom", factor: 1 });
+    await until(() => fits(1), "zoom reset did not restore fit width");
+    checks.push([true, "zoom reset restored fit width"]);
+
+    const word = "matching";
+    const wordStart = source.indexOf(word);
+    const wordEnd = wordStart + word.length;
+    const byteAt = (offset) => new TextEncoder().encode(source.slice(0, offset)).length;
+    const glyphs = await until(async () => {
+      const result = await session.sourceGlyphs(1);
+      return result.find((g) => g.file === "main.tex" && g.start === byteAt(wordStart)) && result;
+    }, "the engine did not return the word's origins");
+    const glyph = glyphs.find((g) => g.file === "main.tex" && g.start === byteAt(wordStart));
+    const anchorY = 170;
+    const points = () => panel.pixelsPerPoint() / frame.contentWindow.devicePixelRatio;
+    const anchorLine = source.slice(0, wordStart).split("\n").length;
+    const viewportStart = replies.length;
+    const request = send({ type: "reveal", file: "main.tex", line: anchorLine, y: anchorY });
+    const scrolled = await until(
+      () => replies.find((m) => m.type === "scrolled" && m.seq === request),
+      "source reveal was never acknowledged",
+    );
+    const pixelError = Math.abs(
+      slot.getBoundingClientRect().top + (glyph.y - 8) * points() - anchorY,
+    );
+    checks.push([
+      scrolled.scrollTop > 0 && pixelError <= 3,
+      "source reveal used the requested pixel height",
+      pixelError.toFixed(2),
+    ]);
+    checks.push([
+      !replies.slice(viewportStart).some((m) => m.type === "viewport" && m.gesture),
+      "source-driven scrolling did not echo as a gesture",
+    ]);
+
+    const canvas = await until(() => slot.querySelector("canvas"), "page 2 did not draw");
+    const location = slot.getBoundingClientRect();
+    canvas.dispatchEvent(
+      new frame.contentWindow.MouseEvent("dblclick", {
+        bubbles: true,
+        composed: true,
+        detail: 2,
+        clientX: location.left + (glyph.x + 2.5) * points(),
+        clientY: location.top + (glyph.y - 3) * points(),
+      }),
+    );
+    const double = await until(
+      () => replies.find((m) => m.type === "source" && m.detail === 2),
+      "double-click did not resolve a source word",
+    );
+    checks.push([
+      double.from === wordStart && double.to === wordEnd && double.y > 0,
+      "double-click reported the UTF-16 word and its height",
+      JSON.stringify(double),
+    ]);
+
+    const sentence = "This sentence has matching words.";
+    const sentenceStart = source.indexOf(sentence);
+    const text = await until(
+      () => [...slot.querySelectorAll("text")].find((el) => el.textContent.includes(sentence)),
+      "the selection text layer did not appear",
+    );
+    const at = text.textContent.indexOf("sentence has matching");
+    const rangeText = "sentence has matching";
+    const selection = frame.contentWindow.getSelection();
+    text.dispatchEvent(
+      new frame.contentWindow.PointerEvent("pointerdown", { bubbles: true, composed: true }),
+    );
+    selection.setBaseAndExtent(text.firstChild, at, text.firstChild, at + rangeText.length);
+    text.dispatchEvent(
+      new frame.contentWindow.PointerEvent("pointerup", { bubbles: true, composed: true }),
+    );
+    const drag = await until(
+      () => replies.find((m) => m.type === "source" && m.drag),
+      "drag could not resolve its source range",
+    );
+    const dragStart = sentenceStart + sentence.indexOf(rangeText);
+    checks.push([
+      drag.from === dragStart &&
+        drag.to === dragStart + rangeText.length &&
+        selection.toString() === rangeText,
+      "WebKit drag reported the selected phrase and preserved native text selection",
+      JSON.stringify(drag),
+    ]);
+    await until(() => slot.querySelector(".mark.seltext"), "the native selection had no highlight");
+
+    const beforeMark = stage.scrollTop;
+    send({ type: "select", file: "main.tex", from: wordStart, to: wordEnd, blink: true });
+    await until(() => slot.querySelector(".mark.sel"), "the editor's word did not mark the page");
+    checks.push([stage.scrollTop === beforeMark, "source selection highlighted without scrolling"]);
+    send({ type: "clear" });
+    await until(() => !slot.querySelector(".mark.sel"), "clear left a stale source mark");
+
+    const nextAnchor = glyphs.find(
+      (g) => g.file === "main.tex" && g.start === byteAt(source.indexOf("Below it")),
+    );
+    const nextHeight = slot.getBoundingClientRect().top + (nextAnchor.y - 8) * points();
+    const reference = anchorY - 35;
+    send({ type: "reference", y: reference });
+    await wait(50);
+    const viewStart = replies.length;
+    const deltaY = nextHeight - reference;
+    stage.dispatchEvent(new frame.contentWindow.WheelEvent("wheel", { bubbles: true, deltaY }));
+    stage.scrollTop += deltaY;
+    const viewport = await until(
+      () => replies.slice(viewStart).find((m) => m.type === "viewport" && m.gesture && m.file),
+      "wheel scroll did not report its source anchor",
+    );
+    checks.push([
+      Math.abs(viewport.line - (anchorLine + 1)) < 0.2,
+      "preview scroll used the updated reference height",
+      JSON.stringify(viewport),
+    ]);
+
+    const jumpStart = replies.length;
+    send({ type: "page", page: 3 });
+    await until(
+      () =>
+        replies.slice(jumpStart).some((m) => m.type === "viewport" && m.page === 3 && m.gesture),
+      "the last-page jump did not report its requested page",
+    );
+    checks.push([true, "page navigation reports a user landing"]);
+
+    const workStart = replies.length;
+    const builds = session.builds;
+    const suffix = " Final input reaches export.";
+    let from = source.indexOf("First page");
+    let after = source;
+    let lastEdit = 0;
+    for (const char of suffix) {
+      lastEdit = send({
+        type: "edit",
+        file: "main.tex",
+        base: after.length,
+        changes: [[from, from, char]],
+      });
+      after = after.slice(0, from) + char + after.slice(from);
+      from += 1;
+      await wait(27);
+    }
+    send({ type: "export" });
+    await until(
+      () => replies.find((m) => m.type === "painted" && m.done && m.seq === lastEdit),
+      "final batch did not report its revision",
+    );
+    const scope = replies.slice(workStart);
+    const status = scope.filter((m) => m.type === "status");
+    const phases = status
+      .map((m) => m.busy)
+      .filter((busy, i, list) => i === 0 || busy !== list[i - 1]);
+    checks.push([
+      scope.some((m) => m.type === "ack" && m.seq === lastEdit && m.length === after.length) &&
+        session.text("main.tex") === after,
+      "all the edits were acknowledged and the last text reached the engine",
+    ]);
+    checks.push([
+      session.builds - builds <= 5,
+      "continuous input was batched",
+      String(session.builds - builds),
+    ]);
+    checks.push([
+      phases.length === 2 && phases[0] && !phases[1],
+      "typesetting stayed active through the burst",
+      JSON.stringify(phases),
+    ]);
+  }
+
+  window.addEventListener("message", (event) => {
+    const msg = event.data;
+    if (event.source !== frame.contentWindow || msg?.v !== 1) return;
+    replies.push(msg);
+    if (msg.type === "ready") {
+      send({
+        type: "init",
+        theme: { dark: false, sync: "", peak: "", paper: "#fff", pane: "#e9edf2" },
+        zoom: 1,
+        reference: 12,
+      });
+      const project = send({
+        type: "project",
+        main: "main.tex",
+        files: [{ path: "main.tex", text: source }],
+        remove: [],
+        replace: true,
+        active: "main.tex",
+        compile: true,
+      });
+      exercise(project).then(
+        () => (window.__exercised = true),
+        (error) => {
+          const recent = replies.filter((reply) => reply.type !== "pdf").slice(-6);
+          const session = frame.contentWindow.__phitex?.session;
+          const trace = session?.trace?.slice(-8).map((entry) => entry.k);
+          window.__error = String(error) + " " + JSON.stringify({ recent, trace });
+        },
+      );
+    }
+    if (msg.type === "pdf") {
+      window.__pdfBytes = Array.from(new Uint8Array(msg.pdf));
+      window.__logged = replies.some((m) => m.type === "trace" && /typeset/i.test(m.text));
+    }
+    if (msg.type === "error") window.__error = msg.message;
+  });
+}
 
 const HOST = `<!doctype html><html><head><meta charset="utf-8"><title>PhiTeX frame test</title>
 <style>html,body{margin:0;height:100%;overflow:hidden}#f{position:absolute;inset:0;width:100%;height:100%;border:0}</style>
 </head><body><iframe id="f" src="/phitex/index.html?host=__HOST__&engine=xetex"></iframe>
-<script>
-const f=document.getElementById('f');window.__result=null;window.__source=[];window.__marks=0;window.__painted=[];window.__trace=[];window.__viewport=[];window.__ack=[];
-window.__skipGestures=__SKIP__;
-let seq=1;const send=(m)=>{const n=seq++;f.contentWindow.postMessage({v:1,seq:n,...m},location.origin);return n;};
-const main=__MAIN__;
-window.addEventListener('message',(e)=>{const m=e.data;if(!m||m.v!==1)return;
-  if(m.type==='ready'){send({type:'init',theme:{dark:false,sync:'',peak:'',paper:'#fff',pane:'#e9edf2'},zoom:1,reference:0});send({type:'project',main:'main.tex',files:[{path:'main.tex',text:main}],remove:[],replace:true,active:'main.tex',compile:true});}
-  if(m.type==='painted'){window.__painted.push(m);if(m.pages>0&&!window.__clicked){window.__clicked=true;if(window.__skipGestures){setTimeout(()=>send({type:'export'}),1500);}else setTimeout(()=>{const d=f.contentDocument;const h=d.querySelector('phitex-preview');const r=h&&h.shadowRoot;const slot=r&&r.querySelector('.slot');if(!slot)return;const b=slot.getBoundingClientRect();const point=(x,y)=>{const el=r.elementFromPoint(x,y);if(el)el.dispatchEvent(new MouseEvent('dblclick',{clientX:x,clientY:y,bubbles:true,composed:true,detail:2}));};point(b.left+b.width*0.25,b.top+b.height*0.12);send({type:'select',file:'main.tex',from:61,to:66,blink:false});setTimeout(()=>{window.__marks=r.querySelectorAll('.mark,.sel,.seltext').length;send({type:'zoom',factor:1.25});setTimeout(()=>{const stage=r.querySelector('#stage');if(stage){stage.scrollTop=150;stage.dispatchEvent(new Event('scroll'));}window.__editSeq=send({type:'edit',file:'main.tex',base:main.length,changes:[[5,5,' ']]});window.__editLength=main.length+1;setTimeout(()=>{window.__zoom=f.contentWindow.__phitex?.panel?.state?.().zoom??null;send({type:'export'});},1400);},900);},800);},600);}}
-  if(m.type==='source')window.__source.push(m);
-  if(m.type==='viewport')window.__viewport.push(m);
-  if(m.type==='ack')window.__ack.push(m);
-  if(m.type==='trace')window.__trace.push(m.text);
-  if(m.type==='pdf'){window.__result={pdf:m.pdf.byteLength};window.__pdfBytes=Array.from(new Uint8Array(m.pdf));}
-  if(m.type==='error')window.__error=m.message;
-});
-</script></body></html>`;
+<script>(${exerciseFrame.toString()})(__MAIN__,__SKIP__);</script></body></html>`;
 
 const server = createServer(async (request, response) => {
   const url = new URL(request.url, "http://127.0.0.1");
   if (url.pathname === "/host.html") {
     const html = HOST.replace("__HOST__", `http://127.0.0.1:${server.address().port}`)
-      .replace("__MAIN__", JSON.stringify(mainSource))
+      .replace("__MAIN__", () => JSON.stringify(mainSource).replaceAll("<", "\\u003c"))
       .replace("__SKIP__", String(skipGestures));
     response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
     response.end(html);
@@ -210,51 +456,26 @@ try {
     await sleep(1000);
     const state = await call(base, "POST", `/session/${session}/execute/sync`, {
       script:
-        "return {result:window.__result,pdfBytes:window.__pdfBytes,sources:window.__source,marks:window.__marks,zoom:window.__zoom,viewport:window.__viewport,painted:window.__painted,ack:window.__ack,editSeq:window.__editSeq,editLength:window.__editLength,trace:window.__trace,error:window.__error||null}",
+        "return {checks:window.__checks, exercised:window.__exercised, pdfBytes:window.__pdfBytes, logged:window.__logged, error:window.__error}",
       args: [],
     });
+    if (state.value?.error && state.value.message) throw new Error(state.value.message);
     result = state.value;
-    if (result?.result?.pdf) break;
+    if (result?.error || (result?.exercised && result?.pdfBytes)) break;
   }
-  check(!!result?.painted?.some((p) => p.pages > 0), "a page was shipped");
-  if (!skipGestures) {
-    check(result?.sources?.length >= 1, "a page gesture reported its source");
-    check(result?.marks >= 1, "a source selection marked the page");
-    check(
-      (result?.ack ?? []).some((a) => a.seq === result?.editSeq && a.length === result?.editLength),
-      "an edit was acknowledged with the new length",
-      JSON.stringify((result?.ack ?? []).slice(-2)),
-    );
-    check(
-      (result?.painted ?? []).some((p) => p.done === true && p.seq === result?.editSeq),
-      "the edit repainted",
-    );
-    check(result?.zoom === "1.25", "a zoom request reached the panel", String(result?.zoom));
-    check(
-      (result?.viewport ?? []).some((v) => v.file && v.line > 0),
-      "a scroll reported its source line",
-      JSON.stringify((result?.viewport ?? []).slice(-2)),
-    );
-    check(
-      (result?.viewport ?? []).some((v) => Number.isInteger(v.page) && v.page >= 1),
-      "a viewport reported its page number",
-      JSON.stringify((result?.viewport ?? []).slice(-2)),
-    );
-  }
+  for (const [ok, label, detail] of result?.checks ?? []) check(ok, label, detail);
+  const pdf = result?.pdfBytes && Buffer.from(result.pdfBytes);
   check(
-    (result?.result?.pdf ?? 0) > 1000,
+    pdf?.length > 1000 && pdf.subarray(0, 5).toString() === "%PDF-",
     "the frame exported a PDF",
-    `${result?.result?.pdf ?? 0} bytes`,
+    `${pdf?.length ?? 0} bytes`,
   );
-  if (pdfOut && Array.isArray(result?.pdfBytes) && result.pdfBytes.length > 1000) {
-    writeFileSync(pdfOut, Buffer.from(result.pdfBytes));
-    console.log(`      saved PDF to ${pdfOut} (${result.pdfBytes.length} bytes)`);
+  if (pdfOut && pdf?.length > 1000) {
+    writeFileSync(pdfOut, pdf);
+    console.log(`      saved PDF to ${pdfOut} (${pdf.length} bytes)`);
   }
-  check(
-    (result?.trace ?? []).some((line) => /typeset/i.test(line)),
-    "the compiler log reached the host",
-  );
-  check(!result?.error, "the frame reported no error", result?.error ?? "");
+  check(result?.logged, "the compiler log reached the host");
+  check(result?.exercised && !result?.error, "the frame reported no error", result?.error ?? "");
 } catch (error) {
   failed += 1;
   console.log(`FAIL  ${String(error?.stack ?? error)}`);

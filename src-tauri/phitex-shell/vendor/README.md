@@ -21,6 +21,12 @@ vendored here: its pinned archive is downloaded by `src-tauri/src/latex_phitex.r
 from the MDraft origin. The single-thread host and engine are built for
 `wasm32-wasip1`; they do not need JSPI or `SharedArrayBuffer`.
 
+MDraft's embedded viewer options disable the opening and expose pane-relative
+fit width in `panel.ts`. `viewer.ts` reads composed selection ranges on WebKit
+and allows source marks without scrolling. `session.ts` exposes the existing
+cached glyphs for scroll correspondence, cancels superseded selections, and
+accepts replacement project snapshots on resync.
+
 This copy is source, not a build: `bundles/main.js` and `bundles/engine-worker.js`
 are generated from it and from the frontends' worker bundle; see
 `src-tauri/phitex-shell/README.md`.

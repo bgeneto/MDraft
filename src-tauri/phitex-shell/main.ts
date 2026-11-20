@@ -15,14 +15,21 @@ import type {
   CoreRes,
   CoreTransport,
   EditorHost,
-  Options,
   PageImage,
   PreviewSink,
   Status,
 } from "./vendor/common/viewer/session.ts";
 import { PreviewSession } from "./vendor/common/viewer/session.ts";
-import { charOffset, textSum, type Edit } from "./vendor/common/viewer/edits.ts";
+import { charOffset } from "./vendor/common/viewer/edits.ts";
+import { nearest } from "./vendor/common/viewer/sync.ts";
 import { StripPages } from "./vendor/common/strippages.ts";
+import { wordAt } from "../../src/source-map.ts";
+import {
+  textHash,
+  type HostMessage,
+  type TexpressoProblem,
+  type TexpressoTheme,
+} from "../../src/texpresso/protocol.ts";
 
 const V = 1;
 const PROTOCOL_HOST = new URLSearchParams(location.search).get("host") ?? window.location.origin;
@@ -43,16 +50,6 @@ const log = (text: string) => {
   trace(text);
   console.log("[phitex]", text);
 };
-
-/** FNV-1a over UTF-16 code units, the hash MDraft's protocol uses. */
-function textHash(text: string): number {
-  let value = 0x811c9dc5;
-  for (let i = 0; i < text.length; i += 1) {
-    value ^= text.charCodeAt(i);
-    value = Math.imul(value, 0x01000193);
-  }
-  return value >>> 0;
-}
 
 class WorkerCore implements CoreTransport {
   private next = 1;
@@ -112,90 +109,37 @@ class WorkerCore implements CoreTransport {
 
 const pane = document.getElementById("pane") as HTMLElement;
 const texts = new Map<string, string>();
-const binaries = new Map<string, Uint8Array>();
 let main = "main.tex";
-let active: string | null = null;
-let openCb: ((file: string, text: string) => void) | undefined;
-let changesCb:
-  | ((file: string, edits: Edit[], len?: number, sum?: number) => void)
-  | undefined;
-let projectResolve: () => void = () => {};
-const projectReady = new Promise<void>((resolve) => (projectResolve = resolve));
-let projectStarted = false;
 let lastSeq = 0;
-let busy = false;
+let lastSettledSeq = 0;
 let pageCount = 0;
-let lastStatus: Status | null = null;
-let selectionAt = 0;
-const pageSizes = new Map<number, { w: number; h: number }>();
-let viewportTimer = 0;
-let viewportBusy = false;
-let pendingKind: "click" | "double" | "select" = "click";
-let pendingY: number | null = null;
-const startedAt = performance.now();
+let hasPainted = false;
+let disposed = false;
 
 const hostEditor: EditorHost = {
-  loadProject: async () => {
-    await projectReady;
-    log(`loadProject main=${main} files=${texts.size}`);
-    return { ...Object.fromEntries(texts) };
-  },
+  loadProject: async () => Object.fromEntries(texts),
   mainFile: () => main,
-  onOpen: (callback) => {
-    openCb = callback;
-  },
-  onChanges: (callback) => {
-    changesCb = callback;
-  },
-  resend: (file) => {
-    const text = texts.get(file);
-    if (text !== undefined) openCb?.(file, text);
-  },
-  ready: () => {
-    log("editor host ready");
-  },
+  // The frame acknowledges transactions immediately and syncs their combined text in batches.
+  onOpen: () => {},
+  onChanges: () => {},
 };
 
 const panel = new Panel(
   {
     onPage: (page) => {
-      pageCount = Math.max(pageCount, page + 1);
-      post({
-        type: "viewport",
-        scrollTop: stage()?.scrollTop ?? 0,
-        page: null,
-        file: null,
-        line: null,
-        gesture: false,
-      });
+      void session.setPage(page);
+      scheduleViewport();
     },
     onNeed: (page) => void session?.fetch(page),
     onPdf: () => void exportPdf(),
     onMain: (value) => {
       main = value;
     },
-    onReload: () => void session?.reopen(),
-    onClean: () => void session?.clean({ ...Object.fromEntries(texts) }),
-    onGoto: (file, line) => {
-      const text = texts.get(file);
-      if (text === undefined) return;
-      const at = offsetOfLine(text, line);
-      pendingKind = "double";
-      void session?.follow(file, at);
-    },
-    onGotoRange: (file, from, to) => postSource(file, from, to, false, pendingKind, null),
-    onSyncSource: (page, x, y) => {
-      pendingKind = "double";
-      pendingY = null;
-      void session?.toSource(page, x, y);
-    },
-    onSelectPage: (selection) => {
-      selectionAt = performance.now();
-      if (!selection.length) return;
-      pendingKind = "select";
-      pendingY = null;
-      void session?.selectPage(selection);
-    },
+    onReload: () => void runTypeset(() => session.reopen()),
+    onClean: () => void runTypeset(() => session.clean(Object.fromEntries(texts), main)),
+    onGoto: (file, line) => queueReveal({ file, line, y: reference, seq: null }),
+    onSyncSource: (page, x, y) => void clickSource(page, x, y, 2),
+    onSelectPage: (selection) => void selectPage(selection),
     onLink: (uri) => post({ type: "link", uri }),
     onSource: async (file) => texts.get(file) ?? null,
     onLog: async () => (await session?.log()) ?? null,
@@ -208,6 +152,8 @@ const panel = new Panel(
     tips: false,
     keys: false,
     outline: false,
+    opening: false,
+    fitWidthPadding: 16,
     words: {
       byline: "",
       badge: "",
@@ -228,8 +174,18 @@ const panel = new Panel(
 
 const panelHost = document.querySelector("phitex-preview") as HTMLElement;
 const panelStyle = document.createElement("style");
-panelStyle.textContent =
-  ".win.docked > .bar{display:none!important}.byline{display:none!important}.opening{display:none!important}.strips{display:none!important}.win > header{display:none!important}";
+panelStyle.textContent = `
+  .win.docked > .bar, .byline, .opening, .strips, .win > header { display: none !important; }
+  .win.docked #stage { background: var(--mdraft-pane, #e9edf2); overflow-anchor: none; }
+  .viewer { display: flow-root; }
+  .slot { margin: 16px auto; }
+  .slot .mark.sel { background: var(--mdraft-sync, rgba(255, 193, 7, 0.3)); box-shadow: none; }
+  #viewer[data-blink] .mark.sel { animation: mdraft-pulse 500ms ease-in-out 4; }
+  @keyframes mdraft-pulse { 50% { background: var(--mdraft-sync-peak, rgba(255, 167, 0, 0.55)); } }
+  @media (prefers-reduced-motion: reduce) {
+    #viewer[data-blink] .mark.sel { animation: none; }
+  }
+`;
 panelHost.shadowRoot!.append(panelStyle);
 panel.dock(pane);
 panel.shown(true);
@@ -238,39 +194,43 @@ panel.shown(true);
 // host's layout settles, so set it after the dock as well.
 panel.zoomTo("fit");
 
-const stage = (): HTMLElement | null =>
-  panelHost.shadowRoot?.querySelector<HTMLElement>("#stage") ?? null;
+const stage = panelHost.shadowRoot!.querySelector<HTMLElement>("#stage")!;
+const viewer = panelHost.shadowRoot!.querySelector<HTMLElement>("#viewer")!;
 
 const stripPanel = {
   pixelsPerPoint: () => panel.pixelsPerPoint(),
   pageView: (page: number) => panel.pageView(page),
   painted: (ms: number) => {
     panel.painted(ms);
-    postPainted(false);
   },
 };
 
 const core = new WorkerCore(`phitex-${Math.random().toString(36).slice(2)}`);
 const pages = new StripPages(core, stripPanel, panel.stripsChip());
-let session: PreviewSession | undefined;
-
 const sink: PreviewSink = {
   page: (image: PageImage | null, k: number, n: number, hash?: string | null) => {
-    if (image) pageSizes.set(k, { w: image.w, h: image.h });
     panel.page(image, k, n, hash);
+    if (image && !hasPainted) {
+      hasPainted = true;
+      post({ type: "painted", seq: lastSeq, done: false, pages: pageCount });
+      updateStatus();
+    }
+    scheduleViewport();
   },
-  layout: (hashes, previews) => panel.layout(hashes, previews),
+  layout: (hashes, previews) => {
+    panel.layout(hashes, previews);
+    if (pageCount === hashes.length) return;
+    pageCount = hashes.length;
+    post({ type: "pages", pages: pageCount });
+    updateStatus();
+    scheduleViewport();
+  },
   opening: () => panel.opening(),
   status: (status) => {
     lastStatus = status;
-    pageCount = Math.max(pageCount, status.pages);
-    panel.status(status);
-    postStatus();
-  },
-  busy: (on) => {
-    busy = on;
-    panel.busy(on);
-    postStatus();
+    problems = previewProblems(status);
+    problemSignature = JSON.stringify(problems);
+    updateStatus();
   },
   preparing: (on) => panel.preparing(on),
   warmup: (value) => panel.warmup(value),
@@ -280,16 +240,9 @@ const sink: PreviewSink = {
   streaming: (value) => panel.streaming(value),
   painted: (ms) => panel.painted(ms),
   buildTime: (ms, first) => panel.buildTime(ms, first),
-  buildParts: (parts, beside) => panel.buildParts(parts, beside),
-  joinedLate: (first, builds, last) => panel.joinedLate(first, builds, last),
   latency: (summary, details) => panel.latency(summary, details),
   packages: (packages) => panel.packages(packages),
-  files: (names, skipped, took) => panel.files(names, skipped, took),
-  docName: (name) => panel.docName(name),
-  news: (version, text) => panel.news(version, text),
-  goto: (file, from, to, focus) => postSource(file, from, to, focus === true, pendingKind, pendingY),
-  marks: (marks) => panel.marks(marks),
-  mark: (k, boxes, scroll) => panel.mark(k, boxes, scroll),
+  marks: (marks) => panel.marks(marks, false),
   others: (marks) => panel.others(marks),
   engine: (engine) => panel.engine(engine),
   error: (message) => {
@@ -302,51 +255,44 @@ const sink: PreviewSink = {
   mains: (names, value) => panel.mains(names, value),
 };
 
-session = new PreviewSession(hostEditor, pages, sink, {
+const session = new PreviewSession(hostEditor, pages, sink, {
   checkEveryMs: 0,
   engine: () => "xelatex",
-} as Partial<Options>);
+});
 (window as any).__phitex = { session, panel, pages, core, texts };
+// A short pause keeps isolated edits live. The maximum wait also lets the
+// preview advance while a reader keeps typing, with at most one batch in flight.
+const EDIT_QUIET_MS = 140;
+const EDIT_MAX_WAIT_MS = 450;
+const dirtyFiles = new Set<string>();
+let firstEditAt = 0;
+let lastEditAt = -Infinity;
+let batchTimer = 0;
+let idleTimer = 0;
+let work = Promise.resolve();
+let workCount = 0;
+let buildMs = 0;
+let lastStatus: Status | null = null;
+let appliedStatus: Status | null = null;
+let problems: TexpressoProblem[] = [];
+let problemSignature = "[]";
+let sentProblems = "";
+let sentBusy = false;
+
 pages.onEvent((event) => {
   switch (event.event) {
-    case "settled": {
-      busy = false;
-      postStatus();
-      postPainted(true);
-      const ms = Math.round(performance.now() - startedAt);
-      const pagesNow = (event as { pages?: number }).pages ?? pageCount;
-      log(`typeset ${pagesNow} page${pagesNow === 1 ? "" : "s"} in ${Math.round((event as { ms?: number }).ms ?? 0)} ms`);
-      void session?.log().then((line) => {
-        if (!line) return;
-        for (const text of line.split("\n").slice(-80)) if (text.trim()) trace(text);
-      });
-      break;
-    }
-    case "page":
-      pageCount = Math.max(pageCount, ((event as { pages?: number }).pages ?? 1));
-      postPainted(false);
-      break;
-    case "building":
-      busy = (event as { on?: boolean }).on === true;
-      panel.busy(busy);
-      postStatus();
-      break;
-    case "progress":
-      if ((event as { phase?: string }).phase === "fetching") {
-        const fetched = (event as { done?: number }).done ?? 0;
-        trace(`fetching packages (${fetched})`);
-      }
-      break;
-    case "diagnostics":
-      postStatus();
+    case "settled":
+      if (event.settling) return;
+      buildMs = event.ms ?? 0;
       break;
     default:
-      break;
+      return;
   }
+  updateStatus();
 });
 
-function postStatus(): void {
-  const problems = (lastStatus?.diagnostics ?? [])
+function previewProblems(status: Status): TexpressoProblem[] {
+  return (status.diagnostics ?? [])
     .filter((item) => item.severity === "error" || item.severity === "warning")
     .map((item) => ({
       file: item.file ?? "",
@@ -355,49 +301,78 @@ function postStatus(): void {
       severity: item.severity === "error" ? "error" : "warning",
       message: item.message,
     }));
-  post({ type: "status", busy, problems });
 }
 
-function postPainted(done: boolean): void {
-  post({ type: "painted", seq: lastSeq, done, pages: pageCount });
+function hasTypesetWork(): boolean {
+  return workCount > 0 || dirtyFiles.size > 0;
 }
 
-function postSource(
-  file: string,
-  from: number,
-  to: number,
-  focus: boolean,
-  kind: "click" | "double" | "select",
-  y: number | null,
-): void {
-  const text = texts.get(file);
-  if (text === undefined) return;
-  const a = charOffset(text, from);
-  const b = charOffset(text, to);
-  post({
-    type: "source",
-    file,
-    from: a,
-    to: b,
-    detail: kind === "double" ? 2 : 1,
-    y,
-    drag: kind === "select",
-    precision: "exact",
+function updateStatus(): void {
+  if (disposed) return;
+  window.clearTimeout(idleTimer);
+  const remaining = lastEditAt + EDIT_QUIET_MS - performance.now();
+  const working = hasTypesetWork();
+  const busy = working || remaining > 0;
+  if (!working && busy) idleTimer = window.setTimeout(updateStatus, remaining);
+  if (!busy && lastStatus && appliedStatus !== lastStatus) {
+    panel.status(lastStatus);
+    appliedStatus = lastStatus;
+  }
+  if (busy !== sentBusy || problemSignature !== sentProblems) {
+    if (busy !== sentBusy) panel.busy(busy);
+    post({ type: "status", busy, problems: problemSignature === sentProblems ? null : problems });
+    sentBusy = busy;
+    sentProblems = problemSignature;
+  }
+  if (busy || !hasPainted || !pageCount || lastSeq <= lastSettledSeq) return;
+  lastSettledSeq = lastSeq;
+  post({ type: "painted", seq: lastSeq, done: true, pages: pageCount });
+  log("typeset " + pageCount + " pages in " + Math.round(buildMs) + " ms");
+}
+
+function runTypeset(run: () => Promise<void>): Promise<void> {
+  workCount += 1;
+  updateStatus();
+  work = work
+    .then(async () => {
+      if (!disposed) await run();
+    })
+    .catch((error: unknown) => sink.error(String(error)))
+    .finally(() => {
+      workCount -= 1;
+      scheduleEdits();
+      updateStatus();
+    });
+  return work;
+}
+
+function scheduleEdits(): void {
+  window.clearTimeout(batchTimer);
+  if (disposed || workCount || !dirtyFiles.size) return;
+  const due = Math.min(firstEditAt + EDIT_MAX_WAIT_MS, lastEditAt + EDIT_QUIET_MS);
+  batchTimer = window.setTimeout(() => void flushEdits(), Math.max(0, due - performance.now()));
+}
+
+function queueEdit(file: string): void {
+  lastEditAt = performance.now();
+  if (!dirtyFiles.size) firstEditAt = lastEditAt;
+  dirtyFiles.add(file);
+  clearMarks();
+  scheduleEdits();
+  updateStatus();
+}
+
+function flushEdits(): Promise<void> {
+  window.clearTimeout(batchTimer);
+  if (!dirtyFiles.size) return work;
+  const files = [...dirtyFiles].map((file) => [file, texts.get(file)] as const);
+  dirtyFiles.clear();
+  return runTypeset(async () => {
+    for (const [file, text] of files) {
+      if (text !== undefined) session.sync(file, text);
+    }
+    await session.flush();
   });
-  if (focus) {
-    // The page gesture already moved the host's editor; nothing else here.
-  }
-}
-
-function offsetOfLine(text: string, line: number): number {
-  const target = Math.max(1, Math.round(line));
-  let at = 0;
-  for (let n = 1; n < target; n += 1) {
-    const next = text.indexOf("\n", at);
-    if (next < 0) return text.length;
-    at = next + 1;
-  }
-  return at;
 }
 
 function ack(seq: number, file: string, length: number, hash: number): void {
@@ -409,150 +384,101 @@ function applyEdit(file: string, changes: [number, number, string][]): string {
   for (const [from, to, insert] of changes) {
     text = text.slice(0, from) + insert + text.slice(to);
   }
-  texts.set(file, text);
   return text;
 }
 
-function startProject(): void {
-  if (projectStarted) return;
-  projectStarted = true;
-  log(`startProject main=${main} files=${texts.size}`);
-  projectResolve();
-  session?.start().catch((error) => {
-    post({ type: "error", message: `the preview could not start: ${String(error)}` });
-  });
-}
+let projectStarted = false;
 
-function applyProject(message: any): void {
+function applyProject(message: Extract<HostMessage, { type: "project" }>, seq: number): void {
   if (message.replace) {
     texts.clear();
-    binaries.clear();
+    lineIndexes.clear();
   }
-  const changed: Record<string, string> = {};
-  for (const file of (message.files ?? []) as Array<{
-    path: string;
-    text?: string;
-    bytes?: ArrayBuffer;
-  }>) {
+  const changed: string[] = [];
+  for (const file of message.files) {
     if (typeof file.text === "string") {
       texts.set(file.path, file.text);
-      changed[file.path] = file.text;
+      changed.push(file.path);
     } else if (file.bytes) {
-      const bytes = new Uint8Array(file.bytes);
-      binaries.set(file.path, bytes);
-      void core.binary(file.path, bytes);
+      void core.binary(file.path, new Uint8Array(file.bytes));
     }
   }
-  for (const name of (message.remove ?? []) as string[]) {
-    texts.delete(name);
-    binaries.delete(name);
+  let removedText = false;
+  for (const file of message.remove) {
+    if (texts.delete(file)) removedText = true;
+    lineIndexes.delete(file);
   }
-  main = message.main ?? main;
-  active = message.active ?? active;
-  lastSeq = typeof message.seq === "number" ? message.seq : lastSeq;
-  log(`project main=${main} active=${active} files=${texts.size}`);
-  ack(lastSeq, active ?? main, -1, 0);
-  const first = !projectStarted;
-  startProject();
-  // The first project is what start() is already loading. A later replace is a
-  // fresh document in the same frame; a non-replace sync diffs the changed
-  // files. Calling clean() before start() would reopen with no main yet.
-  if (!first) {
-    if (message.replace) {
-      void session?.clean({ ...Object.fromEntries(texts) });
-    } else if (Object.keys(changed).length) {
-      session?.refresh(changed);
-    }
+  const replace = message.replace || removedText || message.main !== main;
+  main = message.main;
+  session.open = message.active;
+  lastSeq = seq;
+  if (!projectStarted) {
+    projectStarted = true;
+    void runTypeset(() => session.start());
+  } else if (replace) {
+    // A watchdog resync replaces the session's copies, including the open file.
+    // Edits arriving during the reopen stay queued against the new snapshot.
+    dirtyFiles.clear();
+    clearMarks();
+    const snapshot = Object.fromEntries(texts);
+    const root = main;
+    void runTypeset(() => session.clean(snapshot, root));
+  } else {
+    for (const file of changed) queueEdit(file);
+    updateStatus();
   }
-  if (active && texts.has(active)) openCb?.(active, texts.get(active)!);
+  ack(seq, message.active ?? main, -1, 0);
 }
 
 window.addEventListener("message", (event) => {
   if (event.source !== window.parent || event.origin !== PROTOCOL_HOST) return;
-  const message = event.data;
-  if (!message || message.v !== V || typeof message.type !== "string") return;
-  const seq = typeof message.seq === "number" ? message.seq : 0;
+  const message = event.data as (HostMessage & { v: number; seq: number }) | null;
+  if (disposed || !message || message.v !== V) return;
+  const { seq } = message;
   switch (message.type) {
-    case "init": {
-      const theme = message.theme ?? { dark: false };
-      panel.theme(theme.dark ? "dark" : "light");
-      panel.darkPdf(theme.dark ? "on" : "off");
-      if (typeof message.zoom === "number" && message.zoom > 0)
-        panel.zoomTo(message.zoom === 1 ? "fit" : String(message.zoom));
+    case "init":
+      applyTheme(message.theme);
+      applyZoom(message.zoom);
+      setReference(message.reference);
       break;
-    }
     case "project":
-      applyProject({ ...message, seq });
+      applyProject(message, seq);
       break;
-    case "edit": {
-      const file = String(message.file);
-      const changes = message.changes as [number, number, string][];
-      const text = applyEdit(file, changes);
-      lastSeq = seq;
-      ack(seq, file, text.length, textHash(text));
-      // The session's `Edit` is an object; the host protocol sends a tuple.
-      changesCb?.(
-        file,
-        changes.map(([from, to, insert]) => ({ from, to, text: insert })),
-        text.length,
-        textSum(text),
-      );
-      break;
-    }
+    case "edit":
     case "text": {
-      const file = String(message.file);
-      const text = String(message.text);
+      const { file } = message;
+      const text = message.type === "text" ? message.text : applyEdit(file, message.changes);
       texts.set(file, text);
+      lineIndexes.delete(file);
       lastSeq = seq;
+      queueEdit(file);
       ack(seq, file, text.length, textHash(text));
-      if (file === active) openCb?.(file, text);
-      else session?.refresh({ [file]: text });
       break;
     }
-    case "open": {
-      active = String(message.file);
-      if (texts.has(active)) openCb?.(active, texts.get(active)!);
+    case "open":
+      session.open = message.file;
       break;
-    }
-    case "select": {
-      const file = String(message.file);
-      const from = Number(message.from);
-      const to = Number(message.to);
-      trace(`select ${file} ${from}-${to}`);
-      void session?.selectSource(file, from, to);
+    case "select":
+      if (!hasTypesetWork()) selectSource(message.file, message.from, message.to, message.blink);
       break;
-    }
     case "clear":
-      void session?.selectBytes("", 0, 0);
+      clearMarks();
       break;
-    case "reveal": {
-      const file = String(message.file);
-      const text = texts.get(file);
-      if (text === undefined) break;
-      pendingKind = "double";
-      void session?.follow(file, offsetOfLine(text, Number(message.line)));
+    case "reveal":
+      queueReveal({ file: message.file, line: message.line, y: message.y, seq });
       break;
-    }
     case "reference":
+      setReference(message.y);
       break;
-    case "page": {
-      const target = Math.floor(Number(message.page));
-      if (Number.isFinite(target) && target >= 1) {
-        jumpToPage(target);
-        scheduleViewport();
-      }
+    case "page":
+      if (Number.isInteger(message.page) && message.page >= 1) jumpToPage(message.page);
       break;
-    }
     case "zoom":
-      if (typeof message.factor === "number" && message.factor > 0)
-        panel.zoomTo(message.factor === 1 ? "fit" : String(message.factor));
+      applyZoom(message.factor);
       break;
-    case "theme": {
-      const theme = message.theme ?? { dark: false };
-      panel.theme(theme.dark ? "dark" : "light");
-      panel.darkPdf(theme.dark ? "on" : "off");
+    case "theme":
+      applyTheme(message.theme);
       break;
-    }
     case "export":
       void exportPdf(seq);
       break;
@@ -566,21 +492,30 @@ window.addEventListener("message", (event) => {
 
 async function exportPdf(seq = 0): Promise<void> {
   const started = performance.now();
-  const pdf = await session?.pdf();
+  await flushEdits();
+  if (disposed) return;
+  const revision = lastSeq;
+  const pdf = await session.pdf();
   if (!pdf) {
     post({ type: "error", seq, message: "the preview has no PDF yet" });
     return;
   }
+  const output = await session.log();
+  if (output && revision === lastSeq) {
+    for (const line of output.split("\n").slice(-80)) if (line.trim()) trace(line);
+  }
   const copy = pdf.slice();
-  post(
-    { type: "pdf", seq, pdf: copy.buffer, ms: performance.now() - started },
-    [copy.buffer],
-  );
+  post({ type: "pdf", seq, pdf: copy.buffer, ms: performance.now() - started }, [copy.buffer]);
 }
 
 async function dispose(seq: number): Promise<void> {
   try {
-    session?.stop();
+    disposed = true;
+    window.clearTimeout(batchTimer);
+    window.clearTimeout(idleTimer);
+    window.cancelAnimationFrame(viewportFrame);
+    window.cancelAnimationFrame(revealFrame);
+    session.stop();
     pages.close();
     core.close();
     panel.shown(false);
@@ -591,78 +526,114 @@ async function dispose(seq: number): Promise<void> {
   }
 }
 
-// The single click TeXpresso's bridge reports: the viewer records the spot for
-// every plain click; a drag's selection is reported by onSelectPage instead.
-stage()?.addEventListener("pointerdown", () => post({ type: "input" }));
-function scheduleViewport(): void {
-  if (viewportTimer) return;
-  viewportTimer = window.setTimeout(() => {
-    viewportTimer = 0;
-    void reportViewport();
-  }, 120);
-}
-stage()?.addEventListener("scroll", scheduleViewport, { passive: true });
-stage()?.addEventListener("click", (event) => {
-  if ((event as MouseEvent).detail !== 1) return;
-  if (performance.now() - selectionAt < 250) return;
-  const spot = panel.spot();
-  if (!spot) return;
-  pendingKind = "click";
-  pendingY = null;
-  void session?.toSource(spot.k, spot.x, spot.y);
-});
-/**
- * The page at the top of the view and the source line under it: the host's
- * scroll sync (preview → source). Asked a page at a time, after the scroll
- * settles, from the same glyph origins a click uses.
- */
-/** The last page jump and where it left the stage, so the report keeps it. */
-let jumped: { page: number; top: number } | null = null;
-
-function pageSlots(area: HTMLElement): HTMLElement[] {
-  return [...area.querySelectorAll<HTMLElement>(".slot[data-k]")];
+function applyTheme(theme: TexpressoTheme): void {
+  panel.theme(theme.dark ? "dark" : "light");
+  panel.darkPdf(theme.dark ? "on" : "off");
+  panelHost.style.setProperty("--mdraft-pane", theme.pane);
+  panelHost.style.setProperty("--mdraft-sync", theme.sync);
+  panelHost.style.setProperty("--mdraft-sync-peak", theme.peak);
 }
 
-/**
- * Bring 1-based `page`'s top edge to the stage's top edge. The viewer's own
- * goTo leaves a margin above the page, which reads as landing between pages.
- */
-function jumpToPage(page: number): void {
-  const area = stage();
-  if (!area) return;
-  const slots = pageSlots(area);
-  if (!slots.length) {
-    panel.goPage(page - 1);
-    return;
+let zoom = 1;
+function applyZoom(factor: number): void {
+  if (!Number.isFinite(factor) || factor <= 0 || factor === zoom) return;
+  zoom = factor;
+  clearScrollInput();
+  panel.zoomTo("fit", factor);
+  scheduleViewport();
+}
+
+let marked = false;
+function selectSource(file: string, from: number, to: number, blink: boolean): void {
+  if (!texts.has(file)) return;
+  marked = true;
+  viewer.toggleAttribute("data-blink", blink);
+  void session.selectSource(file, from, to);
+}
+
+function clearMarks(): void {
+  if (!marked) return;
+  marked = false;
+  viewer.removeAttribute("data-blink");
+  void session.selectBytes("", 0, 0);
+}
+
+interface LineIndex {
+  text: string;
+  starts: number[];
+  bytes: number;
+}
+
+const lineIndexes = new Map<string, LineIndex>();
+function lineIndex(file: string): LineIndex | null {
+  const text = texts.get(file);
+  if (text === undefined) return null;
+  const cached = lineIndexes.get(file);
+  if (cached?.text === text) return cached;
+  const bytes = new TextEncoder().encode(text);
+  const starts = [0];
+  for (let i = 0; i < bytes.length; i += 1) if (bytes[i] === 10) starts.push(i + 1);
+  const index = { text, starts, bytes: bytes.length };
+  lineIndexes.set(file, index);
+  return index;
+}
+
+/** 1-based source line for an engine byte offset. */
+function sourceLine(starts: readonly number[], byte: number): number {
+  let lo = 0;
+  let hi = starts.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (starts[mid] <= byte) lo = mid + 1;
+    else hi = mid;
   }
-  const wanted = Math.min(slots.length, page);
-  const slot = slots[wanted - 1];
-  const max = area.scrollHeight - area.clientHeight;
-  // Rounded up so no sliver of the previous page shows above it.
-  const top =
-    wanted === 1
-      ? 0
-      : Math.ceil(
-          slot.getBoundingClientRect().top - area.getBoundingClientRect().top + area.scrollTop,
-        );
-  area.scrollTop = Math.max(0, Math.min(max, top));
-  jumped = { page: wanted, top: area.scrollTop };
+  return lo;
 }
 
-/** The 1-based page at the stage's top edge, or null before a page is laid out. */
-function pageAtTop(area: HTMLElement): number | null {
-  const slots = pageSlots(area);
-  if (!slots.length) return null;
-  const scrollTop = area.scrollTop;
-  // A jump that could not bring its page to the top (the last pages) still
-  // landed on that page, and so did one the browser rounded a pixel short.
-  if (jumped && Math.abs(jumped.top - scrollTop) <= 2 && jumped.page <= slots.length)
-    return jumped.page;
-  jumped = null;
-  const max = area.scrollHeight - area.clientHeight;
-  if (max > 0 && scrollTop >= max - 1) return slots.length;
-  // Page tops are fractional under display scaling: a few pixels of slack.
-  const y = area.getBoundingClientRect().top + 4;
+interface SourceAnchor {
+  file: string;
+  line: number;
+  y: number;
+}
+
+async function pageAnchors(page: number): Promise<SourceAnchor[]> {
+  const glyphs = await session.sourceGlyphs(page);
+  const byFile = new Map<string, Map<number, SourceAnchor>>();
+  for (const g of glyphs) {
+    if (!g.file || g.synth || g.end <= g.start) continue;
+    const source = lineIndex(g.file);
+    if (!source || g.start < 0 || g.end > source.bytes) continue;
+    const line = sourceLine(source.starts, g.start);
+    let lines = byFile.get(g.file);
+    if (!lines) byFile.set(g.file, (lines = new Map()));
+    const y = g.y - 8;
+    const previous = lines.get(line);
+    if (!previous || y < previous.y) lines.set(line, { file: g.file, line, y });
+  }
+  return [...byFile.values()].flatMap((lines) => [...lines.values()]);
+}
+
+function surrounding(anchors: SourceAnchor[], key: "line" | "y", at: number) {
+  let before: SourceAnchor | undefined;
+  let after: SourceAnchor | undefined;
+  for (const anchor of anchors) {
+    const value = anchor[key];
+    if (value <= at && (!before || value > before[key])) before = anchor;
+    if (value >= at && (!after || value < after[key])) after = anchor;
+  }
+  return { before, after };
+}
+
+function between(a: number, b: number, x: number, start: number, end: number): number {
+  return a === b ? start : start + ((x - a) / (b - a)) * (end - start);
+}
+
+function pageSlots(): NodeListOf<HTMLElement> {
+  return viewer.querySelectorAll<HTMLElement>(".slot[data-k]");
+}
+
+/** Index of the last page whose top is at or above this screen height. */
+function pageAt(slots: NodeListOf<HTMLElement>, y: number): number {
   let lo = 0;
   let hi = slots.length;
   while (lo < hi) {
@@ -670,76 +641,343 @@ function pageAtTop(area: HTMLElement): number | null {
     if (slots[mid].getBoundingClientRect().top <= y) lo = mid + 1;
     else hi = mid;
   }
-  return Math.max(1, lo);
+  return Math.max(0, lo - 1);
+}
+
+const cssPoints = () => panel.pixelsPerPoint() / window.devicePixelRatio;
+const maxScroll = () => Math.max(0, stage.scrollHeight - stage.clientHeight);
+
+let reference = 0;
+let inputUntil = 0;
+let observedTop = stage.scrollTop;
+/** The requested page still counts if the last page could not go to the top. */
+let jumped: { page: number; top: number } | null = null;
+let viewportFrame = 0;
+let viewportBusy = false;
+let viewportStamp = 0;
+let viewportGesture = false;
+let viewportPending = false;
+
+function setReference(y: number): void {
+  if (!Number.isFinite(y) || reference === Math.max(0, y)) return;
+  reference = Math.max(0, y);
+  viewportStamp += 1;
+}
+
+function clearScrollInput(): void {
+  inputUntil = 0;
+  viewportGesture = false;
+  viewportStamp += 1;
+}
+
+function writeScroll(top: number): number {
+  clearScrollInput();
+  stage.scrollTop = Math.max(0, Math.min(top, maxScroll()));
+  observedTop = stage.scrollTop;
+  scheduleViewport();
+  return observedTop;
+}
+
+function jumpToPage(page: number): void {
+  const slots = pageSlots();
+  if (!slots.length) return;
+  cancelReveal();
+  const wanted = Math.min(slots.length, page);
+  const top =
+    wanted === 1
+      ? 0
+      : Math.ceil(
+          slots[wanted - 1].getBoundingClientRect().top -
+            stage.getBoundingClientRect().top +
+            stage.scrollTop,
+        );
+  jumped = { page: wanted, top: writeScroll(top) };
+  scheduleViewport(true);
+}
+
+function scheduleViewport(gesture = false): void {
+  viewportPending = true;
+  viewportGesture ||= gesture;
+  if (disposed || viewportFrame || viewportBusy) return;
+  viewportFrame = window.requestAnimationFrame(() => void reportViewport());
 }
 
 async function reportViewport(): Promise<void> {
-  const area = stage();
-  if (!area || !session) return;
-  // A source lookup is still running: report once it is done rather than
-  // dropping this one, or the page indicator keeps the old page.
-  if (viewportBusy) {
-    scheduleViewport();
-    return;
-  }
-  let page = -1;
-  let fraction = 0;
-  for (let k = 0; k < Math.max(pageCount, pageSizes.size); k += 1) {
-    const view = panel.pageView(k);
-    if (!view) continue;
-    page = k;
-    fraction = Math.max(0, view[1]);
-    break;
-  }
-  const current = pageAtTop(area);
-  if (page < 0) {
-    post({
-      type: "viewport",
-      scrollTop: area.scrollTop,
-      page: current,
-      file: null,
-      line: null,
-      gesture: true,
-    });
-    return;
-  }
-  const size = pageSizes.get(page);
-  if (!size) return;
+  viewportFrame = 0;
+  viewportPending = false;
   viewportBusy = true;
+  const gesture = viewportGesture;
+  const stamp = viewportStamp;
+  const revision = lastSeq;
+  viewportGesture = false;
   try {
-    const y = Math.min(size.h - 2, Math.max(2, fraction * size.h + 4));
-    const source = await session.sourceOf([
-      { k: page, rects: [[0, y, size.w * 0.8, Math.max(24, size.h * 0.08)]] },
-    ]);
-    if (!source) {
-      post({
-        type: "viewport",
-        scrollTop: area.scrollTop,
-        page: current,
-        file: null,
-        line: null,
-        gesture: true,
-      });
-      return;
+    const slots = pageSlots();
+    const top = stage.scrollTop;
+    const edge = stage.getBoundingClientRect().top;
+    const current = !slots.length
+      ? null
+      : jumped && Math.abs(jumped.top - top) <= 2 && jumped.page <= slots.length
+        ? jumped.page
+        : maxScroll() > 0 && top >= maxScroll() - 1
+          ? slots.length
+          : pageAt(slots, edge + 4) + 1;
+    let file: string | null = null;
+    let line: number | null = null;
+    if (current !== null && gesture && !hasTypesetWork()) {
+      const height = edge + Math.min(reference, stage.clientHeight);
+      let k = pageAt(slots, height);
+      // The reference can be in the gap just before the next page.
+      if (slots[k].getBoundingClientRect().bottom < height && k + 1 < slots.length) k += 1;
+      const y = (height - slots[k].getBoundingClientRect().top) / cssPoints();
+      const { before, after } = surrounding(await pageAnchors(k), "y", y);
+      const closest = before && (!after || y - before.y <= after.y - y) ? before : after;
+      if (closest) {
+        file = closest.file;
+        line =
+          before && after && before.file === after.file && before.line <= after.line
+            ? between(before.y, after.y, y, before.line, after.line)
+            : closest.line;
+      }
     }
-    const text = texts.get(source.file);
-    if (text === undefined) return;
-    const at = charOffset(text, source.start);
-    const line = text.slice(0, at).split("\n").length;
-    post({
-      type: "viewport",
-      scrollTop: area.scrollTop,
-      page: current,
-      file: source.file,
-      line,
-      gesture: true,
-    });
-  } catch {
-    // A page without origins yet: the next scroll asks again.
+    if (!disposed && stamp === viewportStamp && revision === lastSeq) {
+      post({ type: "viewport", scrollTop: top, page: current, file, line, gesture });
+    }
   } finally {
     viewportBusy = false;
+    if (viewportPending) scheduleViewport();
   }
 }
+
+interface Reveal {
+  file: string;
+  line: number;
+  y: number;
+  seq: number | null;
+}
+
+let pendingReveal: Reveal | null = null;
+let revealStamp = 0;
+let revealFrame = 0;
+let revealBusy = false;
+
+function cancelReveal(): void {
+  revealStamp += 1;
+  pendingReveal = null;
+}
+
+function queueReveal(request: Reveal): void {
+  if (!Number.isFinite(request.line) || !Number.isFinite(request.y)) return;
+  revealStamp += 1;
+  clearScrollInput();
+  pendingReveal = request;
+  scheduleReveal();
+}
+
+function scheduleReveal(): void {
+  if (disposed || revealBusy || revealFrame || !pendingReveal) return;
+  revealFrame = window.requestAnimationFrame(() => void revealSource());
+}
+
+async function revealSource(): Promise<void> {
+  revealFrame = 0;
+  const request = pendingReveal;
+  if (!request) return;
+  pendingReveal = null;
+  revealBusy = true;
+  const stamp = revealStamp;
+  const revision = lastSeq;
+  const stale = () => disposed || stamp !== revealStamp || revision !== lastSeq || hasTypesetWork();
+  try {
+    const top = stale() ? null : await locateSource(request, stale);
+    if (disposed || stamp !== revealStamp || revision !== lastSeq) return;
+    if (top !== null && !stale()) {
+      jumped = null;
+      const actual = writeScroll(top);
+      if (request.seq !== null) post({ type: "scrolled", seq: request.seq, scrollTop: actual });
+    } else if (request.seq !== null) {
+      post({ type: "scrolled", seq: request.seq, scrollTop: null });
+    }
+  } finally {
+    revealBusy = false;
+    scheduleReveal();
+  }
+}
+
+async function locateSource(
+  { file, line, y }: Reveal,
+  stale: () => boolean,
+): Promise<number | null> {
+  const source = lineIndex(file);
+  const slots = pageSlots();
+  if (!source || !slots.length || line < 1 || Math.floor(line) > source.starts.length) return null;
+  if (file === main && line <= 1) return 0;
+  const edge = stage.getBoundingClientRect().top;
+  const here = pageAt(slots, edge + y);
+  const placement = async (page: number) => {
+    if (!slots[page] || stale()) return null;
+    const anchors = (await pageAnchors(page)).filter((anchor) => anchor.file === file);
+    const { before, after } = surrounding(anchors, "line", line);
+    if (before && after && before.y <= after.y) {
+      return {
+        page,
+        distance: after.line - before.line,
+        point: between(before.line, after.line, line, before.y, after.y),
+      };
+    }
+    const closest = before && (!after || line - before.line <= after.line - line) ? before : after;
+    if (!closest || Math.abs(closest.line - line) > 1) return null;
+    return { page, distance: 2 + Math.abs(closest.line - line), point: closest.y };
+  };
+
+  let best = await placement(here);
+  // A generated contents entry can appear far from its source. Prefer a
+  // tighter bound on a neighboring page to interpolation across that gap.
+  const checked = new Set([here]);
+  const tryPages = async (pages: readonly number[]) => {
+    for (const page of pages) {
+      if (checked.has(page) || stale()) continue;
+      checked.add(page);
+      const candidate = await placement(page);
+      if (candidate && (!best || candidate.distance < best.distance)) best = candidate;
+    }
+  };
+  if (!best || best.distance > 1) await tryPages([here - 1, here + 1]);
+  if ((!best || best.distance > 3) && !stale()) {
+    const at = source.starts[Math.floor(line) - 1];
+    await tryPages(await session.sourcePages(file, at, stale));
+  }
+  if (!best || stale()) return null;
+  const box = slots[best.page].getBoundingClientRect();
+  return stage.scrollTop + box.top + best.point * cssPoints() - y;
+}
+
+let gestureStamp = 0;
+let doubleClickStamp = -1;
+let pressed: { x: number; y: number } | null = null;
+let pointerDragged = false;
+
+function readerInput(): void {
+  cancelReveal();
+  gestureStamp += 1;
+  clearScrollInput();
+  inputUntil = performance.now() + 500;
+  jumped = null;
+  post({ type: "input" });
+}
+
+async function clickSource(k: number, x: number, y: number, detail: 1 | 2): Promise<void> {
+  if (hasTypesetWork()) return;
+  const slot = pageSlots()[k];
+  if (!slot) return;
+  const height = slot.getBoundingClientRect().top + y * cssPoints();
+  const revision = lastSeq;
+  const gesture = ++gestureStamp;
+  if (detail === 2) doubleClickStamp = gesture;
+  const glyphs = (await session.sourceGlyphs(k)).filter((g) => g.file && !g.synth);
+  if (disposed || gesture !== gestureStamp || revision !== lastSeq || hasTypesetWork()) return;
+  const glyph = nearest(glyphs, x, y);
+  if (!glyph?.file) return;
+  const offsets = glyphOffsets(glyph.file, glyph.start, glyph.end);
+  if (!offsets) return;
+  const onGlyph = Math.abs(glyph.y - 3 - y) <= 7 && Math.abs(glyph.x + 2.5 - x) <= 8;
+  if (detail === 2 && !onGlyph) return;
+  const word = detail === 2 ? wordAt(texts.get(glyph.file)!, offsets.from) : null;
+  const range = word && word.from <= offsets.from && word.to >= offsets.to ? word : offsets;
+  post({
+    type: "source",
+    file: glyph.file,
+    from: range.from,
+    to: detail === 2 ? range.to : range.from,
+    detail,
+    y: onGlyph ? height : null,
+    drag: false,
+    // Several printed glyphs can carry the same source range. Only a
+    // single-character origin can place the exact caret on a plain click.
+    precision: !onGlyph
+      ? "none"
+      : detail === 2 || offsets.to - offsets.from === 1
+        ? "exact"
+        : "line",
+  });
+}
+
+function glyphOffsets(file: string, start: number, end: number) {
+  const source = lineIndex(file);
+  if (!source || start < 0 || end <= start || end > source.bytes) return null;
+  return { from: charOffset(source.text, start), to: charOffset(source.text, end) };
+}
+
+async function selectPage(selection: Parameters<PreviewSession["sourceOf"]>[0]): Promise<void> {
+  // The browser also selects text on double-click. The click report owns
+  // that gesture and carries its reveal height to the host.
+  if (!selection.length || hasTypesetWork() || doubleClickStamp === gestureStamp) return;
+  const revision = lastSeq;
+  const gesture = ++gestureStamp;
+  const found = await session.sourceOf(selection);
+  if (!found || disposed || gesture !== gestureStamp || revision !== lastSeq || hasTypesetWork())
+    return;
+  const offsets = glyphOffsets(found.file, found.start, found.end);
+  if (!offsets) return;
+  post({
+    type: "source",
+    file: found.file,
+    ...offsets,
+    detail: 1,
+    y: null,
+    drag: true,
+    precision: "exact",
+  });
+}
+
+stage.addEventListener("pointerdown", (event) => {
+  pressed = { x: event.clientX, y: event.clientY };
+  pointerDragged = false;
+  readerInput();
+});
+window.addEventListener(
+  "pointermove",
+  (event) => {
+    if (pressed && Math.hypot(pressed.x - event.clientX, pressed.y - event.clientY) > 4)
+      pointerDragged = true;
+  },
+  { passive: true },
+);
+window.addEventListener("pointerup", () => (pressed = null));
+window.addEventListener("pointercancel", () => (pressed = null));
+stage.addEventListener(
+  "wheel",
+  (event) => {
+    readerInput();
+    if ((event.ctrlKey || event.metaKey) && !(event.target as Element).closest(".peek")) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const unit = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? stage.clientHeight : 1;
+      post({ type: "zoom-wheel", deltaY: event.deltaY * unit });
+    }
+  },
+  { capture: true, passive: false },
+);
+stage.addEventListener("touchstart", readerInput, { passive: true });
+stage.addEventListener("keydown", readerInput);
+stage.addEventListener(
+  "scroll",
+  () => {
+    const top = stage.scrollTop;
+    if (observedTop === top) return;
+    observedTop = top;
+    viewportStamp += 1;
+    const gesture = !!pressed || performance.now() < inputUntil;
+    if (gesture) inputUntil = performance.now() + 500;
+    scheduleViewport(gesture);
+  },
+  { passive: true },
+);
+stage.addEventListener("click", (event) => {
+  if (event.detail !== 1 || pointerDragged || event.defaultPrevented) return;
+  if (!(event.target as Element).closest(".slot")) return;
+  const spot = panel.spot();
+  if (spot) void clickSource(spot.k, spot.x, spot.y, 1);
+});
 
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") post({ type: "key", key: "Escape" });
