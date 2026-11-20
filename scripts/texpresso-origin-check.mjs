@@ -46,23 +46,32 @@ const check = (ok, name, detail = "") => {
   console.log(`${ok ? "PASS" : "FAIL"} ${name}${detail ? ` — ${detail}` : ""}`);
 };
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest();
+const retryableStatus = new Set([500, 502, 503, 504, 520, 521, 522, 523, 524]);
+const maxAttempts = 3;
 
 async function get(url) {
   for (let attempt = 1; ; attempt += 1) {
     try {
       const response = await fetch(url, { redirect: "error" });
-      if (!response.ok) return { status: response.status };
-      return {
-        status: 200,
-        bytes: Buffer.from(await response.arrayBuffer()),
-        type: response.headers.get("content-type"),
-        cache: response.headers.get("cache-control"),
-      };
+      if (response.ok) {
+        return {
+          status: 200,
+          bytes: Buffer.from(await response.arrayBuffer()),
+          type: response.headers.get("content-type"),
+          cache: response.headers.get("cache-control"),
+        };
+      }
+      await response.body?.cancel().catch(() => {});
+      if (attempt === maxAttempts || !retryableStatus.has(response.status)) {
+        const ray = response.headers.get("cf-ray");
+        return { status: response.status, error: ray ? `CF-Ray ${ray}` : undefined };
+      }
     } catch (error) {
-      // A dropped connection is retried; a wrong byte never is.
-      if (attempt === 3) return { status: 0, error: String(error.cause ?? error) };
-      await new Promise((wake) => setTimeout(wake, 300 * attempt));
+      if (attempt === maxAttempts) return { status: 0, error: String(error.cause ?? error) };
     }
+    // Stagger retries so workers that failed together do not all retry together.
+    const delay = 500 * 2 ** (attempt - 1) + Math.random() * 500;
+    await new Promise((wake) => setTimeout(wake, delay));
   }
 }
 
