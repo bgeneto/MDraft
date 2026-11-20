@@ -743,6 +743,7 @@
   // unknown; the first paint applies it again.
   let zoomPending = false;
   let zoomWidth = -1;
+  let zoomScrollFrame = 0;
   /**
    * Set the app's zoom mode and lay the pages out.
    *
@@ -769,6 +770,7 @@
     return true;
   };
   const applyZoom = (factor) => {
+    cancelAnimationFrame(zoomScrollFrame);
     zoom = factor;
     const preview = api().preview;
     const box = pagesBox();
@@ -794,7 +796,13 @@
       }
     }
     positions.clear();
-    if (box) requestAnimationFrame(() => writeScroll(ratio * box.scrollHeight));
+    if (box) {
+      zoomScrollFrame = requestAnimationFrame(() => {
+        zoomScrollFrame = 0;
+        if (jumped?.element.isConnected) restorePageJump();
+        else writeScroll(ratio * box.scrollHeight);
+      });
+    }
   };
   const applyTheme = (theme) => {
     const root = document.documentElement;
@@ -813,6 +821,8 @@
   let clickDetail = 1;
   let reference = 24;
   const gesture = (event) => {
+    cancelAnimationFrame(zoomScrollFrame);
+    clearPageJump();
     lastInput = performance.now();
     // The reader scrolls or types: a link still on its way must not yank the
     // pages. A press may be the second half of the double-click that followed it.
@@ -855,6 +865,24 @@
    */
   /** The last page jump and where it left the box, so the report keeps it. */
   let jumped = null;
+  const pageScrollTop = (box, page, number) => {
+    const top = number === 1 ? 0 : Math.ceil(pageTopInBox(page, box));
+    return Math.max(0, Math.min(box.scrollHeight - box.clientHeight, top));
+  };
+  const restorePageJump = () => {
+    const box = pagesBox();
+    if (!jumped?.element.isConnected || !box) return;
+    const top = pageScrollTop(box, jumped.element, jumped.page);
+    if (Math.abs(top - scrollTopOf.get.call(box)) > 1) jumped.top = writeScroll(top);
+  };
+  // The scrollbar goes away when the live frame takes over from a cached PDF.
+  // Fit-width can resize the pages after the pane itself has already resized.
+  const pageResize = new ResizeObserver(restorePageJump);
+  const clearPageJump = () => {
+    if (!jumped) return;
+    jumped = null;
+    pageResize.disconnect();
+  };
   const pageAtTop = (box) => {
     const pages = [...document.querySelectorAll("#pages .page")];
     if (!pages.length) return null;
@@ -863,7 +891,7 @@
     // landed on that page, and so did one the browser rounded a pixel short.
     if (jumped && Math.abs(jumped.top - scrollTop) <= 2 && jumped.page <= pages.length)
       return jumped.page;
-    jumped = null;
+    clearPageJump();
     const max = box.scrollHeight - box.clientHeight;
     if (max > 0 && scrollTop >= max - 1) return pages.length;
     // The page at the frame's top edge, not at the sync line: page tops are
@@ -884,7 +912,19 @@
     if (!box || !api()) return;
     const top = scrollTopOf.get.call(box);
     const own = ownScroll && performance.now() < ownScroll.until && Math.abs(ownScroll.top - top) <= 2;
-    if (own) return;
+    if (own) {
+      // Source-driven scrolling still moves the page indicator and the tab's
+      // reading position. It must leave the editor where the reader put it.
+      post({
+        type: "viewport",
+        scrollTop: top,
+        page: pageAtTop(box),
+        file: openName(),
+        line: null,
+        gesture: false,
+      });
+      return;
+    }
     const line = withProbes(() => lineAtY(top + reference));
     // A followed link leaves the source where it is, as a link in the PDF view does.
     const landed =
@@ -1279,6 +1319,10 @@
       const y = withProbes(() => yOfLine(message.line));
       const box = pagesBox();
       const max = box ? box.scrollHeight - box.clientHeight : 0;
+      if (y !== null) {
+        cancelAnimationFrame(zoomScrollFrame);
+        clearPageJump();
+      }
       const top = y === null ? null : writeScroll(Math.min(max, y - message.y));
       post({ type: "scrolled", seq: message.seq, scrollTop: top });
     },
@@ -1287,18 +1331,21 @@
       const pages = [...document.querySelectorAll("#pages .page")];
       const requested = Math.floor(Number(message.page));
       if (!box || !pages.length || !Number.isFinite(requested) || requested < 1) return;
-      const page = pages[Math.min(pages.length, requested) - 1];
-      if (!page) return;
+      const page = Math.min(pages.length, requested);
+      const element = pages[page - 1];
+      // The initial zoom's scroll restoration may still be queued in a
+      // covered frame. The host's landing page takes precedence.
+      cancelAnimationFrame(zoomScrollFrame);
+      clearPageJump();
       // This is the host's gesture, not the app's caret-follow: bypass the
       // scroll guard, report the landing, and let source sync follow it.
       ownScroll = null;
       pageJump = true;
       // The page's top edge goes to the frame's top edge, rounded up so no
       // sliver of the previous page shows above it.
-      const max = box.scrollHeight - box.clientHeight;
-      const top = requested === 1 ? 0 : Math.ceil(pageTopInBox(page, box));
-      scrollTopOf.set.call(box, Math.max(0, Math.min(max, top)));
-      jumped = { page: Math.min(pages.length, requested), top: scrollTopOf.get.call(box) };
+      scrollTopOf.set.call(box, pageScrollTop(box, element, page));
+      jumped = { page, element, top: scrollTopOf.get.call(box) };
+      pageResize.observe(element);
       if (!viewportFrame) viewportFrame = requestAnimationFrame(reportViewport);
     },
     zoom(message) {

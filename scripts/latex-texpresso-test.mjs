@@ -23,7 +23,7 @@
 //      the preview, a web address goes to the (stubbed) system opener;
 
 import { openPage, emitMenu, sleep } from "./cdp-page.mjs";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -306,6 +306,79 @@ async function tabCacheProbe() {
         "an unchanged live frame restores the count it reported while hidden",
         `${total} of ${bookPages}`,
       );
+
+      const line = "Book page 40";
+      await editor(`
+        const head = view.state.doc.toString().indexOf(${JSON.stringify(line)}) + ${line.length};
+        view.dispatch({ selection: { anchor: head } });
+        view.scrollDOM.scrollTop = view.lineBlockAt(head).top - 100;
+      `);
+      await requireReady(
+        `document.querySelector(".cm-content").textContent.includes(${JSON.stringify(line)})`,
+        "the later line in the editor viewport",
+        5_000,
+      );
+      await editor(`view.contentDOM.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));`);
+      await sleep(250);
+      const scrollTop = () => bookFrame.evaluate('document.getElementById("pages").scrollTop');
+      const alignedTop = await scrollTop();
+      check(
+        alignedTop > 1000,
+        "the editor aligns the live preview on a later page",
+        `${alignedTop}`,
+      );
+      check((await evaluate(`Number(${field}.value)`)) > 1, "the page field follows the preview");
+      const stillAligned = async () =>
+        (await evaluate(
+          `Boolean(document.querySelector(".app.latex-texpresso.texpresso-painted"))`,
+        )) &&
+        (await counts()).mounts === before.mounts &&
+        Math.abs((await scrollTop()) - alignedTop) < 2;
+
+      const token = await dataset("latexCurrent");
+      // Two real edit transactions return the buffer to an already cached PDF.
+      await editor(`
+        const from = view.state.selection.main.head;
+        view.dispatch({ changes: { from, insert: "!" } });
+        view.dispatch({ changes: { from, to: from + 1 } });
+      `);
+      await requireReady(
+        `${current} && document.querySelector("#preview").dataset.latexCurrent !== ${JSON.stringify(token)}`,
+        "the cached PDF for the restored text",
+      );
+      const kept = await stillAligned();
+      check(kept, "a cached PDF leaves the live preview at the aligned position");
+      if (!kept) return;
+
+      const insert = (text) =>
+        editor(`
+        const from = view.state.selection.main.head;
+        view.dispatch({ changes: { from, insert: ${JSON.stringify(text)} }, selection: { anchor: from + ${text.length} } });
+      `);
+      await insert(" saved text");
+      await emitMenu(page, "file.save");
+      await requireReady(
+        `${current} && !document.querySelector('.doc-tab[aria-selected="true"]').classList.contains("is-dirty")`,
+        "the edit to be saved and its PDF ready",
+      );
+      check(
+        readFileSync(book, "utf8").includes(`${line} saved text`) && (await stillAligned()),
+        "saving the edit and preparing its PDF keep the preview aligned",
+      );
+
+      const paint = Number(await dataset("texpressoPainted"));
+      await insert(" and more typing");
+      await requireReady(
+        `${current} && Number(document.querySelector("#preview").dataset.texpressoPainted) > ${paint}`,
+        "a live repaint after continuing to type",
+      );
+      check(
+        (await stillAligned()) &&
+          (await bookFrame.evaluate(
+            'texpresso.editor.state.doc.toString().includes("saved text and more typing")',
+          )),
+        "typing after Save updates the same live preview at the aligned position",
+      );
     } finally {
       bookFrame.close();
     }
@@ -426,15 +499,29 @@ async function tabCacheProbe() {
       "a second click can leave the edited book during compilation",
     );
     await click(bookName, "true");
-    check(
-      await waitFor(
-        `${current} && document.querySelector(".app.latex-texpresso") &&
-        ${field}?.value === "${readingPage}"`,
-        120_000,
-        "the live book to restore its reading page",
-      ),
-      "the edited book hands back to live rendering at the same page",
+    const ready = await waitFor(
+      `${current} && document.querySelector(".app.latex-texpresso") &&
+      ${field}?.value === "${readingPage}"`,
+      120_000,
+      "the live book to restore its reading page",
     );
+    let visible = false;
+    if (ready) {
+      const liveBook = await openPage(port, { type: "iframe", match: /mdraft-tex\.localhost/ });
+      try {
+        // A viewport write queued during startup can arrive after the jump.
+        await sleep(300);
+        visible = await liveBook.evaluate(`(() => {
+          const pages = document.getElementById("pages");
+          const viewport = pages.getBoundingClientRect();
+          const page = pages.querySelectorAll(".page")[${readingPage - 1}]?.getBoundingClientRect();
+          return Boolean(page && page.top < viewport.bottom && page.bottom > viewport.top);
+        })()`);
+      } finally {
+        liveBook.close();
+      }
+    }
+    check(visible, "the edited book hands back to live rendering at the same page");
   }
 }
 

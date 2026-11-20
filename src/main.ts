@@ -4312,18 +4312,27 @@ async function renderLatexPreview(
     }
     if (engineStatus.backend === "native") texpressoRelease();
     if (!force && rebindLatexPreview(key, root, source, token, activeId, revisions)) return;
+    // An edit clears the frame's snapshot key even if it returns to text we
+    // already exported. Keep the live viewport and reuse only the PDF bytes.
+    if (
+      !storeOnly &&
+      engineStatus.backend === "bundled" &&
+      (!stored || (texpressoShowing() && texpressoMatches(build)))
+    ) {
+      if (texpressoPrepare(build) && texpressoSyncSnapshot(build, snapshot, key)) {
+        // The session releases this capture when replaced or disposed.
+        snapshotToken = null;
+        if (stored) commitLatexShadow({ ...owner, result: stored }, key, { stored: true, started });
+        else await texpressoExportPdf(build, snapshot, owner, key, started);
+        return;
+      }
+      if (!stored) return;
+    }
     if (stored) {
       // A live frame for another generation must not overlay this cached result.
       if (previewCovers(texpressoOwner)) texpressoRelease();
       latexInFlight = true;
     } else if (storeOnly) {
-      return;
-    } else if (engineStatus.backend === "bundled") {
-      if (!texpressoPrepare(build)) return;
-      if (!texpressoSyncSnapshot(build, snapshot, key)) return;
-      // The session releases this capture when replaced or disposed.
-      snapshotToken = null;
-      await texpressoExportPdf(build, snapshot, owner, key, started);
       return;
     }
     // A symlink the snapshot refused is reported before the compile, so a
@@ -5222,6 +5231,21 @@ function texpressoChip(): void {
   }
 }
 
+function texpressoMatches(build: LatexBuildRequest): boolean {
+  const session = texpresso;
+  const owner = texpressoOwner;
+  const backend = latexPreviewBackend();
+  return (
+    session !== null &&
+    owner?.kind === "latex-project" &&
+    owner.rootId === build.root.id &&
+    owner.rootIncarnation === build.root.incarnation &&
+    pathKey(session.key.rootPath) === pathKey(build.root.path) &&
+    session.key.backend === backend &&
+    session.key.engine === previewEngineFor(backend, build.engineChoice?.engine ?? "xelatex")
+  );
+}
+
 /** Mount or reuse the frame once the render has work for it. */
 function texpressoPrepare(build: LatexBuildRequest): boolean {
   texpressoFallbackReason = null;
@@ -5245,16 +5269,7 @@ function texpressoPrepare(build: LatexBuildRequest): boolean {
     texpressoFallbackTo(reason ?? "failed");
     return false;
   }
-  const session = texpresso;
-  if (
-    !session ||
-    pathKey(session.key.rootPath) !== rootKey ||
-    session.key.engine !== frameEngine ||
-    session.key.backend !== previewBackend ||
-    texpressoOwner?.kind !== "latex-project" ||
-    texpressoOwner.rootId !== build.root.id ||
-    texpressoOwner.rootIncarnation !== build.root.incarnation
-  ) {
+  if (!texpressoMatches(build)) {
     // Another project or engine: XeLaTeX and LuaLaTeX are different workers,
     // formats and font caches, so an engine change is a new frame.
     texpressoRelease();
