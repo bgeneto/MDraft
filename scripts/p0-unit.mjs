@@ -9,6 +9,9 @@
 import { buildRecoveryEntry, createRecoveryScheduler, newRecoveryId } from "../src/recovery.ts";
 import { classifyDiskChange } from "../src/disk-change.ts";
 import { createDocumentLifecycle } from "../src/document-lifecycle.ts";
+import { LatexBuildError } from "../src/latex.ts";
+import { diagnosticRange, diagnosticSignature } from "../src/latex-diagnostics.ts";
+import { lineTextOf } from "../src/latex-references.ts";
 import { createSessionStore, pathKey } from "../src/sessions.ts";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
@@ -1108,7 +1111,6 @@ const shellNoops = [
   "invalidatePreview",
   "restorePreview",
   "resetSyncReference",
-  "applyLatexMarks",
   "syncGuest",
   "resetOutline",
   "applyLayout",
@@ -1132,8 +1134,7 @@ function shellHarness(names, extra = {}) {
     settings: { spellcheck: false, spellcheckWords: [] },
     performance: { now: () => 0 },
     SYNC_SUPPRESS_MS: 0,
-    latexProblems: [],
-    latexProblemRoot: null,
+    selectedLatexProblem: null,
     htmlScrollTop: 0,
     previewPane: { scrollTop: 0 },
     pendingPreviewScroll: null,
@@ -1884,6 +1885,87 @@ for (const autoCompile of [false, true]) {
     autoCompile ? statuses.length === 0 : statuses.some((text) => text.includes("engine changed")),
     `manual mode says why the preview is out of date (auto-compile ${autoCompile ? "on" : "off"})`,
   );
+}
+
+// ---------------------------------------------------------------------------
+// LaTeX diagnostics: keep them in Logs until the reader chooses a location.
+// ---------------------------------------------------------------------------
+
+{
+  const root = { path: "/project/main.tex", directory: "/project" };
+  const source = "\\hbox to 1pt{Too wide}\n\\undefinedCommand\n";
+  const frame = { key: { rootPath: root.path } };
+  const problems = ["Overfull \\hbox", "Undefined control sequence"].map((message, index) => ({
+    file: "main.tex",
+    line: index + 1,
+    column: 0,
+    endColumn: 0,
+    severity: index === 0 ? "warning" : "error",
+    code: "typeset",
+    message,
+    text: "",
+    lineText: source.split("\n")[index],
+    searched: [],
+  }));
+  let diagnostics = problems;
+  let logged = [];
+  const marks = [];
+  const h = shellHarness(
+    [
+      "texpressoProblems",
+      "revealLatexProblem",
+      "clearStaleLatexMark",
+      "latexProblemMatchesLine",
+      "projectRelative",
+      "joinDir",
+    ],
+    {
+      LatexBuildError,
+      diagnosticRange,
+      diagnosticSignature,
+      lineTextOf,
+      pathKey,
+      latexPreview: null,
+      latexProblemFiles: new Set(),
+      latexProject: { files: new Set(["main.tex"]) },
+      texpresso: frame,
+      texpressoOwner: { kind: "latex-project", memberKeys: new Set([pathKey(root.path)]) },
+      texpressoShowing: () => true,
+      texpressoDiagnostics: () => diagnostics,
+      texpressoLogText: () => "",
+      latexCurrent: () => false,
+      latexProblemPanel: (error) => ({ diagnostics: error.diagnostics, querySelector: () => null }),
+      compiledUi: { details: (panel) => (logged = panel.diagnostics) },
+    },
+  );
+  describeFile(h.context.doc, root.path, source);
+  h.editor.setDoc(source);
+  h.editor.view.state = EditorState.create({ doc: source });
+  h.editor.setDiagnostics = (ranges, pulse) => marks.push({ ranges, pulse });
+  h.editor.clearDiagnostics = () => (marks.length = 0);
+  h.editor.revealOffset = () => {};
+  h.editor.view.dispatch = () => {};
+
+  h.fns.texpressoProblems(frame);
+  check(
+    logged === problems && marks.length === 0,
+    "live LaTeX problems go to Logs without a source mark",
+  );
+  await h.fns.revealLatexProblem(problems[0], root);
+  const chosen = marks[0];
+  check(
+    marks.length === 1 &&
+      chosen.pulse &&
+      chosen.ranges.length === 1 &&
+      chosen.ranges[0].from === 0 &&
+      chosen.ranges[0].to === source.indexOf("\n"),
+    "choosing a live warning in Logs highlights only its source line before a PDF export exists",
+  );
+  h.fns.texpressoProblems(frame);
+  check(marks.length === 1 && marks[0] === chosen, "an updated Log keeps the existing mark");
+  diagnostics = [problems[1]];
+  h.fns.texpressoProblems(frame);
+  check(marks.length === 0, "the mark clears when its diagnostic disappears");
 }
 
 // ---------------------------------------------------------------------------

@@ -2871,10 +2871,7 @@ let latexProblemRoot: { path: string; directory: string } | null = null;
  * Membership in the failed snapshot is the question the pin means to ask.
  */
 let latexProblemFiles: ReadonlySet<string> = new Set();
-/** The problems of the last failed compile, for the marks and the list. */
-let latexProblems: readonly LatexDiagnostic[] = [];
 let selectedLatexProblem: { path: string; signature: string } | null = null;
-/** The signature of the last auto-jumped list, so a re-render does not jump. */
 
 let latexInFlight = false;
 /** The owner token of the native job on screen, for Cancel. */
@@ -3089,9 +3086,7 @@ function compileCurrentLatexClean(): void {
   texpressoFallbackReason = null;
   texpressoLog = [];
   latexStore.clear();
-  // The old build's marks and list describe work this command discards. The
-  // rebuild repopulates them from its own result.
-  latexProblems = [];
+  // A clean build discards the previous compiler log and its selected mark.
   latexProblemRoot = null;
   latexProblemFiles = new Set();
   selectedLatexProblem = null;
@@ -3477,21 +3472,9 @@ function rebindLatexPreview(
 
   const result = value.result;
   const rootRef = { path: root.path, directory: root.directory };
-  latexProblems = result.warnings;
   latexProblemRoot = null;
   latexProblemFiles = new Set();
-  editor.clearDiagnostics();
-  // As after a compile: a warning the reader selected stays marked while the
-  // same warning still exists. Entering Split from a warning click lands here,
-  // and dropping the mark would undo the click that asked for it.
-  const selected =
-    selectedLatexProblem?.path === pathKey(doc.path ?? "")
-      ? result.warnings.find(
-          (problem) => diagnosticSignature(problem) === selectedLatexProblem?.signature,
-        )
-      : null;
-  if (selected) applyLatexMarks([selected], rootRef, doc.path, false);
-  else selectedLatexProblem = null;
+  clearStaleLatexMark(result.warnings, rootRef);
   showLatexWarnings(result, rootRef);
   const seconds = ((result.elapsedMs ?? 0) / 1000).toFixed(1);
   const warnings = result.warnings.length
@@ -3570,7 +3553,7 @@ function latexProblemPanel(
         button.title = `Looked for: ${problem.searched.join(", ")}`;
       }
       if (actionable)
-        button.addEventListener("click", () => void revealLatexProblem(problem, root, true));
+        button.addEventListener("click", () => void revealLatexProblem(problem, root));
       else if (!button.title)
         button.title =
           problem.file && !projectRelative(problem.file)
@@ -3622,40 +3605,26 @@ function projectRelative(file: string): boolean {
   );
 }
 
-/** The problems this project file owns, keyed by absolute path. */
-function latexProblemsForPath(
+/** A compiler update may clear an old mark. Only a click paints one. */
+function clearStaleLatexMark(
   problems: readonly LatexDiagnostic[],
-  root: { path: string; directory: string } | null,
-  path: string | null,
-): LatexDiagnostic[] {
-  if (!path || !root) return [];
-  const key = pathKey(path);
-  return problems.filter((problem) => {
-    if (!problem.file || problem.line < 1 || !projectRelative(problem.file)) return false;
-    return pathKey(joinDir(root.directory, problem.file)) === key;
-  });
-}
-
-/** Paint the marks for one document, from the last compile's problem list. */
-function applyLatexMarks(
-  problems: readonly LatexDiagnostic[],
-  root: { path: string; directory: string } | null,
-  path: string | null,
-  pulse: boolean,
+  root: { directory: string } | null,
 ): void {
-  if (!path || !root) {
-    editor.clearDiagnostics();
+  const selected = selectedLatexProblem;
+  if (!selected) return;
+  if (
+    root &&
+    selected.path === pathKey(doc.path ?? "") &&
+    problems.some(
+      (problem) =>
+        diagnosticSignature(problem) === selected.signature &&
+        pathKey(joinDir(root.directory, problem.file)) === selected.path &&
+        latexProblemMatchesLine(problem),
+    )
+  )
     return;
-  }
-  const text = editor.getDoc();
-  const ranges = latexProblemsForPath(problems, root, path)
-    .filter(latexProblemMatchesLine)
-    .map((problem) => {
-      const mapped = diagnosticRange(text, problem);
-      return mapped ? { from: mapped.from, to: mapped.to, lineFrom: mapped.lineFrom } : null;
-    })
-    .filter((range): range is { from: number; to: number; lineFrom: number } => range !== null);
-  editor.setDiagnostics(ranges, pulse);
+  selectedLatexProblem = null;
+  editor.clearDiagnostics();
 }
 
 function latexProblemMatchesLine(problem: LatexDiagnostic): boolean {
@@ -3667,45 +3636,44 @@ function latexProblemMatchesLine(problem: LatexDiagnostic): boolean {
   );
 }
 
-/**
- * Activate a problem's file and reveal its line.
- *
- * `focus` is true only for a click: an automatic jump after a failed compile
- * must not move the caret while the reader is still working.
- */
+/** Reveal the source location chosen in Logs. */
 async function revealLatexProblem(
   problem: LatexDiagnostic,
   root: { path: string; directory: string } | null,
-  focus: boolean,
 ): Promise<void> {
   if (!root || !problem.file || !projectRelative(problem.file)) return;
   const path = joinDir(root.directory, problem.file);
-  const belongsToFailure = latexProblemFiles.has(pathKey(path));
+  const key = pathKey(path);
+  const belongsToFailure = latexProblemFiles.has(key);
   const belongsToPreview = latexPreview?.result.sources.some(
     (source) => source.path === problem.file,
   );
-  if (!belongsToFailure && !belongsToPreview) return;
+  const belongsToLive =
+    texpresso &&
+    texpressoShowing() &&
+    pathKey(texpresso.key.rootPath) === pathKey(root.path) &&
+    texpressoOwner?.kind === "latex-project" &&
+    texpressoOwner.memberKeys.has(key);
+  if (!belongsToFailure && !belongsToPreview && !belongsToLive) return;
   const existing = sessions.findByPath(path);
   if (existing) {
     if (existing.id !== doc.id) await activateSession(existing.id);
   } else {
     await openPath(path, { silent: true, rememberRecent: false });
   }
-  if (!doc.path || pathKey(doc.path) !== pathKey(path)) return;
+  if (!doc.path || pathKey(doc.path) !== key) return;
   if (!latexProblemMatchesLine(problem)) {
     toast("The source line changed; compile again to update this location.");
     return;
   }
-  if (focus && settings.viewMode === "preview") setViewMode("split");
-  selectedLatexProblem = { path: pathKey(path), signature: diagnosticSignature(problem) };
-  applyLatexMarks([problem], root, doc.path, true);
   const mapped = diagnosticRange(editor.getDoc(), problem);
   if (!mapped) return;
+  if (settings.viewMode === "preview") setViewMode("split");
+  selectedLatexProblem = { path: key, signature: diagnosticSignature(problem) };
+  editor.setDiagnostics([mapped], true);
   editor.revealOffset(mapped.from);
-  if (focus) {
-    editor.view.dispatch({ selection: { anchor: mapped.from } });
-    editor.focus();
-  }
+  editor.view.dispatch({ selection: { anchor: mapped.from } });
+  editor.focus();
 }
 
 /**
@@ -3889,13 +3857,11 @@ async function latexFailure(
     compiledUi.showLogs(true, false);
   } else compiledUi.outputReady();
   previewSyncReady = false;
-  const problems = error instanceof LatexBuildError ? error.diagnostics : [];
-  latexProblems = problems;
   latexProblemRoot = root ? { ...root } : null;
   // Record the project's actual file set, so a later tab switch can tell "inside
   // the failed project" from "merely in the same folder".
   latexProblemFiles = new Set(
-    files.map((file) => pathKey(root ? joinDir(root.directory, file) : file)),
+    root ? files.map((file) => pathKey(joinDir(root.directory, file))) : [],
   );
   // A failure panel belongs to the project too: moving to a chapter of the
   // failed project may keep the problems visible while the next build runs.
@@ -3909,14 +3875,7 @@ async function latexFailure(
   );
   // A frame that never drew a page leaves nothing for Logs to sit beside.
   if (live && texpresso) texpressoSettleWait(texpresso);
-  if (root) {
-    applyLatexMarks(problems, root, doc.path, true);
-  } else {
-    latexProblemRoot = null;
-    latexProblemFiles = new Set();
-
-    editor.clearDiagnostics();
-  }
+  clearStaleLatexMark(issues, root);
   setLatexStatus(
     live
       ? shownPartial && error instanceof Error
@@ -4489,22 +4448,11 @@ async function renderLatexPreview(
       key,
     );
     previewSyncReady = true;
-    // A successful compile is the only authority that clears a problem list.
-    latexProblems = result.warnings;
-
     latexProblemRoot = null;
     latexProblemFiles = new Set();
-    editor.clearDiagnostics();
-    const selected =
-      selectedLatexProblem?.path === pathKey(doc.path ?? "")
-        ? result.warnings.find(
-            (problem) => diagnosticSignature(problem) === selectedLatexProblem?.signature,
-          )
-        : null;
-    if (selected)
-      applyLatexMarks([selected], { path: root.path, directory: root.directory }, doc.path, false);
-    else selectedLatexProblem = null;
-    showLatexWarnings(result, { path: root.path, directory: root.directory });
+    const rootRef = { path: root.path, directory: root.directory };
+    clearStaleLatexMark(result.warnings, rootRef);
+    showLatexWarnings(result, rootRef);
     if (stored) preview.dataset.latexFromStore = String(token);
     else delete preview.dataset.latexFromStore;
     if (!authoritative) {
@@ -4638,10 +4586,9 @@ async function resolveLatexBuild(
     disposeTypstPdf();
     latexEnableNote(engineStatus);
     commitPreview(documentOwner(doc));
-    latexProblems = [];
     latexProblemRoot = null;
     latexProblemFiles = new Set();
-
+    selectedLatexProblem = null;
     editor.clearDiagnostics();
     return null;
   }
@@ -5525,22 +5472,12 @@ function commitLatexShadow(
     warnings: result.warnings.length,
   });
   // A finished export replaces the frame's interim list.
-  latexProblems = result.warnings;
   latexProblemRoot = null;
   latexProblemFiles = new Set();
-  editor.clearDiagnostics();
-  if (root?.path && root.directory) {
-    const rootRef = { path: root.path, directory: root.directory };
-    const selected =
-      selectedLatexProblem?.path === pathKey(doc.path ?? "")
-        ? result.warnings.find(
-            (problem) => diagnosticSignature(problem) === selectedLatexProblem?.signature,
-          )
-        : null;
-    if (selected) applyLatexMarks([selected], rootRef, doc.path, false);
-    else selectedLatexProblem = null;
-    showLatexWarnings(result, rootRef);
-  }
+  const rootRef =
+    root?.path && root.directory ? { path: root.path, directory: root.directory } : null;
+  clearStaleLatexMark(result.warnings, rootRef);
+  if (rootRef) showLatexWarnings(result, rootRef);
   if (!authoritative) {
     previewStale = true;
     setLatexStatus(
@@ -5663,9 +5600,8 @@ function texpressoDiagnostics(session: TexpressoSession, directory: string): Lat
 }
 
 /**
- * The frame's problems, while typing: marks in the editor and the Problems
- * panel in the same shape as a compiled result. A finished export replaces
- * them with the authoritative list.
+ * Show the frame's interim problems in Logs while typing. A finished export
+ * replaces them with the authoritative list.
  */
 function texpressoProblems(session: TexpressoSession): void {
   if (session !== texpresso || !texpressoShowing()) return;
@@ -5675,8 +5611,7 @@ function texpressoProblems(session: TexpressoSession): void {
   const diagnostics = texpressoDiagnostics(session, root.directory);
   // Only while the exported result is out of date: a current one is the authority.
   if (latexCurrent(latexPreview)) return;
-  latexProblems = diagnostics;
-  applyLatexMarks(diagnostics, rootRef, doc.path, false);
+  clearStaleLatexMark(diagnostics, rootRef);
   if (diagnostics.length) {
     const panel = latexProblemPanel(new LatexBuildError("", diagnostics), rootRef, [
       ...(latexProject?.files ?? []),
@@ -7700,6 +7635,7 @@ function snapshotDoc(): void {
 function retirePreview(): void {
   previewPane.querySelector(":scope > .source-preview-warning")?.remove();
   selectedLatexProblem = null;
+  editor?.clearDiagnostics();
   compiledUi.reset();
   latexPartial = null;
   delete preview.dataset.latexPartial;
@@ -7837,10 +7773,9 @@ async function displayDoc(preservePdf = false): Promise<void> {
   editor.setLanguage(editorLanguageFor(doc));
   if (!preservePdf) restorePreview();
   assistant?.sync();
-  // A captured EditorState keeps the marks it had; a tab that was hidden before
-  // the failure has none, so paint the last compile's list for it. No pulse: the
-  // beat belongs to the failure, not to every tab switch.
-  applyLatexMarks(latexProblems, latexProblemRoot, doc.path, false);
+  // Restoring a tab's editor state can bring back a previously clicked mark.
+  selectedLatexProblem = null;
+  editor.clearDiagnostics();
   syncGuest(doc.language);
   resetOutline();
   applyLayout();
