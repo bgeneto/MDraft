@@ -97,7 +97,20 @@ async function waitFor(expression, timeoutMs) {
 }
 const pdfPath = join(library, "compiled.pdf");
 async function savePreviewText() {
-  await page.evaluate(`document.querySelector(".compiled-save-pdf").click()`);
+  await page.evaluate(`(() => {
+    const original = window.fetch;
+    window.fetch = function(input, options) {
+      const url = new URL(typeof input === "string" ? input : input.url, location.href);
+      if (url.hostname === "ipc.localhost" && decodeURIComponent(url.pathname) === "/plugin:dialog|save") {
+        window.fetch = original;
+        return Promise.resolve(new Response(JSON.stringify(${JSON.stringify(pdfPath)}), {
+          headers: { "Content-Type": "application/json", "Tauri-Response": "ok" },
+        }));
+      }
+      return original.call(window, input, options);
+    };
+    document.querySelector(".compiled-save-pdf").click();
+  })()`);
   const deadline = Date.now() + 10000;
   while (!existsSync(pdfPath)) {
     if (Date.now() >= deadline) throw new Error("The preview did not save its current PDF");
@@ -175,9 +188,6 @@ try {
       if (url.hostname === 'ipc.localhost' && command === 'plugin:dialog|open') {
         state.picks++;
         return new Response(JSON.stringify(state.next), {headers: {'Content-Type':'application/json', 'Tauri-Response':'ok'}});
-      }
-      if (url.hostname === 'ipc.localhost' && command === 'plugin:dialog|save') {
-        return new Response(JSON.stringify(${JSON.stringify(pdfPath)}), {headers: {'Content-Type':'application/json', 'Tauri-Response':'ok'}});
       }
       if (url.hostname === 'ipc.localhost' && command === 'latex_texmf_configure') state.changes++;
       return state.original.call(window, input, options);
@@ -519,14 +529,11 @@ try {
   });
   await emitMenu(page, "view.latexCompile");
   const failedOff = await waitFor(
-    `/mdraftlib\\.cls/.test(document.body.textContent) && !document.querySelector("[data-latex-current]")`,
-    180000,
+    `[...document.querySelectorAll('#compiler-problems .latex-problem[data-severity="error"]')]
+      .some((problem) => /mdraftlib\\.cls.*not found/.test(problem.textContent))`,
+    30000,
   );
-  check(failedOff, "with the class's folder off, the compile fails and names the class");
-  check(
-    await page.evaluate(`!!document.querySelector(".latex-manage-libraries")`),
-    "the failure offers Manage local packages…",
-  );
+  check(failedOff, "with the class's folder off, the compiler reports the missing class");
 
   // ---- a missing enabled folder blocks with a remedy ------------------------
   await invoke("latex_texmf_configure", {
@@ -542,6 +549,15 @@ try {
     !missing.ok && /not available/.test(missing.error) && /Turn it off/.test(missing.error),
     "an enabled folder that disappeared blocks the compile with a remedy",
     missing.ok ? "captured anyway" : missing.error,
+  );
+  await emitMenu(page, "view.latexCompile");
+  check(
+    await waitFor(
+      `Boolean(document.querySelector(".latex-manage-libraries")) &&
+        !document.querySelector("#preview[data-latex-current]")`,
+      30000,
+    ),
+    "the missing-folder error offers Manage local packages…",
   );
 
   // ---- removal unregisters only ------------------------------------------------
