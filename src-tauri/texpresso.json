@@ -1,7 +1,7 @@
 {
   "note": "Where the production LaTeX preview downloads from, and the SHA-256 of everything it may download. \"origin\" is the public bucket; MDRAFT_TEXPRESSO_ORIGIN (under the same https-or-loopback rule) points a launch at a local mirror instead. Read only by src-tauri/src/latex_texpresso.rs; checked against an origin by scripts/texpresso-origin-check.mjs. Docs: docs/architecture.md.",
   "origin": "https://mdraft.webonly.app/",
-  "appRelease": "release-0.2-13-g6a91b6a",
+  "appRelease": "log-based-completion-2-ga271257",
   "snapshot": "tt2026-2026-11",
   "bundle": {
     "list": {
@@ -11,22 +11,22 @@
     },
     "files": [
       {
-        "path": "tt2026/v3-36c268c2b4d8b963.deps",
+        "path": "tt2026/v4-36c268c2b4d8b963.deps",
         "bytes": 3638053,
         "sha256": "36c268c2b4d8b96358ceb6933be59d2c72a4d3354b11fc0e42c608b2ddc71e34"
       },
       {
-        "path": "tt2026/v3-3f7cdba0ab1f1379.fmt",
+        "path": "tt2026/v4-3f7cdba0ab1f1379.fmt",
         "bytes": 27439216,
         "sha256": "3f7cdba0ab1f137988d31493f6a6a33bf881c4e0f27fa53b0ab956a5ea65db99"
       },
       {
-        "path": "tt2026/v4-ae556f6e119c85f7.luatex.fmt",
-        "bytes": 6866845,
-        "sha256": "ae556f6e119c85f7d6897c0d15b5c417b2c6706d4c742c41d03f103eb830a5a7"
+        "path": "tt2026/v4-b42902fcd930a839.luatex.fmt",
+        "bytes": 6866839,
+        "sha256": "b42902fcd930a839a095c40680ba5113c570fd03b8d338a75fc2ef808bafa68d"
       },
       {
-        "path": "tt2026/v3-33a89a90d6d9c9e4.luatex-cache.tar",
+        "path": "tt2026/v4-33a89a90d6d9c9e4.luatex-cache",
         "bytes": 15912960,
         "sha256": "33a89a90d6d9c9e469199649b6bb103c45ba57531cb83d089cc41eee2c7b1a71"
       }
@@ -41,33 +41,33 @@
   "assets": [
     {
       "path": "ocaml.js",
-      "bytes": 926360,
-      "sha256": "e0d25580065811f039cda4dfb2cb2e79ded46236b80a6037acdc5a47904dc9ff"
+      "bytes": 926463,
+      "sha256": "61f337bcda955053effa6bccd5c07ed954067af378da235fb7f3d360f10d41f5"
     },
     {
       "path": "ocaml-worker.js",
-      "bytes": 236004,
-      "sha256": "b79cc71eb79bc1873083e85c5ae7abdeb1648be55f6c5c59cf70ad1288c85676"
+      "bytes": 236635,
+      "sha256": "4d30174bcbdea493e86fb69525e75b7b607cc40c3d80690b27051ff1373b014c"
     },
     {
       "path": "dluatex-bin-jspi.js",
-      "bytes": 120094,
-      "sha256": "1e67be28c212f7966713ee421138707f9c752decbfa881f7b4b906efa857a784"
+      "bytes": 120351,
+      "sha256": "520c322aec49a38ae24c970967b0ca1edb2ded2cf795d64725312ef821ccc1df"
     },
     {
       "path": "dluatex-bin-jspi.wasm",
-      "bytes": 8356416,
-      "sha256": "3cf1b62da6d474e6d6213a3cc9b99515fd3f724db7a4d4021aff4d7171c02f93"
+      "bytes": 8355467,
+      "sha256": "e2f67f319383930cf4c8d1a266daeb02b3ed793f1bcd1034cdbc29c6e814b9aa"
     },
     {
       "path": "dxetex-bin-jspi.js",
-      "bytes": 97074,
-      "sha256": "f7b823264636126d245ec9d45e9067d18c8fcaff59eeaa99274ab55d65db4f4f"
+      "bytes": 97331,
+      "sha256": "cadc4acf4b8de323556df3cc3ff31230b47090779bfde84c34f1bc904cde803c"
     },
     {
       "path": "dxetex-bin-jspi.wasm",
-      "bytes": 3788767,
-      "sha256": "ea259131072c23df5b674089e041270f595ec3db3fbd7de38c1eb90e3b807d0e"
+      "bytes": 3788324,
+      "sha256": "7c8074ea001c652bcb82728550cff64bceb573008512c6166f237bb2e54cd96b"
     },
     {
       "path": "xdvipdfmx.js",
@@ -1102,15 +1102,15 @@
   ],
   "archives": [
     {
-      "path": "install/engine-a858efcc2cb9701b.zip",
-      "bytes": 6676015,
-      "sha256": "a858efcc2cb9701b797218c2371e73ae8f6a90fc3c87dc5209cb096d981723d8",
+      "path": "install/engine-91a00c3001a506b0.zip",
+      "bytes": 6675939,
+      "sha256": "91a00c3001a506b04433aece9d9458a440190538e06d44a5d8caa0826f5f99b9",
       "base": "engine"
     },
     {
-      "path": "install/core-00186073daea73b0.zip",
-      "bytes": 18786563,
-      "sha256": "00186073daea73b094dfca6ff541cc11eac0629197df578d300706c0eb778a1b",
+      "path": "install/core-91c0aeae61ccf749.zip",
+      "bytes": 18786358,
+      "sha256": "91c0aeae61ccf7498c0c76e7977d4b291f0573744c6c3b3dad210f80c1d78b44",
       "base": "data"
     }
   ]

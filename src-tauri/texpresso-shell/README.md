@@ -9,7 +9,7 @@ here is embedded in the executable and served by
 
 | File | Origin |
 | --- | --- |
-| `index.html`, `texpresso.css`, `theme.js` | The markup, styles and theme script of the TeXpresso web application's page, release `release-0.2-13-g6a91b6a`. The inline scripts and styles were moved into files so the frame's Content-Security-Policy needs no `'unsafe-inline'` for scripts. |
+| `index.html`, `texpresso.css`, `theme.js` | The markup, styles and theme script of the TeXpresso web application's page, build `log-based-completion-2-ga271257`. The inline scripts and styles were moved into files so the frame's Content-Security-Policy needs no `'unsafe-inline'` for scripts. |
 | `config.js` | TeXpresso's `config.js`, rewritten: the `tt2026` bundle only, data from `/texpresso-data/`, and every optional service (`feedback`, `crashes`, `mailbox`, `dropbox`, `github`, `movedFrom`, ICE servers) switched off. |
 | `worker.js` | TeXpresso's worker entry, reduced to the two imports it needs. |
 | `mdraft-pre.js`, `mdraft-boot.js`, `mdraft-bridge.js`, `mdraft-embedded.css` | MDraft's: dialog suppression and the service-worker shadow, engine selection before start, the `postMessage` bridge, and the styles that hide the application's own editor and toolbar. |
@@ -20,10 +20,9 @@ The application itself (`ocaml.js`, `ocaml-worker.js`, the engines, `xdvipdfmx`
 and `vendor/`) is **not in this repository**. It is downloaded on demand from
 the origin named in `src-tauri/texpresso.json`, and each file is refused unless
 it matches the SHA-256 pinned there. The pins were taken from the copy captured
-on 2026-11-12 and compared, byte for byte, with the files the release serves
-(2026-11-13: all twelve identical). `vendor/codemirror/vim.js` and
-`vendor/pdfjs/pdf.min.mjs` are not pinned: the embedded preview never asked
-for them.
+on 2026-11-20 and compared, byte for byte, with the files the release serves.
+`vendor/codemirror/vim.js` is not pinned: the embedded preview never asks for
+it. `vendor/pdfjs/pdf.min.mjs` is pinned with the rest of pdf.js.
 
 ## What the bridge reads from the app
 
@@ -45,7 +44,7 @@ app shows but does not expose as API. A new release must be checked for both
 
 ## Licence
 
-- The TeXpresso web application, release `release-0.2-13-g6a91b6a` (Frédéric
+- The TeXpresso web application, build `log-based-completion-2-ga271257` (Frédéric
   Bour), is licensed under the **GNU AGPL v3**, as its author confirmed on
   2026-11-18. The earlier `release-0-133-g454f1bc` was MIT; those terms do not
   carry over. MDraft modifies only `ocaml-worker.js`, through

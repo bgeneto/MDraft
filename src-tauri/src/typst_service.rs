@@ -1345,7 +1345,9 @@ pub(crate) fn try_render<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     use std::io::Cursor;
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     use std::net::TcpListener;
 
     #[test]
