@@ -146,8 +146,9 @@ Linux. See the [export guide](docs/export.md) for formats and details.
      executable before opening it. The `.rpm` is signed. On openSUSE, import the
      MDraft key once with
      `sudo rpm --import https://raw.githubusercontent.com/bgeneto/MDraft/master/packaging/rpm-signing-key.asc`,
-     then run `sudo zypper install ./mdraft-*.rpm`; YaST2 asks you to trust the
-     key instead of reporting a broken package. On Fedora, run
+     then run `sudo zypper install ./mdraft-*.rpm`. Opening the RPM in YaST2
+     instead offers the key for trust rather than reporting a broken package.
+     On Fedora, run
      `sudo dnf install ./mdraft-*.rpm`. Releases published before the key was
      introduced are unsigned; for those, use
      `sudo zypper install --allow-unsigned-rpm ./mdraft-*.rpm`.
