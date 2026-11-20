@@ -17,8 +17,10 @@
 # schedule refreshes the cache after a new stable Rust, whose compiler hash
 # invalidates it, and keeps it from being evicted after seven idle days.
 #
-# No secrets are needed. The release is created with the token GitHub provides
-# to the workflow, which is why `contents: write` is requested explicitly.
+# The release is created with the token GitHub provides to the workflow, which
+# is why `contents: write` is requested explicitly. The only secret is
+# RPM_GPG_PRIVATE_KEY, used to sign the Linux RPM; its public half is committed
+# as packaging/rpm-signing-key.asc.
 
 name: Release
 
@@ -119,7 +121,9 @@ jobs:
             libsoup-3.0-dev \
             libhunspell-dev \
             patchelf \
-            file
+            file \
+            gnupg \
+            rpm
 
       - name: Install the frontend dependencies
         run: npm ci
@@ -128,6 +132,70 @@ jobs:
       # toolchain, then stages every artefact into bin/<os>/<arch>/.
       - name: Build and stage
         run: npm run dist
+
+      # openSUSE's libzypp rejects an unsigned local RPM, while dnf does not
+      # check one by default. Sign the exact file Tauri produced, then re-stage
+      # so SHA256SUMS.txt and manifest.json describe the signed bytes.
+      - name: Sign the RPM
+        if: runner.os == 'Linux'
+        env:
+          RPM_GPG_PRIVATE_KEY: ${{ secrets.RPM_GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RPM_GPG_PRIVATE_KEY}" ]; then
+            echo "::error::RPM_GPG_PRIVATE_KEY is not set; refusing to publish an unsigned RPM."
+            exit 1
+          fi
+
+          GNUPGHOME="$(mktemp -d)"
+          export GNUPGHOME
+          rpmdb="$(mktemp -d)"
+          trap 'rm -rf "$GNUPGHOME" "$rpmdb"' EXIT
+          printf '%s' "$RPM_GPG_PRIVATE_KEY" | gpg --batch --import
+          key_id="$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')"
+          test -n "$key_id"
+
+          shopt -s nullglob
+          rpms=(src-tauri/target/release/bundle/rpm/*.rpm)
+          if [ "${#rpms[@]}" -ne 1 ]; then
+            echo "Expected exactly one .rpm, found ${#rpms[@]}:" >&2
+            ls -la src-tauri/target/release/bundle/rpm >&2
+            exit 1
+          fi
+          # Ubuntu's rpm is built for /usr/bin/gpg2, which the gnupg package no
+          # longer installs; point it at the gpg binary that does exist.
+          rpmsign --addsign \
+            --define "__gpg /usr/bin/gpg" \
+            --define "_gpg_name $key_id" \
+            "${rpms[0]}"
+
+          # Verify against a throwaway RPM database: the runner's database does
+          # not know the release key.
+          rpm --dbpath "$rpmdb" --import packaging/rpm-signing-key.asc
+          check_signature() {
+            local output
+            output="$(rpmkeys --dbpath "$rpmdb" --checksig "$@")"
+            printf '%s\n' "$output"
+            case "$output" in
+              *"signatures OK"*) ;;
+              *)
+                echo "The RPM is not signed by the published key." >&2
+                exit 1
+                ;;
+            esac
+          }
+          check_signature "${rpms[0]}"
+
+          node scripts/stage-artifacts.mjs
+          check_signature bin/linux/amd64/*.rpm
+
+          # Keep the public key beside the package so this run's install test
+          # and the download page use the key that made this signature. It is
+          # release metadata rather than an app artefact, so it is appended to
+          # the checksum list instead of changing what the manifest describes.
+          cp packaging/rpm-signing-key.asc bin/linux/amd64/
+          (cd bin/linux/amd64 && sha256sum rpm-signing-key.asc >> SHA256SUMS.txt)
+          (cd bin/linux/amd64 && sha256sum -c SHA256SUMS.txt)
 
       - name: List what was produced
         shell: bash
@@ -216,6 +284,10 @@ jobs:
   # library the binary links resolves. Requires are declared by soname in
   # tauri.linux.conf.json because Fedora and openSUSE name the packages
   # differently (webkit2gtk4.1 vs libwebkit2gtk-4_1-0) but both provide sonames.
+  #
+  # The package is signed. Importing the public key that travelled in the
+  # artefact must be enough for dnf and zypper, with no bypass flag; this is
+  # the only check that the signature is usable on the distributions.
   # ---------------------------------------------------------------------------
   rpm-install:
     name: RPM install on ${{ matrix.label }}
@@ -230,7 +302,7 @@ jobs:
             install: dnf -y install
           - label: openSUSE Tumbleweed
             image: opensuse/tumbleweed:latest
-            install: zypper --non-interactive install --allow-unsigned-rpm
+            install: zypper --non-interactive install
     container:
       image: ${{ matrix.image }}
     steps:
@@ -251,6 +323,24 @@ jobs:
             ls -la linux >&2
             exit 1
           fi
+
+          key=linux/rpm-signing-key.asc
+          if [ ! -f "$key" ]; then
+            echo "The Linux artefact has no RPM public key: $key" >&2
+            ls -la linux >&2
+            exit 1
+          fi
+          rpm --import "$key"
+          signature_check="$(rpmkeys --checksig "./${rpms[0]}")"
+          printf '%s\n' "$signature_check"
+          case "$signature_check" in
+            *"signatures OK"*) ;;
+            *)
+              echo "The RPM is not signed by the published key." >&2
+              exit 1
+              ;;
+          esac
+
           ${{ matrix.install }} "./${rpms[0]}"
           rpm -qi mdraft
           echo "Requires:"
