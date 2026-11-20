@@ -1401,16 +1401,24 @@ async function fullSuite() {
   // command must already have dropped the old frame and its output.
   const sessionBefore = Number((await dataset("texpressoSession")) ?? "0");
   await evaluate(`window.__mdraftWaitLog = []`);
-  const cleanStartLog = await evaluate(`(() => {
+  const cleanStart = await evaluate(`(() => {
     document.querySelector(${JSON.stringify(more)}).click();
     [...document.querySelectorAll(".compiled-compile-menu [role=menuitem]")]
       .find(b => b.textContent.includes("Recompile from scratch")).click();
-    return document.querySelector(".compiler-output")?.textContent ?? "";
+    return {
+      log: document.querySelector(".compiler-output")?.textContent ?? "",
+      problems: document.querySelector("#compiler-problems")?.textContent ?? "",
+    };
   })()`);
   check(
-    cleanStartLog === "The compiler reported no messages.",
+    cleanStart.log === "The compiler reported no messages.",
     "Recompile from scratch drops the old build's logs before it starts",
-    cleanStartLog.slice(0, 60),
+    cleanStart.log.slice(0, 60),
+  );
+  check(
+    cleanStart.problems === "No problems reported.",
+    "Recompile from scratch drops the old build's problems before it starts",
+    cleanStart.problems.slice(0, 300),
   );
   check(
     await waitFor(
@@ -1450,15 +1458,6 @@ async function fullSuite() {
     )) === 1,
     "the log holds only the new run",
   );
-  check(
-    (await evaluate(`document.querySelector("#compiler-problems")?.textContent ?? ""`)) ===
-      "No problems reported.",
-    "the problems list holds only the new build",
-    await evaluate(
-      `(document.querySelector("#compiler-problems")?.textContent ?? "").slice(0, 300)`,
-    ),
-  );
-
   const menuSessionBefore = Number((await dataset("texpressoSession")) ?? "0");
   await emitMenu(page, "view.latexCompileClean");
   check(

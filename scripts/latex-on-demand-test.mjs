@@ -29,11 +29,12 @@ const invoke = (command, args = {}) =>
     `window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)}, ${JSON.stringify(args)}).then(JSON.stringify)`,
   ).then(JSON.parse);
 
-async function waitFor(expression, timeout, label) {
+async function waitFor(test, timeout, label) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     try {
-      if (await evaluate(expression)) return true;
+      const value = await test();
+      if (value) return value;
     } catch {
       // The preview may be swapping its DOM.
     }
@@ -68,7 +69,11 @@ async function enableAndCompile() {
 }
 
 try {
-  await waitFor(`Boolean(document.querySelector(".cm-content"))`, 30_000, "the editor");
+  await waitFor(
+    () => evaluate(`Boolean(document.querySelector(".cm-content"))`),
+    30_000,
+    "the editor",
+  );
   if (!(await invoke("latex_engine_status")).previewInstalled) {
     console.log("installing the preview engine from the local origin…");
     await evaluate("window.__TAURI_INTERNALS__.invoke('install_texpresso')");
@@ -78,25 +83,16 @@ try {
     "the preview engine and digest table are installed",
   );
   await enableAndCompile();
-  const booted = await waitFor(
-    `document.querySelector("#preview")?.dataset.texpresso === "1"`,
+  const target = await waitFor(
+    async () => {
+      const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+      return list.find(
+        (entry) => entry.type === "iframe" && /mdraft-tex\.localhost\/texpresso\//.test(entry.url),
+      );
+    },
     120_000,
-    "the TeXpresso frame",
+    "the TeXpresso debug target",
   );
-  if (!booted) {
-    // The backend dataset uses the pane's backend name on current builds.
-    await waitFor(
-      `document.querySelector(".texpresso-frame") !== null`,
-      120_000,
-      "the TeXpresso iframe",
-    );
-  }
-  const target = await (async () => {
-    const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-    return list.find(
-      (entry) => entry.type === "iframe" && /mdraft-tex\.localhost\/texpresso\//.test(entry.url),
-    );
-  })();
   check(
     Boolean(target),
     "the frame is its own target on the mdraft-tex origin",
@@ -109,7 +105,7 @@ try {
     if (level === "error") frameErrors.push(text);
   });
   const painted = await waitFor(
-    `document.querySelector("#preview")?.dataset.texpressoPainted ?? ""`,
+    () => evaluate(`Boolean(document.querySelector("#preview")?.dataset.texpressoPainted)`),
     360_000,
     "the first paint",
   );

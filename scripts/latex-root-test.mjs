@@ -21,7 +21,9 @@ const invoke = (command) =>
     `window.__TAURI_INTERNALS__.invoke(${JSON.stringify(command)}).then(JSON.stringify)`,
   ).then(JSON.parse);
 let failed = 0;
+let total = 0;
 const check = (label, ok, detail = "") => {
+  total += 1;
   if (!ok) failed += 1;
   console.log(`${ok ? "PASS" : "FAIL"}  ${label}${detail ? ` — ${detail}` : ""}`);
 };
@@ -37,6 +39,39 @@ async function waitFor(expression, timeout, label) {
   }
   console.log(`  (timed out after ${timeout / 1000}s waiting for ${label})`);
   return false;
+}
+
+async function readPdfText() {
+  const backend = await evaluate(`document.querySelector("#preview")?.dataset.latexBackend`);
+  if (backend !== "texpresso") {
+    return evaluate(
+      `[...document.querySelectorAll(".typst-page .textLayer")].map((t) => t.textContent).join(" ")`,
+    );
+  }
+
+  // The live frame draws to canvas, so inspect the PDF it actually typeset.
+  const frame = await openPage(port, { type: "iframe", match: /mdraft-tex\.localhost/ });
+  try {
+    const base64 = await frame.evaluate(`(async () => {
+      const { pdf } = await globalThis.texpresso.exportPdf({ download: false });
+      const bytes = new Uint8Array(pdf);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += 0x8000)
+        binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      return btoa(binary);
+    })()`);
+    const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const task = getDocument({ data: new Uint8Array(Buffer.from(base64, "base64")) });
+    try {
+      const document = await task.promise;
+      const { items } = await (await document.getPage(1)).getTextContent();
+      return items.map((item) => item.str).join(" ");
+    } finally {
+      await task.destroy();
+    }
+  } finally {
+    frame.close();
+  }
 }
 
 try {
@@ -69,13 +104,19 @@ try {
     );
   }
   const compiled = await waitFor(
-    `[...document.querySelectorAll(".typst-page .textLayer")].some((t) => /Root marker sentence/.test(t.textContent ?? ""))`,
+    `(() => {
+      const preview = document.querySelector("#preview");
+      return preview?.dataset.latexBackend === "texpresso"
+        ? Boolean(preview.dataset.texpressoPainted && preview.dataset.latexCurrent)
+        : Boolean(preview?.querySelector(".typst-page .textLayer span"));
+    })()`,
     300_000,
     "the main document's PDF",
   );
-  check("a chapter with % !TeX root previews its main document", compiled);
-  const pdfText = await evaluate(
-    `[...document.querySelectorAll(".typst-page .textLayer")].map((t) => t.textContent).join(" ")`,
+  const pdfText = compiled ? await readPdfText() : "";
+  check(
+    "a chapter with % !TeX root previews its main document",
+    /Root marker sentence/.test(pdfText),
   );
   check("the chapter's own text is in that PDF", /Chapter marker sentence/.test(pdfText));
   const tabs = await evaluate(
@@ -114,14 +155,13 @@ try {
     await evaluate(`/% !TeX root = \\.\\.\\/main\\.tex/.test(document.body.textContent ?? "")`),
   );
   const orphanPdf = await evaluate(
-    `[...document.querySelectorAll(".typst-page .textLayer")].some((t) => /Orphan marker/.test(t.textContent ?? ""))`,
+    `Boolean(document.querySelector("#preview")?.dataset.latexCurrent)`,
   );
   check("the orphan chapter is not compiled alone", !orphanPdf);
 } catch (error) {
-  failed += 1;
-  console.log(`FAIL  ${error.message}`);
+  check(error.message, false);
 } finally {
   page.close();
 }
-console.log(`\n${failed ? "some" : "all"} checks done; ${failed} failed`);
+console.log(`\n${total - failed}/${total} checks passed`);
 process.exit(failed ? 1 : 0);
