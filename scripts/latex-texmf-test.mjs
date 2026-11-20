@@ -16,7 +16,7 @@
 // Network: the bundled engine downloads standard packages from its pinned
 // mirror, as the other bundled LaTeX layers do; the private files never are.
 
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { emitMenu, openPage, sleep } from "./cdp-page.mjs";
@@ -95,10 +95,24 @@ async function waitFor(expression, timeoutMs) {
   }
   return false;
 }
-const pdfText = () =>
-  page.evaluate(
-    `[...document.querySelectorAll(".typst-page .textLayer")].map((layer) => layer.textContent).join(" ")`,
-  );
+const pdfPath = join(library, "compiled.pdf");
+async function savePreviewText() {
+  await page.evaluate(`document.querySelector(".compiled-save-pdf").click()`);
+  const deadline = Date.now() + 10000;
+  while (!existsSync(pdfPath)) {
+    if (Date.now() >= deadline) throw new Error("The preview did not save its current PDF");
+    await sleep(150);
+  }
+  const { getDocument } = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const task = getDocument({ data: new Uint8Array(readFileSync(pdfPath)) });
+  try {
+    const pdf = await task.promise;
+    const { items } = await (await pdf.getPage(1)).getTextContent();
+    return items.map((item) => item.str).join(" ");
+  } finally {
+    await task.destroy();
+  }
+}
 
 async function showPreferences() {
   await page.evaluate(`(() => {
@@ -161,6 +175,9 @@ try {
       if (url.hostname === 'ipc.localhost' && command === 'plugin:dialog|open') {
         state.picks++;
         return new Response(JSON.stringify(state.next), {headers: {'Content-Type':'application/json', 'Tauri-Response':'ok'}});
+      }
+      if (url.hostname === 'ipc.localhost' && command === 'plugin:dialog|save') {
+        return new Response(JSON.stringify(${JSON.stringify(pdfPath)}), {headers: {'Content-Type':'application/json', 'Tauri-Response':'ok'}});
       }
       if (url.hostname === 'ipc.localhost' && command === 'latex_texmf_configure') state.changes++;
       return state.original.call(window, input, options);
@@ -365,11 +382,13 @@ try {
   );
   await page.evaluate(`document.getElementById("btn-prefs")?.click()`);
 
-  if ((await invoke("latex_engine_status")).previewInstalled !== true) {
+  const engineStatus = await invoke("latex_engine_status");
+  if (!engineStatus.ok) throw new Error(engineStatus.error);
+  if (!engineStatus.value.texpressoInstalled) {
     // Installation can exceed CDP's per-request deadline on a cold cache.
     await page.evaluate(`(() => {
       window.__texmfInstall = { done: false, error: null };
-      window.__TAURI_INTERNALS__.invoke('install_latex').then(
+      window.__TAURI_INTERNALS__.invoke('install_texpresso').then(
         () => { window.__texmfInstall.done = true; },
         error => { window.__texmfInstall.error = String(error); window.__texmfInstall.done = true; }
       );
@@ -399,21 +418,35 @@ try {
   }
   // ---- the bundled engine, through the real preview -------------------------
   await emitMenu(page, "view.latexCompile");
+  const engineChip = `document.querySelector("#status-latex-engine:not([hidden])")`;
+  if (!(await waitFor(`Boolean(${engineChip})`, 10000)))
+    throw new Error("The TeX engine selector did not appear");
+  if ((await page.evaluate(`${engineChip}.textContent`)) !== "LuaLaTeX") {
+    await page.evaluate(`${engineChip}.click()`);
+    const luaItem = `[...document.querySelectorAll(".explorer-menu .favorite-menu-item")].find((item) => item.textContent === "LuaLaTeX")`;
+    if (!(await waitFor(`Boolean(${luaItem})`, 10000)))
+      throw new Error("The bundled preview did not offer LuaLaTeX");
+    await page.evaluate(`${luaItem}.click()`);
+  }
   const rendered = await waitFor(
-    `[...document.querySelectorAll(".typst-page .textLayer")].some((layer) => layer.textContent.includes("LOCALPKGROOTONE"))`,
-    240000,
+    `${engineChip}?.textContent === "LuaLaTeX" &&
+      Boolean(document.querySelector('#preview[data-latex-backend="texpresso"][data-latex-current]')) &&
+      Boolean(document.querySelector('iframe.texpresso-frame[src*="engine=luatex"]')) &&
+      document.querySelector('.compiled-state-label')?.textContent === "PDF ready"`,
+    90000,
   );
-  const text = await pdfText();
-  check(rendered, "the bundled engine compiled the project with the library", text.slice(0, 160));
+  check(rendered, "the LuaLaTeX preview reports a current PDF");
+  if (!rendered)
+    throw new Error(await page.evaluate(`document.querySelector("#compiler-output")?.textContent`));
+  const text = await savePreviewText();
+  check(
+    text.includes("LOCALPKGROOTONE"),
+    "the bundled engine compiled the project with the library",
+    text.slice(0, 160),
+  );
   check(text.includes("DEPROOTZERO") && !text.includes("DEPROOTONE"), "root 0 wins over root 1");
   check(text.includes("EXTRADEFOK"), "an optional .def inside the library resolves");
   check(text.includes("LUAMODULEOK"), "a Lua module inside the library resolves");
-  check(
-    await page.evaluate(
-      `document.querySelector(".compiled-state-label")?.textContent === "PDF ready"`,
-    ),
-    "the preview reports a current PDF",
-  );
 
   // ---- a second, unrelated project captures the same library ----------------
   const second = resolve("samples/latex-texmf/second/main.tex");

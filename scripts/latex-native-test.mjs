@@ -103,20 +103,21 @@ if (compiled.ok) {
   );
 }
 
-// The preview must commit the native result, not only the command bridge.
+// The bundled frame can still own the current PDF while native TeX starts.
 await emitMenu(page, "view.latexCompile");
 const committed = await waitFor(
-  `Boolean(document.querySelector("[data-latex-current]"))`,
+  `Boolean(document.querySelector("#preview[data-latex-current]:not([data-latex-backend]) .typst-page"))`,
   120000,
-  "the preview to commit a compiled PDF",
+  "the native PDF to take over the preview",
 ).catch(() => false);
 check(committed, "preview commits the native PDF");
 check(
-  committed
-    ? await page.evaluate(
-        `document.querySelector(".compiled-state-label")?.textContent === "PDF ready"`,
-      )
-    : false,
+  committed &&
+    (await waitFor(
+      `document.querySelector(".compiled-state-label")?.textContent === "PDF ready"`,
+      10000,
+      "the native PDF ready status",
+    ).catch(() => false)),
   "preview reports its PDF is ready",
 );
 
