@@ -284,6 +284,10 @@ export interface PanelOptions {
   fileUrl?(path: string): string;
   /** The document's contents beside the pages (outline.ts: the host gives them, `outline`), `t` or ☰ to show or hide. */
   outline?: boolean;
+  /** The host supplies the opening surface for its embedded viewer. */
+  opening?: boolean;
+  /** Horizontal inset on each side when fitting the page to the pane. */
+  fitWidthPadding?: number;
   /** The pages' keys (keys.ts: PDF viewers' and vim's, `?` lists them), and `e` for the problems; where the page owns the keyboard (the CLI's), not under an editor. */
   keys?: boolean;
   /** The feature tips shown by themselves on a first visit (default true; false: only What's new shows them, a demo's first visitors seeing no "New"). */
@@ -551,6 +555,9 @@ export class Panel {
   /** The host's look, and whether the panel has a bar of its own (VS Code, the watch, floating). */
   private kind: "overleaf" | "vscode" | "watch";
   private ownBar: boolean;
+  private showOpening: boolean;
+  private fitWidthPadding: number | undefined;
+  private fitFactor = 1;
 
   private $ = <T extends HTMLElement = HTMLElement>(sel: string) => this.root.querySelector(sel) as T;
 
@@ -563,6 +570,8 @@ export class Panel {
     const vscode = /\bvscode-/.test(document.body?.className ?? "");
     this.kind = opts.host ?? (vscode ? "vscode" : "overleaf");
     this.ownBar = !!opts.header;
+    this.showOpening = opts.opening !== false;
+    this.fitWidthPadding = opts.fitWidthPadding;
     const host = document.createElement("phitex-preview");
     this.root = host.attachShadow({ mode: "open" });
     const item = (id: string, name: string, label: string, sub = "", cls = "") =>
@@ -1742,7 +1751,7 @@ export class Panel {
    * page's own place and size (before, it could come up at 0 x 0 in the corner).
    */
   private sheetUp(now = false): void {
-    if (this.opened || this.anim || !this.wasShown) return;
+    if (!this.showOpening || this.opened || this.anim || !this.wasShown) return;
     const st = this.$("#stage");
     if (st.clientWidth < 40 || st.clientHeight < 40) return void requestAnimationFrame(() => this.firstPending() && this.sheetUp(now));
     const el = this.$("#opening");
@@ -2054,9 +2063,11 @@ export class Panel {
     // Infinity or NaN, and a zoom from it NaN; then A4 and the least room)
     const real = (v: number | undefined, or: number) => (v !== undefined && Number.isFinite(v) && v > 0 ? v : or);
     const pw = real(this.last?.w, 595), ph = real(this.last?.h, 842);
-    const width = Math.max(real(st.w, 0) - 40, 200) / (pw * (96 / 72));
-    const s = z === "fit" ? width : Math.min(width, Math.max(real(st.h, 0) - 24, 100) / (ph * (96 / 72)));
-    return Math.min(8, Math.max(0.25, s));
+    const padding = this.fitWidthPadding ?? 20;
+    const minimumWidth = this.fitWidthPadding === undefined ? 200 : 1;
+    const width = Math.max(real(st.w, 0) - 2 * padding, minimumWidth) / (pw * (96 / 72));
+    const s = z === "fit" ? width * this.fitFactor : Math.min(width, Math.max(real(st.h, 0) - 24, 100) / (ph * (96 / 72)));
+    return Math.min(8, Math.max(this.fitWidthPadding === undefined ? 0.25 : 0.1, s));
   }
 
     goPage(k: number): void {
@@ -2299,8 +2310,9 @@ export class Panel {
     this.ev.onPdf();
   }
 
-  zoomTo(z: string): void {
+  zoomTo(z: string, fitFactor = 1): void {
     this.zoomNow = null;
+    this.fitFactor = fitFactor;
     this.prefs.zoom = zoomOf(z);
     this.zoomShown();
     this.save();
@@ -3571,7 +3583,12 @@ export class Panel {
     pre.textContent = text ?? "No log yet: the first build hasn't finished.";
   }
 
+  private updateFitOverflow(): void {
+    this.$("#stage").classList.toggle("fit", (this.zoomNow ?? this.prefs.zoom) === "fit" && this.fitFactor <= 1);
+  }
+
   private redraw(): void {
+    this.updateFitOverflow();
     this.viewer?.redraw();
     // (the pages' heights changed with the zoom: the marks along the scroll with them)
     if (this.viewer) requestAnimationFrame(() => this.drawScrollMarks());
@@ -3612,8 +3629,8 @@ export class Panel {
   }
 
   /** The editor's selection on the pages ([] clears). */
-  marks(marks: { k: number; boxes: [number, number, number, number][] }[]): void {
-    this.viewer.marks(marks);
+  marks(marks: { k: number; boxes: [number, number, number, number][] }[], scroll = true): void {
+    this.viewer.marks(marks, scroll);
   }
 
   /** Collaborators' cursors on the pages ([] clears). */
@@ -3661,7 +3678,7 @@ export class Panel {
     this.walkEnd();
     this.$("#empty").hidden = true;
     this.$("#stage").classList.remove("stale");
-    this.$("#stage").classList.toggle("fit", (this.zoomNow ?? this.prefs.zoom) === "fit");
+    this.updateFitOverflow();
     // (a view with no layout yet: this page's slots, up to it)
     if (this.viewer.pages <= k) this.viewer.layout(Array.from({ length: Math.max(n, k + 1) }, (_, i) => (i === k && hash) || `?${i}`));
     this.viewer.set(k, img, hash ?? null);

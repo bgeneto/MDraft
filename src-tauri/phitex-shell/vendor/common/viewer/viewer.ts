@@ -200,21 +200,12 @@ export class Viewer {
     let told = "";
     const pick = () =>
       setTimeout(() => {
-        const rn = root.getRootNode() as ShadowRoot & { getSelection?: () => Selection | null };
-        const sel = rn.getSelection?.() ?? document.getSelection();
-        if (!sel || sel.isCollapsed || !sel.rangeCount) return;
         const out = new Map<number, [number, number, number, number][]>();
-        for (let i = 0; i < sel.rangeCount; i++) {
-          for (const r of sel.getRangeAt(i).getClientRects()) {
-            for (const s of this.slots) {
-              const b = s.el.getBoundingClientRect();
-              if (r.bottom < b.top || r.top > b.bottom || r.right < b.left || r.left > b.right) continue;
-              const k = Number(s.el.dataset.k), sx = this.size.w / b.width, sy = this.size.h / b.height;
-              const list = out.get(k) ?? [];
-              list.push([(r.left - b.left) * sx, (r.top - b.top) * sy, r.width * sx, r.height * sy]);
-              out.set(k, list);
-            }
-          }
+        for (const { slot, box } of this.selectedTextBoxes()) {
+          const k = Number(slot.el.dataset.k);
+          const rects = out.get(k) ?? [];
+          rects.push(box);
+          out.set(k, rects);
         }
         if (!out.size) return;
         const sel2 = [...out].map(([k, rects]) => ({ k, rects }));
@@ -1449,7 +1440,7 @@ export class Viewer {
    * The editor's selection on the pages: `marks` highlighted until the next
    * call ([] clears), scrolled to only if none of them is on screen.
    */
-  marks(marks: { k: number; boxes: [number, number, number, number][] }[]): void {
+  marks(marks: { k: number; boxes: [number, number, number, number][] }[], scroll = true): void {
     for (const m of this.root.querySelectorAll(".sel")) m.remove();
     const { w, h } = this.size;
     let first: HTMLElement | undefined, seen = false;
@@ -1468,13 +1459,30 @@ export class Viewer {
         if (r.bottom > v.top && r.top < v.bottom) seen = true;
       }
     }
-    if (first && !seen) this.scroller.scrollTo({ top: first.offsetTop + first.parentElement!.offsetTop - this.scroller.clientHeight / 3, behavior: "auto" });
+    if (scroll && first && !seen) this.scroller.scrollTo({ top: first.offsetTop + first.parentElement!.offsetTop - this.scroller.clientHeight / 3, behavior: "auto" });
   }
 
   /** The selection the pages' text is in (the panel's shadow root's, where the browser keeps one). */
   private selection(): Selection | null {
     const rn = this.root.getRootNode() as ShadowRoot & { getSelection?: () => Selection | null };
     return rn.getSelection?.() ?? this.root.ownerDocument.getSelection();
+  }
+
+  private selectionRanges(): Range[] {
+    const selection = this.selection();
+    if (!selection) return [];
+    const root = this.root.getRootNode() as ShadowRoot & { getSelection?: () => Selection | null };
+    if (root instanceof ShadowRoot && !root.getSelection && selection.getComposedRanges) {
+      // WebKit's getRangeAt retargets the endpoints to the shadow host.
+      return selection.getComposedRanges({ shadowRoots: [root] }).flatMap(({ startContainer, startOffset, endContainer, endOffset }) => {
+        if (!this.root.contains(startContainer) || !this.root.contains(endContainer)) return [];
+        const range = this.root.ownerDocument.createRange();
+        range.setStart(startContainer, startOffset);
+        range.setEnd(endContainer, endOffset);
+        return range.collapsed ? [] : [range];
+      });
+    }
+    return selection.isCollapsed ? [] : Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i));
   }
 
   /**
@@ -1504,33 +1512,37 @@ export class Viewer {
     return { node: texts[c.i].firstChild!, off: c.off, k, line: lines[c.i] };
   }
 
-  /** The text selected on the pages, as blocks a line (`.mark.seltext`), the old ones gone. */
-  private drawSelection(): void {
-    for (const m of this.root.querySelectorAll(".seltext")) m.remove();
-    const rn = this.root.getRootNode() as ShadowRoot & { getSelection?: () => Selection | null };
-    const sel = rn.getSelection?.() ?? this.root.ownerDocument.getSelection();
-    if (!sel || sel.isCollapsed || !sel.rangeCount) return;
-    const { w, h } = this.size;
-    for (let i = 0; i < sel.rangeCount; i++) {
-      const r = sel.getRangeAt(i);
-      for (const s of this.slots) {
-        if (!r.intersectsNode(s.el)) continue;
-        ensureText(s.el);
-        for (const t of s.el.querySelectorAll("text")) {
-          const l = LAYER_LINES.get(t);
-          if (!l || !l.text || !r.intersectsNode(t)) continue;
-          const node = t.firstChild;
-          const from = node && r.startContainer === node ? r.startOffset : 0;
-          const to = node && r.endContainer === node ? r.endOffset : l.text.length;
+  /** The layout of the selected SVG text is also the geometry for reverse sync. */
+  private selectedTextBoxes(): { slot: Slot; box: [number, number, number, number] }[] {
+    const boxes: { slot: Slot; box: [number, number, number, number] }[] = [];
+    for (const range of this.selectionRanges()) {
+      for (const slot of this.slots) {
+        if (!range.intersectsNode(slot.el)) continue;
+        ensureText(slot.el);
+        for (const text of slot.el.querySelectorAll("text")) {
+          const line = LAYER_LINES.get(text);
+          if (!line?.text || !range.intersectsNode(text)) continue;
+          const from = range.startContainer === text.firstChild ? range.startOffset : 0;
+          const to = range.endContainer === text.firstChild ? range.endOffset : line.text.length;
           if (to <= from) continue;
-          const x0 = l.xs?.[from] ?? l.x, x1 = l.rs?.[to - 1] ?? l.x + l.w;
-          const m = document.createElement("div");
-          m.className = "mark seltext";
-          const top = l.y - l.size * 0.8, ht = l.size * 1.05;
-          Object.assign(m.style, { left: `${(x0 / w) * 100}%`, top: `${(top / h) * 100}%`, width: `${((x1 - x0) / w) * 100}%`, height: `${(ht / h) * 100}%` });
-          s.el.append(m);
+          const x = line.xs?.[from] ?? line.x;
+          const right = line.rs?.[to - 1] ?? line.x + line.w;
+          boxes.push({ slot, box: [x, line.y - line.size * 0.8, right - x, line.size * 1.05] });
         }
       }
+    }
+    return boxes;
+  }
+
+  /** The text selected on the pages, as blocks a line (`.mark.seltext`). */
+  private drawSelection(): void {
+    for (const mark of this.root.querySelectorAll(".seltext")) mark.remove();
+    const { w, h } = this.size;
+    for (const { slot, box: [x, y, width, height] } of this.selectedTextBoxes()) {
+      const mark = document.createElement("div");
+      mark.className = "mark seltext";
+      Object.assign(mark.style, { left: (x / w) * 100 + "%", top: (y / h) * 100 + "%", width: (width / w) * 100 + "%", height: (height / h) * 100 + "%" });
+      slot.el.append(mark);
     }
   }
 

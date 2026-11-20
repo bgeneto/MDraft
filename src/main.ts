@@ -2498,7 +2498,7 @@ let pendingPreviewScroll: number | null = null;
  */
 function scheduleRender(immediate = false): void {
   window.clearTimeout(renderTimer);
-  configureCompiledUi();
+  if (immediate || !phiTeXShowing()) configureCompiledUi();
   if (doc.language === "typst" && settings.typstAutoCompile === false) {
     if (previewStale) setTypstStatus("Out of date · Select Compile to update the preview.");
     armPending({ immediate: true });
@@ -3173,23 +3173,57 @@ function syncLatexAutoToggle(): void {
   if (doc.language === "latex") configureCompiledUi();
 }
 
+const PHITEX_TYPESETTING = "Typesetting…";
+let phitexToolbar: {
+  docId: string;
+  message: string;
+  state: CompiledStatus | undefined;
+  busy: boolean;
+  saveable: boolean;
+} | null = null;
+
+function phiTeXShowing(): boolean {
+  return texpresso?.key.backend === "phitex" && texpressoShowing();
+}
+
 function setLatexStatus(message: string, state?: CompiledStatus): void {
   if (doc.language !== "latex") return;
   if (latexInFlight) perfPhase(message);
   latexStatusLast = { message, state };
-  configureCompiledUi();
-  // With TeXpresso drawing, the line says both halves: the live preview, then
-  // the PDF the shadow compile keeps for export.
   const live = texpressoShowing() ? texpressoLiveStatus() : "";
-  // While the frame itself is still working, the export only waits on it:
-  // naming both would say the same thing twice.
+  const phiTeX = phiTeXShowing();
+  const awaitingPhiTeXPdf =
+    phiTeX &&
+    settings.latexAutoCompile !== false &&
+    (message === PHITEX_TYPESETTING ||
+      message === TEXPRESSO_EXPORT_WAIT ||
+      message === "Preparing LaTeX compilation…");
+  // Keep one label through PhiTeX's live build and the pause before PDF export.
+  // Download and startup progress can still replace it.
   const both = live && !(message === TEXPRESSO_EXPORT_WAIT && texpressoWorking());
-  compiledUi.status(
-    both ? `${live} · ${message}` : live || message,
-    latexInFlight,
-    latexCurrent(latexPreview) || latexPartialCurrent(),
-    state,
-  );
+  const text = awaitingPhiTeXPdf
+    ? live && !live.startsWith("Preview live")
+      ? live
+      : PHITEX_TYPESETTING
+    : both
+      ? `${live} · ${message}`
+      : live || message;
+  const saveable = latexCurrent(latexPreview) || latexPartialCurrent();
+  const previous = phitexToolbar;
+  if (
+    !phiTeX ||
+    previous?.docId !== doc.id ||
+    previous.message !== text ||
+    previous.state !== state ||
+    previous.busy !== latexInFlight ||
+    previous.saveable !== saveable
+  ) {
+    configureCompiledUi();
+    compiledUi.status(text, latexInFlight, saveable, state);
+    phitexToolbar = phiTeX
+      ? { docId: doc.id, message: text, state, busy: latexInFlight, saveable }
+      : null;
+  }
   const node = pending?.node;
   if (!node) return;
   if (latexInFlight || typstInFlight !== null) revivePending();
@@ -5854,7 +5888,8 @@ function texpressoEdit(changes: Array<[number, number, string]>, base: number, t
   }
   texpressoKey = null;
   preview.dataset.texpressoEdit = session.edit(file, base, changes, text);
-  if (texpressoShowing()) texpressoRefreshStatus();
+  // PhiTeX's document-change handler paints the burst status for this transaction.
+  if (session.key.backend !== "phitex" && texpressoShowing()) texpressoRefreshStatus();
 }
 
 /** Source selection → preview boxes, in the frame. False when the frame is not on screen. */
@@ -14734,7 +14769,9 @@ async function boot(): Promise<void> {
       setLatexStatus(
         settings.latexAutoCompile === false
           ? "Out of date · Select Compile to update the preview."
-          : "Out of date · Waiting to compile…",
+          : phiTeXShowing()
+            ? PHITEX_TYPESETTING
+            : "Out of date · Waiting to compile…",
       );
       previewPane.querySelector(":scope > .latex-warnings")?.remove();
       // Unchanged compiled lines remain useful after an edit elsewhere. The
