@@ -616,12 +616,40 @@
         <div class="container">
           <div class="section-head">
             <p class="eyebrow">LaTeX</p>
-            <h2 id="latex-title">From .tex source to a finished PDF.</h2>
+            <h2 id="latex-title">A live PDF preview that keeps up with your LaTeX edits.</h2>
             <p class="lead">
-              Write papers, theses and reports with your LaTeX source beside the compiled PDF. Work
-              with real projects, inspect compiler messages and save the finished pages.
+              Edit your LaTeX source and watch the typeset PDF update beside it. With the built-in
+              incremental engine, MDraft starts updating after a brief pause in typing, typically
+              60–200 ms. It reuses work from the previous build, so you can keep writing without
+              waiting for a full compile after every edit. How soon the PDF appears depends on the
+              document and the change.
             </p>
           </div>
+
+          <figure class="wide-shot">
+            <a
+              class="shot video-shot"
+              href="./assets/video/latex-live-preview.mp4"
+              data-full="./assets/video/latex-live-preview.mp4"
+              data-video
+              data-caption="LaTeX live preview in MDraft."
+              aria-label="Play the LaTeX live preview demo in an enlarged player"
+            >
+              <img
+                src="./assets/img/latex-live-preview.webp"
+                width="1440"
+                height="788"
+                alt="LaTeX source and its typeset PDF side by side in MDraft."
+                loading="lazy"
+                decoding="async"
+              />
+              <span class="video-shot-play" aria-hidden="true">▶</span>
+            </a>
+            <figcaption>
+              Click to watch the PDF update as you type. In the demo, XeLaTeX reports a compile time
+              of about 100 ms.
+            </figcaption>
+          </figure>
 
           <div class="mini-grid">
             <article class="mini-card">
@@ -1479,7 +1507,7 @@ image::figure.png[]</code></pre>
 
     <dialog class="lightbox" id="lightbox" aria-labelledby="lightbox-caption">
       <div class="lightbox-inner">
-        <button class="lightbox-close" type="button" data-lightbox-close aria-label="Close image">
+        <button class="lightbox-close" type="button" data-lightbox-close aria-label="Close viewer">
           ×
         </button>
         <button
@@ -1492,6 +1520,14 @@ image::figure.png[]</code></pre>
           ‹
         </button>
         <img data-lightbox-image alt="" />
+        <video
+          data-lightbox-video
+          controls
+          playsinline
+          preload="none"
+          hidden
+          aria-labelledby="lightbox-caption"
+        ></video>
         <button
           class="lightbox-next"
           type="button"

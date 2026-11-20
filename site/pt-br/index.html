@@ -619,13 +619,40 @@
         <div class="container">
           <div class="section-head">
             <p class="eyebrow">LaTeX</p>
-            <h2 id="latex-title">Do código .tex ao PDF pronto.</h2>
+            <h2 id="latex-title">Uma prévia do PDF que acompanha sua edição em LaTeX.</h2>
             <p class="lead">
-              Escreva artigos, teses e relatórios com o código LaTeX ao lado do PDF compilado.
-              Trabalhe com projetos completos, consulte as mensagens do compilador e salve as
-              páginas prontas.
+              Edite o código LaTeX e veja o PDF diagramado se atualizar ao lado. Com o motor
+              incremental integrado, o MDraft começa a atualizar após uma breve pausa na digitação,
+              normalmente de 60 a 200 ms. Ele reaproveita o trabalho da compilação anterior para
+              você continuar escrevendo sem esperar uma recompilação completa a cada edição. O tempo
+              até o PDF aparecer depende do documento e da alteração.
             </p>
           </div>
+
+          <figure class="wide-shot">
+            <a
+              class="shot video-shot"
+              href="../assets/video/latex-live-preview.mp4"
+              data-full="../assets/video/latex-live-preview.mp4"
+              data-video
+              data-caption="Prévia ao vivo de LaTeX no MDraft."
+              aria-label="Reproduzir a demonstração da prévia de LaTeX no player ampliado"
+            >
+              <img
+                src="../assets/img/latex-live-preview.webp"
+                width="1440"
+                height="788"
+                alt="Código LaTeX e PDF diagramado lado a lado no MDraft."
+                loading="lazy"
+                decoding="async"
+              />
+              <span class="video-shot-play" aria-hidden="true">▶</span>
+            </a>
+            <figcaption>
+              Clique para ver o PDF se atualizar durante a digitação. Na demonstração, o XeLaTeX
+              indica um tempo de compilação de cerca de 100 ms.
+            </figcaption>
+          </figure>
 
           <div class="mini-grid">
             <article class="mini-card">
@@ -1506,7 +1533,12 @@ image::figura.png[]</code></pre>
 
     <dialog class="lightbox" id="lightbox" aria-labelledby="lightbox-caption">
       <div class="lightbox-inner">
-        <button class="lightbox-close" type="button" data-lightbox-close aria-label="Fechar imagem">
+        <button
+          class="lightbox-close"
+          type="button"
+          data-lightbox-close
+          aria-label="Fechar visualizador"
+        >
           ×
         </button>
         <button
@@ -1519,6 +1551,14 @@ image::figura.png[]</code></pre>
           ‹
         </button>
         <img data-lightbox-image alt="" />
+        <video
+          data-lightbox-video
+          controls
+          playsinline
+          preload="none"
+          hidden
+          aria-labelledby="lightbox-caption"
+        ></video>
         <button
           class="lightbox-next"
           type="button"

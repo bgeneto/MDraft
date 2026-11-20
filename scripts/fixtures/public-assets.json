@@ -140,6 +140,10 @@
       "purpose": "Canonical landing-page/README image",
       "sha256": "1b5e197ba0d8507addd4cefdf90f472f38664b21c2ec9f6bea6612a680942085"
     },
+    "site/assets/img/latex-live-preview.webp": {
+      "purpose": "Clickable poster for the landing-page LaTeX live preview demonstration",
+      "sha256": "86868ae9b6042e0ea570179df817aa042417f75ae50eb71872fbaaef0be899a8"
+    },
     "site/assets/img/math-dark.webp": {
       "purpose": "Canonical landing-page/README image",
       "sha256": "003f94243e8d1fdc8c386b28786737b8acfc406cc573401b95f693349d0469b9"
@@ -179,6 +183,10 @@
     "site/assets/og.png": {
       "purpose": "Canonical landing-page/README image",
       "sha256": "5b3bdced96eccbc72dce7b2cf45c5e713097029e0721625e923607be1dbdebbf"
+    },
+    "site/assets/video/latex-live-preview.mp4": {
+      "purpose": "Landing-page demonstration of incremental LaTeX PDF updates while editing",
+      "sha256": "f23c1680bbb2fb54aa4b956d6f1a8f3452fe487def24bf4503ee67b5ddcea94d"
     },
     "src-tauri/icons/128x128.png": {
       "purpose": "Application installer/window/icon asset",

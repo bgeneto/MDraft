@@ -1,5 +1,5 @@
 // The page works without this file. It only adds the theme toggle and the
-// screenshot lightbox; every image is still a link to its full-size file.
+// media lightbox; every thumbnail is still a link to its full-size file.
 
 (() => {
   const root = document.documentElement;
@@ -38,11 +38,12 @@
   if (!dialog || typeof dialog.showModal !== "function" || links.length === 0) return;
 
   const image = dialog.querySelector("[data-lightbox-image]");
+  const video = dialog.querySelector("[data-lightbox-video]");
   const caption = dialog.querySelector("[data-lightbox-caption]");
   const closeButton = dialog.querySelector("[data-lightbox-close]");
   const previousButton = dialog.querySelector("[data-lightbox-prev]");
   const nextButton = dialog.querySelector("[data-lightbox-next]");
-  if (!image || !caption || !closeButton || !previousButton || !nextButton) return;
+  if (!image || !video || !caption || !closeButton || !previousButton || !nextButton) return;
 
   let opener = null;
   let group = [];
@@ -51,8 +52,17 @@
   function render() {
     const link = group[index];
     const thumbnail = link.querySelector("img");
-    image.src = link.dataset.full || link.href;
-    image.alt = thumbnail?.alt || "";
+    const source = link.dataset.full || link.href;
+    const isVideo = link.hasAttribute("data-video");
+    image.hidden = isVideo;
+    video.hidden = !isVideo;
+    if (isVideo) {
+      video.poster = thumbnail.currentSrc || thumbnail.src;
+      video.src = source;
+    } else {
+      image.src = source;
+      image.alt = thumbnail?.alt || "";
+    }
     caption.textContent = link.dataset.caption || "";
     const multiple = group.length > 1;
     previousButton.hidden = !multiple;
@@ -68,6 +78,7 @@
     document.body.classList.add("lightbox-open");
     dialog.showModal();
     closeButton.focus();
+    if (!video.hidden) video.play().catch(() => {});
   }
 
   function step(delta) {
@@ -79,7 +90,7 @@
   for (const link of links) {
     link.addEventListener("click", (event) => {
       // Let the browser handle a new-tab/new-window request: the href is the
-      // full image and remains a working fallback.
+      // full media file and remains a working fallback.
       if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       event.preventDefault();
       open(link);
@@ -91,12 +102,13 @@
   nextButton.addEventListener("click", () => step(1));
 
   // The dialog element receives the click only when the backdrop is the target;
-  // clicks on the image or its caption stay inside .lightbox-inner.
+  // clicks on the media or its caption stay inside .lightbox-inner.
   dialog.addEventListener("click", (event) => {
     if (event.target === dialog) dialog.close();
   });
 
   dialog.addEventListener("keydown", (event) => {
+    if (group.length < 2) return;
     if (event.key === "ArrowLeft") {
       event.preventDefault();
       step(-1);
@@ -110,6 +122,12 @@
   dialog.addEventListener("close", () => {
     document.body.classList.remove("lightbox-open");
     image.removeAttribute("src");
+    if (video.hasAttribute("src")) {
+      video.pause();
+      video.removeAttribute("src");
+      video.removeAttribute("poster");
+      video.load();
+    }
     if (opener?.isConnected) opener.focus();
     opener = null;
   });

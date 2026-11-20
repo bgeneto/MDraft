@@ -913,6 +913,34 @@ figcaption {
   border-radius: 14px;
 }
 
+.video-shot {
+  position: relative;
+  cursor: pointer;
+}
+
+.video-shot-play {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  padding-left: 0.15em;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 50%;
+  background: rgba(4, 21, 36, 0.88);
+  color: #ffffff;
+  font-size: 1.5rem;
+}
+
+.video-shot:hover .video-shot-play,
+.video-shot:focus-visible .video-shot-play {
+  background: #041524;
+  color: var(--cyan);
+}
+
 .feature-note {
   padding: 18px 22px;
   border: 1px solid var(--line);
@@ -1537,7 +1565,8 @@ figcaption {
   gap: 12px;
 }
 
-.lightbox img {
+.lightbox img,
+.lightbox video {
   display: block;
   width: auto;
   max-width: 100%;
@@ -1546,6 +1575,12 @@ figcaption {
   border-radius: 14px;
   background: #ffffff;
   box-shadow: 0 34px 110px rgba(0, 0, 0, 0.65);
+}
+
+.lightbox video {
+  width: min(1240px, 94vw);
+  aspect-ratio: 1440 / 788;
+  background: #041524;
 }
 
 .lightbox-caption {
@@ -1577,6 +1612,7 @@ figcaption {
 }
 
 .lightbox-close {
+  z-index: 1;
   top: 10px;
   right: 10px;
 }
