@@ -302,6 +302,7 @@
     ".opencode",
     ".vscode",
     "docs",
+    "packaging",
     "public",
     "samples",
     "scripts",
