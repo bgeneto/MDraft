@@ -601,14 +601,13 @@ engine is selected by `latexPreviewBackend()` in `src/latex-backend.ts` from
 the frame capabilities; there is no reader-facing backend control.
 
 **TeXpresso's** engine and TeX Live data are pinned in `src-tauri/texpresso.json`
-and served by `src-tauri/src/latex_texpresso.rs`; the production origin is
-`https://mdraft.webonly.app/`. Every file is verified on download and on every
+and served by `src-tauri/src/latex_texpresso.rs`. Every file is verified on download and on every
 serve. The frame resolves every file the engine opens by name — the project's
 files, then the local library, then the TeX Live bundle — through the patched
 `ocaml-worker.js` described below. The Linux JSPI row (Debian 13, WebKitGTK
 2.54) is the tested TeXpresso path.
 
-The pinned web release is `release-0.2-13-g6a91b6a`. It asks its own hook,
+The pinned release asks its own hook,
 `texpresso_project_file`, for a project file the snapshot did not send, and the
 shell's `worker.js` answers it from the project manifest.
 `scripts/texpresso-patch-worker.mjs` turns the release's `ocaml-worker.js` into

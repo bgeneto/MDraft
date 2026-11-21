@@ -61,8 +61,8 @@ verified/downloaded on demand from the pinned release manifest for warm
 incremental previews; stock Typst CLI remains the automatic fallback.
 
 LaTeX is opt-in: enabling bundled TeX downloads about 15 MB of verified engine
-files for TeXpresso, or about 33 MB for the PhiTeX compatibility engine on Linux,
-and the TeX packages a document needs are fetched on demand and cached locally.
+files, or about 33 MB for the compatibility engine on old Linux,
+and the TeX packages are fetched on demand and cached locally.
 Your own classes and packages can live in folders registered once under
 *Preferences › LaTeX › Local packages* and are found by every project, with the
 bundled or the installed engine. *Preferences › LaTeX* can instead use a TeX
@@ -167,10 +167,10 @@ Linux. See the [export guide](docs/export.md) for formats and details.
 
 Windows needs the WebView2 runtime, included with Windows 11. Linux needs
 WebKitGTK 4.1 and GTK 3; the `.deb` and `.rpm` declare their dependencies. The
-bundled LaTeX preview uses TeXpresso on WebKitGTK 2.54+ and the PhiTeX
-compatibility engine on older WebKitGTK (Ubuntu 26.04/26.10 ship 2.52.6); the
+bundled LaTeX engine that also supports LuaLaTeX (besides XeLaTeX) requires 
+WebKitGTK 2.54+ and the compatibility engine on older WebKitGTK (like Ubuntu 26.04/26.10) requires v2.52.6; the
 compatibility engine compiles XeLaTeX and does not run LuaLaTeX. macOS builds
-are not currently published.
+are not currently published but supported.
 
 To work with Typst files, choose **Tools › Check or Install Typst…**. For
 Pandoc exports, choose **Tools › Check or Install Pandoc…**. Neither is needed
@@ -195,10 +195,8 @@ neither controls nor monitors that traffic.
 
 The [LaTeX engine](docs/latex.md) downloads its files only after explicit
 enablement and then retrieves missing TeX packages and fonts on demand from
-MDraft's pinned public origin (`https://mdraft.webonly.app/`); PhiTeX's packs
-come from its pinned Shelf release through the same local cache. The document
-and bibliography contents stay local. The first time you format a
-`.tex` document, MDraft downloads the LaTeX formatter (about 1.7 MB, verified
+MDraft's pinned public origin; The document and bibliography contents stay local. 
+The first time you format a `.tex` document, MDraft downloads the LaTeX formatter (about 1.7 MB, verified
 against its pinned checksum and cached); later formats work offline.
 
 ## Learn more
