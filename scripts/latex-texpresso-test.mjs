@@ -10,7 +10,8 @@
 //
 // What it proves, in order:
 //   1. the backend switch mounts a frame of its own origin, and it boots;
-//   2. the frame holds MDraft's project, not an example;
+//   2. the frame holds MDraft's project, not an example, plus the .fontspec
+//      that lets XeLaTeX find the book's TeX Live font by family name;
 //   3. an edit repaints on the frame's own path, and the engine's copy agrees;
 //   4. the frame's own `xdvipdfmx` export fills the PDF Export, Print and the menu read;
 //   5. selection, caret, click and double-click follow the PDF conventions;
@@ -23,7 +24,7 @@
 //      the preview, a web address goes to the (stubbed) system opener;
 
 import { openPage, emitMenu, sleep } from "./cdp-page.mjs";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -664,6 +665,17 @@ async function fullSuite() {
     "the frame holds MDraft's project, not an example",
     `${paths.length} files`,
   );
+  // The book says `\setmainfont{Latin Modern Roman}`. The preview's XeTeX has
+  // no fontconfig, so the name resolves only through the .fontspec MDraft adds
+  // to the frame's copy; without it the book was set in nullfont and its
+  // export never returned (2026-11-23). The reader's folder never gets one.
+  const bookFolder = join(process.env.MDRAFT_REPO ?? process.cwd(), "samples/latex-perf/book");
+  check(
+    paths.includes("LatinModernRoman.fontspec") &&
+      !existsSync(join(bookFolder, "LatinModernRoman.fontspec")),
+    "the XeLaTeX frame resolves the book's TeX Live family name without touching its folder",
+    paths.filter((path) => path.endsWith(".fontspec")).join(", ") || "no .fontspec",
+  );
 
   console.log("=== the shadow compile is the authority ===");
   const shadow = await waitFor(
@@ -1293,6 +1305,10 @@ async function fullSuite() {
 
   console.log("=== an unchanged cross-project return uses only the stored PDF ===");
   const bookPath = "samples/latex-perf/book/main.tex";
+  // The chapter has no `% !TeX root`, so after another project is built it
+  // must find the book again. Each tab keeps its own reading page, so the page
+  // is set in the tab the reader returns to.
+  const chapterPath = "samples/latex-perf/book/chapters/ch06.tex";
   // The parent project's manifest includes the book's path. It is still an
   // independent root, so it may never inherit the parent frame in manual mode.
   const parentPath = "samples/latex-perf/small.tex";
@@ -1307,6 +1323,7 @@ async function fullSuite() {
     await waitFor(exportCurrent, 180_000, "the book's PDF"),
     "the book is ready before leaving",
   );
+  await openFile(chapterPath);
   const readingPage = Number(
     await frameEval(`Math.max(1, document.querySelectorAll("#pages .page").length - 1)`),
   );
@@ -1333,9 +1350,7 @@ async function fullSuite() {
     "an independent project mounts and exports on its first open",
   );
   const parentSession = await sessionCount();
-  // The chapter, not the main file: it has no `% !TeX root`, so it must find
-  // the book again although another project was built since.
-  await openFile("samples/latex-perf/book/chapters/ch06.tex");
+  await openFile(chapterPath);
   check(
     await waitFor(
       `${exportCurrent} && ${pageField}?.value === "${readingPage}" &&

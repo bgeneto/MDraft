@@ -56,7 +56,7 @@ export interface TexpressoHandlers {
 }
 
 /** The project preparation stays importable without the frame (`texpresso-unit`). */
-export { normaliseText, prepareProject } from "./project";
+export { editedFontspecs, normaliseText, prepareProject } from "./project";
 export type { PreparedProject } from "./project";
 
 export class TexpressoSession {
@@ -254,6 +254,38 @@ export class TexpressoSession {
   open(path: string | null): void {
     this.active = path;
     if (path) this.onceReady(() => this.frame.post({ type: "open", file: path }));
+  }
+
+  /** The names the frame's project holds or may fetch on demand. */
+  projectNames(): string[] {
+    return this.project ? [...this.project.files.keys(), ...this.project.manifest.keys()] : [];
+  }
+
+  /**
+   * Add generated text files the frame does not hold yet, without a compile.
+   * They go ahead of the edit that needs them (see `editedFontspecs`); the
+   * next snapshot holds the same text, so it sends nothing again.
+   */
+  putGenerated(files: Map<string, string>): void {
+    if (!this.ready || !this.project || !files.size) return;
+    const sent: SyncFile[] = [];
+    for (const [path, text] of files) {
+      const fingerprint = textPrint(text);
+      if (this.files.get(path)?.fingerprint === fingerprint) continue;
+      sent.push({ path, text });
+      this.files.set(path, { fingerprint });
+    }
+    if (!sent.length) return;
+    const seq = this.frame.post({
+      type: "project",
+      main: this.project.main,
+      files: sent,
+      remove: [],
+      replace: false,
+      active: this.active,
+      compile: false,
+    });
+    this.outstanding.set(seq, { at: performance.now(), file: this.project.main, expect: -1 });
   }
 
   /**
