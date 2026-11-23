@@ -153,12 +153,26 @@ export function texpressoFallbackText(
     case "lua":
       return "the compatibility preview does not run LuaLaTeX; use an installed TeX distribution for this document";
     case "encoding":
-      return `the preview reads UTF-8 only; ${detail.file ?? "a project file"} is not`;
+      return `the preview reads UTF-8 only; ${detail.file ?? "a project file"} is not — use File › Encoding and Line Endings… to convert it`;
     case "library":
       return `${detail.file ?? "a project file"} is inside .mdraft-texmf, the folder name MDraft reserves for local libraries; rename it`;
     case "failed":
       return "the preview stopped responding and its restart failed";
   }
+}
+
+/**
+ * Label for the centered preview-pane action when a non-UTF-8 file blocks the
+ * bundled preview. When the offending file is already the active tab, the
+ * action opens Convert directly; otherwise it names the project file it will
+ * open first.
+ */
+export function encodingFallbackActionLabel(
+  file: string | null,
+  sameAsActive: boolean,
+): string | null {
+  if (!file) return null;
+  return sameAsActive ? "Convert to UTF-8…" : `Open ${file} to convert…`;
 }
 
 /**

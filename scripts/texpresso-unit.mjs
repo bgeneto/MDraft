@@ -27,6 +27,7 @@ import ts from "typescript";
 
 import {
   BUNDLED_TEXLIVE_YEAR,
+  encodingFallbackActionLabel,
   engineFailureHolds,
   engineFailureText,
   latexPreviewBackend,
@@ -158,9 +159,27 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     "every fallback has a sentence for the chip",
   );
   check(new Set(sentences).size === reasons.length, "no two fallbacks share a sentence");
+  const encodingSentence = texpressoFallbackText("encoding", { file: "chapters/one.tex" });
+  check(/chapters\/one\.tex/.test(encodingSentence), "a fallback names the file when it has one");
   check(
-    /chapters\/one\.tex/.test(texpressoFallbackText("encoding", { file: "chapters/one.tex" })),
-    "a fallback names the file when it has one",
+    encodingSentence.includes("File › Encoding and Line Endings…"),
+    "the encoding fallback names the File › Encoding and Line Endings… menu path",
+  );
+  check(
+    !/[.…]$/.test(encodingSentence),
+    "the encoding fallback does not end with a period or ellipsis that collides with caller punctuation",
+  );
+  check(
+    encodingFallbackActionLabel("tese.tex", true) === "Convert to UTF-8…",
+    "an active non-UTF-8 file offers Convert to UTF-8… directly",
+  );
+  check(
+    encodingFallbackActionLabel("chapters/one.tex", false) === "Open chapters/one.tex to convert…",
+    "another non-UTF-8 project file offers to open it first",
+  );
+  check(
+    encodingFallbackActionLabel(null, true) === null,
+    "no encoding fallback action is offered without a named file",
   );
 }
 

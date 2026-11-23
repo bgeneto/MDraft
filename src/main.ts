@@ -241,6 +241,7 @@ import { projectLatexOutline, type ProjectHeading } from "./latex-outline";
 import { nativeSources, nativeToLatex } from "./latex-native";
 import {
   BUNDLED_TEXLIVE_YEAR,
+  encodingFallbackActionLabel,
   engineFailureHolds,
   engineFailureText,
   UNRESPONSIVE_PREVIEW,
@@ -3643,7 +3644,7 @@ function projectRelative(file: string): boolean {
     !/^[A-Za-z]:/.test(file) &&
     !file.startsWith("/") &&
     !file.startsWith("\\") &&
-    !file.split("/").includes("..")
+    !file.split(/[\\/]/).includes("..")
   );
 }
 
@@ -5190,11 +5191,34 @@ function texpressoResetPages(): void {
   updatePageChrome();
 }
 
+function texpressoFallbackAction(
+  reason: TexpressoFallback,
+  file: string | null,
+  directory: string | null,
+): { label: string; run: () => void } | undefined {
+  if (reason === "failed") {
+    return { label: "Recompile from scratch", run: compileCurrentLatexClean };
+  }
+  if (reason === "encoding" && file && directory && projectRelative(file)) {
+    const targetPath = joinDir(directory, file);
+    const isActive = Boolean(doc.path && pathKey(targetPath) === pathKey(doc.path));
+    const label = encodingFallbackActionLabel(file, isActive);
+    if (label) {
+      return { label, run: () => void openEncodingDialogForPath(targetPath) };
+    }
+  }
+  return undefined;
+}
+
 /**
  * Stop the frame and say why. There is no silent third engine: the pane keeps
  * the reader's document and the status line names the reason.
  */
-function texpressoFallbackTo(reason: TexpressoFallback, file: string | null = null): void {
+function texpressoFallbackTo(
+  reason: TexpressoFallback,
+  file: string | null = null,
+  directory: string | null = null,
+): void {
   texpressoRelease();
   texpressoFallbackReason = { reason, file };
   texpressoChip();
@@ -5210,14 +5234,13 @@ function texpressoFallbackTo(reason: TexpressoFallback, file: string | null = nu
   });
   // The frame was the pane's content; with it gone the pane is empty unless a
   // PDF or a note sits in `#preview`. The reason belongs in the middle of the
-  // pane then, not only in the toolbar, and a broken frame offers its fix.
+  // pane then, not only in the toolbar, and a broken frame or non-UTF-8 file
+  // offers its fix.
   if (doc.language === "latex" && settings.viewMode !== "source" && paneBlank()) {
     armPending({ immediate: true });
     showPendingIdle(
       `Preview unavailable: ${why}.`,
-      reason === "failed"
-        ? { label: "Recompile from scratch", run: compileCurrentLatexClean }
-        : undefined,
+      texpressoFallbackAction(reason, file, directory),
     );
   }
   syncMenuState(false);
@@ -5357,7 +5380,7 @@ function texpressoSyncSnapshot(
     watched,
   );
   if (prepared.nonUtf8) {
-    texpressoFallbackTo("encoding", prepared.nonUtf8);
+    texpressoFallbackTo("encoding", prepared.nonUtf8, directory);
     return false;
   }
   if (prepared.libraryConflict) {
@@ -8364,6 +8387,29 @@ function openEncodingDialog(
   );
 }
 
+let openingEncodingTarget = false;
+
+/**
+ * Open File › Encoding and Line Endings on the Convert tab for `targetPath`,
+ * activating or opening its tab first when it is another project file.
+ */
+async function openEncodingDialogForPath(targetPath: string): Promise<void> {
+  if (openingEncodingTarget || document.querySelector(".encoding-dialog[open]")) return;
+  if (doc.path && pathKey(doc.path) === pathKey(targetPath)) {
+    openEncodingDialog({ tab: "convert" });
+    return;
+  }
+  openingEncodingTarget = true;
+  try {
+    const opened = await openPath(targetPath, { rememberRecent: false });
+    if (opened && doc.id === opened.id && !document.querySelector(".encoding-dialog[open]")) {
+      openEncodingDialog({ tab: "convert" });
+    }
+  } finally {
+    openingEncodingTarget = false;
+  }
+}
+
 function formatLabel(format: SaveFormat): string {
   const bom = format.hadBom && format.encoding === "UTF-8" ? " with BOM" : "";
   return `${displayEncoding(format.encoding)}${bom} · ${format.lineEnding === "\r\n" ? "CRLF" : "LF"}`;
@@ -8386,13 +8432,35 @@ async function convertDocument(
   edits: DeclarationEdit[],
   snapshot: string,
 ): Promise<void> {
+  const previousEncoding = session.encoding;
   applyDeclarationEdits(session, edits, snapshot);
+  let saved = false;
   try {
-    if (await lifecycle.convert(session, format, copy)) toast(`Saved as ${formatLabel(format)}`);
+    saved = await lifecycle.convert(session, format, copy);
+    if (saved) toast(`Saved as ${formatLabel(format)}`);
   } catch (error) {
     await message(String(error), { title: "Could not convert", kind: "error" });
   }
-  if (session === doc) refreshStatus();
+  if (session === doc) {
+    refreshStatus();
+    // An in-place conversion keeps the same path, so `lifecycle.changed` does
+    // not rebuild the preview. Re-render compiled documents when the encoding
+    // changed so a UTF-8-only preview recovers straight away.
+    if (
+      saved &&
+      !copy &&
+      previousEncoding !== session.encoding &&
+      (session.language === "latex" || session.language === "typst")
+    ) {
+      if (texpressoFallbackReason?.reason === "encoding") {
+        texpressoFallbackReason = null;
+        texpressoChip();
+        clearPending();
+      }
+      previewStale = true;
+      scheduleRender(true);
+    }
+  }
 }
 
 /** Reinterpret: replace the buffer with a strict decode in a chosen encoding. */
