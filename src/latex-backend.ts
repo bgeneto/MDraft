@@ -195,3 +195,16 @@ export function engineFailureText(failure: EngineFailure): { status: string; det
 export function engineFailureHolds(failure: EngineFailure): boolean {
   return failure.reason === "memory";
 }
+
+/**
+ * The reader's account of a preview frame that stopped answering while it
+ * prepared the PDF (`TexpressoSession.exportPdf`). The status sentence leads
+ * Logs; the detail follows it. The one cause measured is a font the document
+ * names that cannot be found: XeLaTeX sets the text in `nullfont`, and on a
+ * 106-page book the frame never answered again.
+ */
+export const UNRESPONSIVE_PREVIEW = {
+  status: "The preview stopped responding while it prepared the PDF.",
+  detail:
+    "This can happen when a font the document names cannot be found and the text is set without one; see the errors below. The preview was closed to free its memory. Fix the errors, then select Compile.",
+} as const;

@@ -243,6 +243,7 @@ import {
   BUNDLED_TEXLIVE_YEAR,
   engineFailureHolds,
   engineFailureText,
+  UNRESPONSIVE_PREVIEW,
   latexPreviewBackend,
   phitexCapable,
   previewEngineFor,
@@ -1607,7 +1608,7 @@ function applySettingsPatch(
   settings = { ...settings, ...patch };
   // Another engine may fit where the last one ran out of memory.
   if (patch.latexBundledEngine !== undefined || patch.latexProjectEngines !== undefined)
-    texpressoMemoryHold = null;
+    texpressoHold = null;
   if (effects) {
     applyTheme();
     applyLayout();
@@ -2516,13 +2517,15 @@ function scheduleRender(immediate = false): void {
     }
     return;
   }
-  // A project held after a memory verdict waits for Compile as manual mode does.
+  // A project held after a verdict waits for Compile as manual mode does.
   const held = doc.language === "latex" && settings.latexAutoCompile !== false && texpressoHeld();
   if (doc.language === "latex" && (settings.latexAutoCompile === false || held)) {
     if (previewStale)
       setLatexStatus(
         held
-          ? "Out of date · The preview engine ran out of memory on this document; select Compile to try again."
+          ? texpressoHold?.reason === "unresponsive"
+            ? "Out of date · The preview stopped responding on this document; fix the errors in Logs, then select Compile."
+            : "Out of date · The preview engine ran out of memory on this document; select Compile to try again."
           : "Out of date · Select Compile to update the preview.",
       );
     // Nothing will render here until the reader presses Compile. If the pane
@@ -3077,7 +3080,7 @@ function compileCurrentLatex(clean = false): void {
   // Compile is also the reader's retry after a frame failure, and after the
   // engine ran out of memory.
   texpressoFailed.clear();
-  texpressoMemoryHold = null;
+  texpressoHold = null;
   // A failure note describes the build being replaced; any Compile clears it.
   compiledUi.note(null);
   // Compile always builds: the reader may be retrying a flaky engine or a
@@ -3152,7 +3155,7 @@ function invalidateLatexBuild(
   latexStore.clear();
   // Another engine, backend or library set may fit where the last one ran out
   // of memory: with auto-compile on, the next edit may try it.
-  texpressoMemoryHold = null;
+  texpressoHold = null;
   if (doc.language !== "latex") return;
   // The engine or a library is part of the key, but a library edit can keep a
   // revision string while its files change; the next build must not be skipped.
@@ -4321,6 +4324,7 @@ async function renderLatexPreview(
       engineStatus.backend === "bundled" &&
       (!stored || (texpressoShowing() && texpressoMatches(build)))
     ) {
+      if (!texpressoMatches(build) && !(await texpressoAfterFrozen(token, activeId))) return;
       if (texpressoPrepare(build) && texpressoSyncSnapshot(build, snapshot, key)) {
         // The session releases this capture when replaced or disposed.
         snapshotToken = null;
@@ -4779,21 +4783,29 @@ let texpressoKey: string | null = null;
 /** Main documents whose frame failed twice: Compile retries them. */
 const texpressoFailed = new Set<string>();
 /**
- * The project whose preview engine last ran out of memory, and its files.
+ * The project whose preview was released after a verdict that a rebuild of it
+ * would repeat, and its files. Edits then mark the preview out of date instead
+ * of starting a build. Compile, Recompile from scratch and an engine or
+ * backend change clear it. Not persisted.
  *
- * Its frame is released at that verdict: the engine is dead weight by then (an
- * idle frame kept about 5 GB for a 452-page book), and the partial PDF is drawn
- * without it. Edits then mark the preview out of date instead of starting a
- * build, because the engine has released its history by the time it fails, so
- * every build of that project starts again from page 1 and stops at the same
- * place, for minutes at several gigabytes. Compile, Recompile from scratch and
- * an engine or backend change clear it. Not persisted.
+ * - `memory`: the engine ran out of memory. Its frame is dead weight by then
+ *   (an idle frame kept about 5 GB for a 452-page book), and the partial PDF
+ *   is drawn without it. The engine has released its history, so every build
+ *   of that project starts again from page 1 and stops at the same place, for
+ *   minutes at several gigabytes.
+ * - `unresponsive`: the frame stopped answering while it prepared the PDF
+ *   (`texpressoFrozen`). The same text blocks a new frame the same way, at
+ *   one core for the 30 s it takes to tell.
  */
-let texpressoMemoryHold: { rootPath: string; files: Set<string> } | null = null;
+let texpressoHold: {
+  rootPath: string;
+  files: Set<string>;
+  reason: "memory" | "unresponsive";
+} | null = null;
 
-/** The active document belongs to the project held after a memory verdict. */
+/** The active document belongs to the project held after a verdict. */
 function texpressoHeld(): boolean {
-  const hold = texpressoMemoryHold;
+  const hold = texpressoHold;
   return (
     hold !== null &&
     doc.language === "latex" &&
@@ -5398,6 +5410,10 @@ async function texpressoExportPdf(
     texpressoExporting -= 1;
   }
   if (owner.token !== renderToken || doc.id !== owner.activeId || session !== texpresso) return;
+  if (reply && "frozen" in reply) {
+    await texpressoFrozen(session, build, snapshot, owner, started, reply.frozen);
+    return;
+  }
   texpressoLogLine(
     reply
       ? `PDF for export ready (${megabytes(reply.pdf.length)}, ${(reply.ms / 1000).toFixed(1)} s)`
@@ -5427,11 +5443,12 @@ async function texpressoExportPdf(
       ...snapshot.manifest.files.map((f) => f.path),
     ];
     if (engineFailureHolds(reply.failure)) {
-      // See `texpressoMemoryHold`. With the frame released, `latexFailure`
+      // See `texpressoHold`. With the frame released, `latexFailure`
       // draws the partial PDF with PDF.js, as for an installed distribution.
-      texpressoMemoryHold = {
+      texpressoHold = {
         rootPath: build.root.path,
         files: new Set(files.map((file) => pathKey(joinDir(build.root.directory, file)))),
+        reason: "memory",
       };
       texpressoLogLine("Preview engine released; edits wait for Compile");
       texpressoRelease();
@@ -5480,6 +5497,100 @@ async function texpressoExportPdf(
     backend: build.engineStatus,
   });
   texpressoSettleWait(session);
+}
+
+/** When `texpressoFrozen` last released a frame. */
+let texpressoFrozenAt = -Infinity;
+/**
+ * How long a new frame waits after a frame that stopped answering was
+ * released. The webview keeps the released frame's process for about 11 s
+ * (10.8 s measured 2026-11-23) and places a new frame of the same origin in
+ * it, where its main thread is still blocked: that frame never started.
+ */
+const TEXPRESSO_FROZEN_EXIT_MS = 15_000;
+
+/** Wait out `TEXPRESSO_FROZEN_EXIT_MS`; false when the render was superseded meanwhile. */
+async function texpressoAfterFrozen(token: number, activeId: string): Promise<boolean> {
+  const left = texpressoFrozenAt + TEXPRESSO_FROZEN_EXIT_MS - performance.now();
+  if (left <= 0) return true;
+  setLatexStatus("Closing the preview that stopped responding…");
+  await new Promise((resolve) => window.setTimeout(resolve, left));
+  return token === renderToken && doc.id === activeId;
+}
+
+/**
+ * The frame stopped answering while it prepared the PDF
+ * (`TexpressoSession.exportPdf`). Its main thread is blocked and was not seen
+ * to come back, so it is released, which ends its work. Logs leads with why,
+ * then the problems the frame reported before it stopped. Edits wait for
+ * Compile (`texpressoHold`).
+ */
+async function texpressoFrozen(
+  session: TexpressoSession,
+  build: LatexBuildRequest,
+  snapshot: api.LatexProjectSnapshot,
+  owner: Omit<LatexPreview, "result">,
+  started: number,
+  silentMs: number,
+): Promise<void> {
+  texpressoLogLine(
+    `The preview stopped responding: no answer for ${Math.round(silentMs / 1000)} s while it prepared the PDF`,
+  );
+  perfMark("texpresso-unresponsive", { ms: Math.round(silentMs) });
+  const warnings = texpressoDiagnostics(session, build.root.directory);
+  const files = [
+    ...snapshot.files.map((file) => file.path),
+    ...snapshot.manifest.files.map((file) => file.path),
+  ];
+  texpressoHold = {
+    rootPath: build.root.path,
+    files: new Set(files.map((file) => pathKey(joinDir(build.root.directory, file)))),
+    reason: "unresponsive",
+  };
+  texpressoLogLine("Preview engine released; edits wait for Compile");
+  texpressoRelease();
+  texpressoFrozenAt = performance.now();
+  const engine = ENGINE_LABELS[build.engineChoice?.engine ?? "xelatex"];
+  const elapsedMs = performance.now() - started;
+  await latexFailure(
+    new LatexBuildError(
+      UNRESPONSIVE_PREVIEW.status,
+      [
+        {
+          file: "",
+          line: 0,
+          column: 0,
+          endColumn: 0,
+          severity: "error",
+          code: "preview-unresponsive",
+          message: `${UNRESPONSIVE_PREVIEW.status} ${UNRESPONSIVE_PREVIEW.detail}`,
+          text: "",
+          lineText: "",
+          searched: [],
+        },
+        ...warnings,
+      ],
+      texpressoLogText(),
+    ),
+    { path: build.root.path, directory: build.root.directory },
+    files,
+    owner,
+    { engine, elapsedMs },
+  );
+  if (owner.token !== renderToken || doc.id !== owner.activeId) return;
+  // `latexFailure` names the outcome ("No PDF produced"); this names the cause.
+  setLatexStatus("The PDF could not be prepared: the preview stopped responding.", {
+    label: "PDF could not be prepared",
+    severity: "error",
+    detail: [
+      "The preview stopped responding",
+      typstPdf ? "Showing previous PDF" : "",
+      compiledUi.issueSummary || "See Logs",
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    engine: `${engine} · ${(elapsedMs / 1000).toFixed(1)} s`,
+  });
 }
 
 /** Longer than the bridge's 250 ms paint floor, so a page reported late still counts. */

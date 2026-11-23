@@ -1857,7 +1857,7 @@ for (const autoCompile of [false, true]) {
     latexStore: { clear() {} },
     committedKey: "k",
     // A project held after the engine ran out of memory: another engine may fit.
-    texpressoMemoryHold: { rootPath: "C:/book/main.tex", files: new Set() },
+    texpressoHold: { rootPath: "C:/book/main.tex", files: new Set() },
     window: { clearTimeout() {} },
     cancelLatex() {},
     discardStagedPdf() {},
@@ -1878,7 +1878,7 @@ for (const autoCompile of [false, true]) {
     `an engine change makes the PDF stale without compiling (auto-compile ${autoCompile ? "on" : "off"})`,
   );
   check(
-    h.context.texpressoMemoryHold === null,
+    h.context.texpressoHold === null,
     `an engine change lifts the hold after an out-of-memory verdict (auto-compile ${autoCompile ? "on" : "off"})`,
   );
   check(
