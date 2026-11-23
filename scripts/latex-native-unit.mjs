@@ -31,7 +31,8 @@ function snapshot(files = {}) {
   return {
     mainFile: "main.tex",
     projectToken: "test-project",
-    manifest: { version: 1, files: [], digest: "g" },
+    listings: [],
+    stamps: {},
     files: entries.map(([path, text]) => ({ path, data: encode(text) })),
     skipped: [],
     generation: "g",
@@ -54,6 +55,7 @@ function result(over = {}) {
     warningsTruncated: false,
     error: null,
     elapsedMs: 1200,
+    inputs: [],
     ...over,
   };
 }
@@ -88,6 +90,19 @@ console.log("=== a warning-only build is current ===");
   check(converted.pdf.length > 0, "the PDF bytes survive");
   check(converted.engine === "LuaLaTeX", "the engine is carried for Save/Export by its own name");
   check(converted.warnings.length === 1, "the warning is visible");
+  check(
+    converted.files.has("main.tex") && !converted.files.has("figures/plot.png"),
+    "a result without recorded inputs belongs to the snapshot files only",
+  );
+  const read = nativeToLatex(
+    result({ pdf: pdf(), success: true, inputs: ["main.tex", "figures/plot.png"] }),
+    project,
+  );
+  check(
+    read.files.has("figures/plot.png") && read.files.size === 2,
+    "a file TeX read from the folder belongs to the preview",
+    [...read.files].join(", "),
+  );
   check(
     converted.warnings[0].lineText === "\\bad",
     "the warning points at the line the compiler read",

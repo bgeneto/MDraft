@@ -4262,13 +4262,19 @@ async function renderLatexPreview(
         : engineStatus.nativeEngine
       : ENGINE_LABELS[engineChoice?.engine ?? "lualatex"];
   let snapshotToken: string | null = null;
+  // The files the live frame fetched for this root get their current stamps,
+  // so a changed one is fetched again (`TexpressoSession.sendProject`).
+  const watch =
+    texpresso && pathKey(texpresso.key.rootPath) === pathKey(root.path)
+      ? [...texpresso.projectFetched]
+      : [];
   try {
     const snapshotStarted = perfMark("snapshot-ipc-start", {
       path: root.path,
       overlays: overlays.length,
     });
     const [snapshot] = await Promise.all([
-      api.latexProjectSnapshot(root.path, overlays),
+      api.latexProjectSnapshot(root.path, overlays, true, watch),
       // Any bundled engine: a document asking for pdfLaTeX compiles with XeLaTeX too.
       engineStatus.backend === "bundled" ? loadXetexFontFamilies() : null,
     ]);
@@ -4278,10 +4284,9 @@ async function renderLatexPreview(
       libraries: snapshot.texmf?.files.length ?? 0,
     });
     if (token !== renderToken || doc.id !== activeId) return;
-    snapshotFiles = [
-      ...snapshot.files.map((file) => file.path),
-      ...snapshot.manifest.files.map((file) => file.path),
-    ];
+    // What builds of this root read: the declared files and those the live
+    // frame fetched. The folder around them is not the project.
+    snapshotFiles = [...snapshot.files.map((file) => file.path), ...watch];
     // The library revision is part of what this compile read. A later focus
     // check compares against it; completion follows the latest capture.
     latexLibraryRevision = snapshot.texmf?.revision ?? null;
@@ -4325,7 +4330,7 @@ async function renderLatexPreview(
       (!stored || (texpressoShowing() && texpressoMatches(build)))
     ) {
       if (!texpressoMatches(build) && !(await texpressoAfterFrozen(token, activeId))) return;
-      if (texpressoPrepare(build) && texpressoSyncSnapshot(build, snapshot, key)) {
+      if (texpressoPrepare(build) && texpressoSyncSnapshot(build, snapshot, key, watch)) {
         // The session releases this capture when replaced or disposed.
         snapshotToken = null;
         if (stored) commitLatexShadow({ ...owner, result: stored }, key, { stored: true, started });
@@ -4381,7 +4386,6 @@ async function renderLatexPreview(
             mainFile: snapshot.mainFile,
             files: snapshot.files,
             root: build.root.directory,
-            manifest: snapshot.manifest.files.map((file) => file.path),
             texmf: snapshot.texmf,
             clean: options.clean === true,
           });
@@ -5340,6 +5344,7 @@ function texpressoSyncSnapshot(
   build: LatexBuildRequest,
   snapshot: api.LatexProjectSnapshot,
   key: string,
+  watched: readonly string[],
 ): boolean {
   const session = texpresso;
   if (!session) return false;
@@ -5349,6 +5354,7 @@ function texpressoSyncSnapshot(
     (path) => texpressoLiveText(directory, path),
     session.key.engine,
     xetexFontFamilies,
+    watched,
   );
   if (prepared.nonUtf8) {
     texpressoFallbackTo("encoding", prepared.nonUtf8);
@@ -5438,10 +5444,7 @@ async function texpressoExportPdf(
       reason: reply.failure.reason,
       pages: reply.failure.pages,
     });
-    const files = [
-      ...snapshot.files.map((file) => file.path),
-      ...snapshot.manifest.files.map((f) => f.path),
-    ];
+    const files = [...snapshot.files.map((file) => file.path), ...session.projectFetched];
     if (engineFailureHolds(reply.failure)) {
       // See `texpressoHold`. With the frame released, `latexFailure`
       // draws the partial PDF with PDF.js, as for an installed distribution.
@@ -5538,10 +5541,7 @@ async function texpressoFrozen(
   );
   perfMark("texpresso-unresponsive", { ms: Math.round(silentMs) });
   const warnings = texpressoDiagnostics(session, build.root.directory);
-  const files = [
-    ...snapshot.files.map((file) => file.path),
-    ...snapshot.manifest.files.map((file) => file.path),
-  ];
+  const files = [...snapshot.files.map((file) => file.path), ...session.projectFetched];
   texpressoHold = {
     rootPath: build.root.path,
     files: new Set(files.map((file) => pathKey(joinDir(build.root.directory, file)))),

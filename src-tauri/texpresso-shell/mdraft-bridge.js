@@ -85,16 +85,27 @@
   } catch {
     /* without the channel the override goes unreported, never unloaded */
   }
-  // The worker fetches a manifest name and broadcasts the bytes here. The
-  // main-thread renderer reads the project table, not the worker's, so the
+  // The worker fetches a project file on demand and broadcasts the bytes here.
+  // The main-thread renderer reads the project table, not the worker's, so the
   // bytes are pushed after the compile that fetched them and the project is
-  // typeset once more; the next render then has every image and font.
+  // typeset once more; the next render then has every image and font. The
+  // stamp goes to the host, which fetches the file again once it changes.
   let projectPending = new Map();
   let projectFetchedSincePaint = false;
   const projectFonts = new Set();
+  // Project files that exist but were not read (unreadable, too large), by
+  // name with the route's reason, until the file is read or the frame resyncs.
+  const refusedFiles = new Map();
   try {
     new BroadcastChannel("mdraft-project").onmessage = (event) => {
       const data = event.data;
+      if (data?.type === "refused" && typeof data.name === "string") {
+        if (refusedFiles.size < 50 && !refusedFiles.has(data.name)) {
+          refusedFiles.set(data.name, String(data.message ?? "").slice(0, 500));
+          onMissingFont();
+        }
+        return;
+      }
       if (
         data?.type !== "fetched" ||
         typeof data.name !== "string" ||
@@ -103,8 +114,10 @@
         return;
       projectPending.set(data.name, data.bytes);
       projectFetchedSincePaint = true;
+      refusedFiles.delete(data.name);
       if (/\.(?:otf|ttf|ttc|otc|pfb)$/i.test(data.name)) projectFonts.add(data.name);
-      post({ type: "project-fetched", name: data.name });
+      const stamp = typeof data.stamp === "string" ? data.stamp.slice(0, 200) : null;
+      post({ type: "project-fetched", name: data.name, stamp });
     };
   } catch {
     /* without the channel the renderer keeps the eager files only */
@@ -565,6 +578,7 @@
     if (message.replace) {
       projectPending = new Map();
       projectFetchedSincePaint = false;
+      refusedFiles.clear();
     }
     const known = new Set(t.project.paths());
     // The first sync replaces everything, including the example the app
@@ -629,6 +643,9 @@
   };
   const problems = () => {
     const fonts = [...missingFonts].map(fontProblem);
+    for (const [name, message] of refusedFiles) {
+      fonts.push({ file: name, line: 0, column: 0, severity: "error", message });
+    }
     try {
       return (api().problems() ?? [])
         .slice(0, 200)

@@ -450,6 +450,7 @@ printf '%s\n' "MDRAFT-LOOK-END"
             program: wsl_exe(),
             args,
             cwd: process_cwd.to_path_buf(),
+            scratch: process_cwd.to_path_buf(),
             env: host_environment(),
             timeout,
         })
@@ -457,9 +458,12 @@ printf '%s\n' "MDRAFT-LOOK-END"
 
     /// Run an engine or helper inside the distribution with an exact
     /// environment and an in-distribution time limit.
+    /// `cwd` is the Linux working directory (a Windows path WSL translates);
+    /// `wsl.exe` itself runs in `scratch`, where its console output goes.
     pub fn engine_spec(
         distro: &str,
         cwd: &Path,
+        scratch: &Path,
         env: &[(String, String)],
         program: &str,
         args: &[OsString],
@@ -475,7 +479,13 @@ printf '%s\n' "MDRAFT-LOOK-END"
         argv.push(program.into());
         argv.extend(args.iter().cloned());
         // The Windows-side limit leaves room for the in-distribution one to act first.
-        spec(distro, cwd, argv, timeout + Duration::from_secs(15))
+        launch(
+            distro,
+            cwd.as_os_str(),
+            scratch,
+            argv,
+            timeout + Duration::from_secs(15),
+        )
     }
 
     fn run_quiet(spec: &RunSpec) -> Result<RunOutcome, String> {

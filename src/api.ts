@@ -1052,20 +1052,18 @@ export type DocumentLanguage =
 export const isWebSource = (language: DocumentLanguage): boolean =>
   language === "javascript" || language === "css" || language === "json";
 
-/** One name in the bounded project-tree manifest. */
-export interface LatexProjectManifestFile {
+/**
+ * One project folder, listed without descending into it. Only the main file's
+ * folder and the folders a build of this root looked in are ever listed.
+ */
+export interface LatexDirListing {
+  /** Relative to the main file's folder, `/`-separated; "" for that folder. */
   path: string;
-  size: number;
-  /** Milliseconds since the Unix epoch; 0 when the file system has no stamp. */
-  modified: number;
-}
-
-/** The project tree without its bytes, sent beside the eager snapshot files. */
-export interface LatexProjectManifest {
-  /** Bumped when the shape changes; the frame refuses an unknown version. */
-  version: number;
-  files: LatexProjectManifestFile[];
-  /** Changes when any name, size or stamp changes. */
+  /** `[name, isFolder]`, sorted by name. Links are left out: never read. */
+  entries: Array<[string, boolean]>;
+  /** False when missing, unreadable, or past the listing cap. */
+  complete: boolean;
+  /** Changes whenever a name in the folder does, past the cap too. */
   digest: string;
 }
 
@@ -1080,27 +1078,31 @@ export interface LatexProjectSnapshot {
     encoding?: string;
   }>;
   /**
-   * The bounded project tree: names, sizes and stamps, no bytes. The frame
-   * resolves a name TeX opens against this table, then fetches that file on
-   * demand. Open buffers still win because they travel in `files` above.
+   * The main file's folder first, then every folder a build of this root looked
+   * in. The frame answers a name TeX tries in the project from these, and
+   * fetches a file that exists on demand. Open buffers still win because they
+   * travel in `files` above.
    */
-  manifest: LatexProjectManifest;
+  listings: LatexDirListing[];
   /**
-   * Project-relative paths skipped because they are links: symbolic links or
-   * Windows junctions, in the reference walk or the manifest walk.
-   *
-   * The snapshot still follows the references a document declares for its eager
-   * files; the manifest walk covers the rest of the tree. A link is reported
-   * here instead of aborting the project, so a later "File not found" from the
-   * compiler is explained rather than mysterious.
+   * The current stamp of each name passed as `watch` (the preview's fetched
+   * files), or `missing`/`refused`. A name past the cap is absent: fetch it
+   * again.
+   */
+  stamps: Record<string, string>;
+  /**
+   * Project-relative paths the reference walk skipped because they are links:
+   * symbolic links or Windows junctions. Reported instead of aborting the
+   * project, so a later "File not found" from the compiler is explained.
    */
   skipped: string[];
   /**
-   * A key over the main file and the referenced set.
+   * A key over the main file and the referenced set, the files and folders
+   * earlier builds of this root read, and the local library revision.
    *
    * An edit that does not change which files are read leaves it alone, so a
-   * finished PDF stays current; adding an `\input` changes it. It also covers
-   * the local library revision.
+   * finished PDF stays current; adding an `\input`, or a change to a file a
+   * build read on demand, changes it.
    */
   generation: string;
   /**
@@ -1272,7 +1274,15 @@ export const latexProjectSnapshot = (
     lineEnding?: string;
   }>,
   includeLibraries = true,
-) => invoke<LatexProjectSnapshot>("latex_project_snapshot", { path, overlays, includeLibraries });
+  /** Files the caller holds from an earlier build; each gets its current stamp. */
+  watch: readonly string[] = [],
+) =>
+  invoke<LatexProjectSnapshot>("latex_project_snapshot", {
+    path,
+    overlays,
+    includeLibraries,
+    watch,
+  });
 
 /** What Preferences reports about the downloaded TeX package cache. */
 export interface LatexCacheInfo {
@@ -1363,6 +1373,12 @@ export interface LatexNativeResult {
   warningsTruncated: boolean;
   error: string | null;
   elapsedMs: number;
+  /**
+   * The project files the build read (TeX's recorder file), relative to the
+   * folder and spelled as on disk. The preview belongs to these files and the
+   * snapshot's; the rest of the folder is not the project.
+   */
+  inputs: string[];
 }
 
 export interface LatexNativeProgress {
@@ -1392,8 +1408,8 @@ export const latexNativeCompile = (request: {
   job: string;
   mainFile: string;
   files: Array<{ path: string; data: string }>;
+  /** The main file's folder, where TeX runs. `files` are the editor's state. */
   root?: string;
-  manifest?: string[];
   texmf?: LatexTexmfSnapshot;
   /** Recompile from scratch: discard this project's session workspace first. */
   clean?: boolean;

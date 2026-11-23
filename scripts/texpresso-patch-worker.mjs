@@ -8,14 +8,15 @@
 // project's files, then the TeX Live bundle. Since release 0.2 it also asks
 // `globalThis.texpresso_project_file(names)` for a name the project misses,
 // and keeps what it answers in the project table; MDraft's worker.js answers
-// from the project manifest, so on-demand project files need no edit of their
-// own. These edits add what the hook does not cover:
-//   - a name the current manifest holds is always offered to the hook, even
-//     after an earlier miss (upstream remembers misses until the name is put);
-//   - the local TEXMF libraries, after the project and the manifest and before
+// from the folder listings and the project route, so on-demand project files
+// need no edit of their own. These edits add what the hook does not cover:
+//   - a name the folder listings do not rule out is offered to the hook again
+//     after an earlier miss (upstream remembers misses until the name is put),
+//     so a file that appears later is found; the worker keeps its own misses;
+//   - the local TEXMF libraries, after the project and its folders and before
 //     the bundle, in TeX's order, reporting a library file that replaces a
 //     TeX Live one;
-//   - the manifest, then the libraries, in the case-insensitive lookup;
+//   - the folder listings, then the libraries, in the case-insensitive lookup;
 //   - the export's xdvipdfmx, which shares the lookup but never asks for the
 //     case-insensitive one, gets the engine's case-insensitive answer after an
 //     exact miss everywhere.
@@ -52,21 +53,21 @@ const UPSTREAM = {
 // `md*` locals avoid every name the surrounding minified code uses.
 const EDITS = [
   {
-    what: "the project hook: a name the manifest holds is always asked",
+    what: "the project hook: a name the listings do not rule out is asked again",
     from: "var g10=bm(function(a13){return 1-ar(hF,a13)},e1(c12)),a11=qI(0);",
     to:
       "var g10=bm(function(a13){var mdH=globalThis.__mdraftProjectHas;" +
       "return 1-ar(hF,a13)||(mdH&&mdH(n(a13))?1:0)},e1(c12)),a11=qI(0);",
   },
   {
-    what: "exact lookup: the libraries after the project and manifest, before the bundle",
+    what: "exact lookup: the libraries after the project and its folders, before the bundle",
     from: "function e11(a13){for(a13=0;;){if(a13===f11)a13=0;else{var b12=aj(M2,",
     to: "function e11(a13){var mdV=mdLib(c12,f11);if(mdV)return mdV;for(a13=0;;){if(a13===f11)a13=0;else{var b12=aj(M2,",
   },
   {
     // `mdLib` answers a library file from the project table, where MDraft
     // stores it under `.mdraft-texmf/`. `mdQ` is true when no candidate name
-    // matches exactly anywhere: project table, manifest, library index,
+    // matches exactly anywhere: project table, folder listings, library index,
     // loaded bundle, or bundle index. Only then does the export take the
     // case-insensitive answer (`mdNC`, the record's second function), so an
     // exact match still wins, as it does for TeX. TeX's own lookups have a
@@ -93,7 +94,7 @@ const EDITS = [
     to: "},mdNC=function(a11,b11){a11=e0(X2,ad2(a11,b11)),b11=ah(ae,16);",
   },
   {
-    what: "case-insensitive lookup: project, then manifest, then libraries",
+    what: "case-insensitive lookup: project, then folder listings, then libraries",
     from: "if(c12)return[k,c12[1]];if(c12=ag2[1],c12)",
     to:
       "if(!c12){var mdJ=globalThis.__mdraftProjectHasNocase;" +

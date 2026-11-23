@@ -169,14 +169,14 @@ pub(super) fn run(spec: &RunSpec, cancel: &AtomicBool) -> Result<RunOutcome, Str
         .truncate(true)
         .write(true)
         .read(true)
-        .open(spec.cwd.join("console.log"))
+        .open(spec.scratch.join("console.log"))
         .map_err(|error| format!("Cannot open the compiler output file: {error}"))?;
     let stderr = console
         .try_clone()
         .map_err(|error| format!("Cannot duplicate the compiler output handle: {error}"))?;
-    std::fs::write(spec.cwd.join("stdin.txt"), b"")
+    std::fs::write(spec.scratch.join("stdin.txt"), b"")
         .map_err(|error| format!("Cannot create the compiler input file: {error}"))?;
-    let stdin = File::open(spec.cwd.join("stdin.txt"))
+    let stdin = File::open(spec.scratch.join("stdin.txt"))
         .map_err(|error| format!("Cannot open the compiler input file: {error}"))?;
     let handles = [
         HANDLE(stdin.as_raw_handle()),
@@ -313,7 +313,7 @@ pub(super) fn run(spec: &RunSpec, cancel: &AtomicBool) -> Result<RunOutcome, Str
     }
 
     let mut console_text = String::new();
-    if let Ok(mut file) = File::open(spec.cwd.join("console.log")) {
+    if let Ok(mut file) = File::open(spec.scratch.join("console.log")) {
         let _ = file.read_to_string(&mut console_text);
     }
     let (console_text, _) = crate::latex_native::log::bounded_log(&console_text);
@@ -407,6 +407,7 @@ mod tests {
                     .map(OsString::from)
                     .collect(),
                 cwd: cwd.clone(),
+                scratch: cwd.clone(),
                 env,
                 timeout: Duration::from_secs(60),
             },

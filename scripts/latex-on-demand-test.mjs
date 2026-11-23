@@ -1,11 +1,20 @@
-// The on-demand project manifest, through the real application.
+// On-demand project files, through the real application.
 //
 //   node scripts/latex-on-demand-test.mjs <port>
 //
 // Opt-in layer `latex-on-demand`. The synthetic fixture names an image through
 // a macro, so `collect_referenced` cannot predict it; the preview must fetch it
 // from the project route after graphicx opens it.
+//
+// A second document is written to a temporary folder beside 30,000 other files
+// and a folder nobody may list, the shape of a Downloads folder or C:\. It must
+// compile, the snapshot must not walk the folder, and nothing may be written
+// into it. The folder is removed afterwards; its permissions are restored first.
 
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { openPage, sleep } from "./cdp-page.mjs";
 
 const port = process.argv[2] ?? "9222";
@@ -123,7 +132,7 @@ try {
     "the macro-named image is fetched through the project route",
     paths.filter((path) => /\.(png|jpg|pdf)$/i.test(path)).join(", "),
   );
-  check(paths.includes(".mdraft-project.json"), "the manifest file reaches the worker");
+  check(paths.includes(".mdraft-project.json"), "the folder listings reach the worker");
   const problems = await frameEval(
     `JSON.stringify((globalThis.texpresso.problems() ?? []).filter((problem) => problem.severity === "error"))`,
   ).then(JSON.parse);
@@ -137,8 +146,119 @@ try {
   // PDF export is already covered by latex-texpresso; this layer proves the
   // macro-named image reached the frame and its renderer.
   console.log("  INFO  PDF export is covered by the latex-texpresso layer");
+
+  await crowdedFolder();
 } finally {
   if (frame) frame.close?.();
+}
+
+/** Deny listing a folder to everyone; the returned function restores it. */
+function lockFolder(dir) {
+  if (process.platform === "win32") {
+    execFileSync("icacls", [dir, "/deny", "*S-1-1-0:(RD)"], { stdio: "ignore" });
+    return () => execFileSync("icacls", [dir, "/remove:d", "*S-1-1-0"], { stdio: "ignore" });
+  }
+  fs.chmodSync(dir, 0o000);
+  return () => fs.chmodSync(dir, 0o755);
+}
+
+/** The names directly in a folder, sorted, and the main file's bytes. */
+function folderShape(dir) {
+  return JSON.stringify({
+    names: fs.readdirSync(dir).sort(),
+    main: fs.readFileSync(path.join(dir, "main.tex"), "utf8"),
+  });
+}
+
+async function crowdedFolder() {
+  console.log("=== a document beside 30,000 files and a protected folder ===");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "mdraft-crowded-"));
+  const main = path.join(dir, "main.tex");
+  let unlock = null;
+  try {
+    fs.writeFileSync(
+      main,
+      "\\documentclass{article}\n\\begin{document}\n\\input{chapter}\n\\end{document}\n",
+    );
+    fs.writeFileSync(path.join(dir, "chapter.tex"), "A crowded folder compiles.\n");
+    for (let index = 0; index < 30_000; index += 1) {
+      fs.writeFileSync(path.join(dir, `note-${String(index).padStart(5, "0")}.txt`), "x");
+    }
+    const deep = path.join(dir, "deep", "a", "b", "c", "d", "e", "f", "g");
+    fs.mkdirSync(deep, { recursive: true });
+    fs.writeFileSync(path.join(deep, "leaf.tex"), "\\undefined\n");
+    const locked = path.join(dir, "private");
+    fs.mkdirSync(locked);
+    fs.writeFileSync(path.join(locked, "secret.tex"), "x");
+    unlock = lockFolder(locked);
+    let listable = true;
+    try {
+      fs.readdirSync(locked);
+    } catch {
+      listable = false;
+    }
+    check(!listable, "the protected folder really refuses a listing");
+    const before = folderShape(dir);
+
+    const started = Date.now();
+    const snapshot = await invoke("latex_project_snapshot", {
+      path: main,
+      overlays: [],
+      includeLibraries: true,
+      watch: [],
+    });
+    const elapsed = Date.now() - started;
+    check(
+      snapshot.files
+        .map((file) => file.path)
+        .sort()
+        .join(",") === "chapter.tex,main.tex",
+      "the snapshot carries what the document names, not the folder",
+      snapshot.files.map((file) => file.path).join(", "),
+    );
+    const listed = snapshot.listings.map((listing) => listing.path);
+    check(
+      listed.length === 1 && listed[0] === "" && snapshot.listings[0].complete === false,
+      "only the document's own folder is listed, and past its cap it says so",
+      JSON.stringify(snapshot.listings.map((l) => [l.path, l.entries.length, l.complete])),
+    );
+    check(elapsed < 10_000, "the snapshot does not walk the folder", `${elapsed} ms`);
+
+    const shownBefore = await evaluate(
+      `document.querySelector("#preview")?.dataset.latexShown ?? ""`,
+    );
+    await evaluate(
+      `window.__TAURI_INTERNALS__.invoke("plugin:event|emit", { event: "open-files", payload: ${JSON.stringify([main])} })`,
+    );
+    const current = await waitFor(
+      () =>
+        evaluate(`(() => {
+          const status = document.getElementById("status-file")?.textContent ?? "";
+          const data = document.querySelector("#preview")?.dataset ?? {};
+          return status.includes("main.tex") && Boolean(data.latexCurrent) &&
+            data.latexShown !== ${JSON.stringify(shownBefore)};
+        })()`),
+      240_000,
+      "the crowded document's PDF",
+    );
+    const status = await evaluate(
+      `document.querySelector(".latex-build-status")?.textContent ?? ""`,
+    );
+    check(current, "the document compiles beside the crowd", status.slice(0, 300));
+    check(
+      !/Cannot list|Access is denied|file limit|too many files/i.test(status),
+      "no error names the folder's size or a folder the document never read",
+      status.slice(0, 300),
+    );
+    check(folderShape(dir) === before, "nothing is written into the folder");
+  } finally {
+    try {
+      unlock?.();
+    } catch (error) {
+      console.log(`  WARN  could not restore the protected folder: ${error.message}`);
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 const failed = checks.filter((entry) => !entry.ok).length;

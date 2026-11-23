@@ -8,6 +8,7 @@
 //! never to the reader's disk.
 
 mod discovery;
+mod inplace;
 pub mod log;
 mod runner;
 pub mod wsl;
@@ -30,15 +31,8 @@ use log::{Bibliography, Severity};
 
 use crate::cancel_registry::{CancelRegistry, Ticket};
 
+/// A library file, which is staged from the request.
 const MAX_FILE: usize = 32 * 1024 * 1024;
-const MAX_PROJECT: usize = 64 * 1024 * 1024;
-const MAX_FILES: usize = 256;
-/// A manifest file is read from the project root, not sent over IPC.
-const MAX_MANIFEST_FILE: u64 = 128 * 1024 * 1024;
-/// The whole staged tree at most; the same ceiling as the preview's project table.
-const MAX_MANIFEST_TOTAL: u64 = 1024 * 1024 * 1024;
-/// The manifest itself is bounded by the snapshot; a hostile request is not.
-const MAX_MANIFEST_FILES: usize = 20_000;
 const COMPILE_TIMEOUT: Duration = Duration::from_secs(300);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -146,12 +140,10 @@ pub struct NativeCompileRequest {
     job: String,
     main_file: String,
     files: Vec<NativeFile>,
-    /// The project root, for the manifest files that are staged from disk.
+    /// The main file's folder, where TeX runs. `files` are the editor's
+    /// state; whatever else the document reads, TeX reads from the folder.
     #[serde(default)]
     root: Option<String>,
-    /// Relative names from the snapshot manifest; eager files win over these.
-    #[serde(default)]
-    manifest: Vec<String>,
     /// Captured local libraries, staged beside the project, never inside it.
     #[serde(default)]
     texmf: Option<crate::latex_texmf::TexmfSnapshot>,
@@ -188,6 +180,9 @@ pub struct NativeCompileResult {
     pub warnings_truncated: bool,
     pub error: Option<String>,
     pub elapsed_ms: u64,
+    /// The project files the build read, relative to the folder and spelled
+    /// as on disk: what a change to should recompile the preview.
+    pub inputs: Vec<String>,
 }
 
 /// The status the preview asks for before each render.
@@ -442,11 +437,12 @@ fn validate_wsl(app: &AppHandle, distro: &str, bin: &str) -> Result<Capabilities
     std::fs::create_dir_all(&work).map_err(|error| error.to_string())?;
     let _ = base_environment(Path::new(bin), &job.path, "TeX Live");
     let linux = wsl::linux_path(distro, &job.path, &work)?;
-    let env = wsl_environment(bin, &linux, "lualatex", 0);
+    let env = wsl_environment(bin, &linux);
     let probe = |program: &str| -> Result<Option<String>, String> {
         let outcome = runner::run(
             &wsl::engine_spec(
                 distro,
+                &work,
                 &work,
                 &env,
                 &format!("{bin}/{program}"),
@@ -505,9 +501,10 @@ fn validate_wsl(app: &AppHandle, distro: &str, bin: &str) -> Result<Capabilities
         &wsl::engine_spec(
             distro,
             &work,
+            &work,
             &env,
             &format!("{bin}/{preferred}"),
-            &engine_arguments(&preferred, "mdraft-probe.tex"),
+            &engine_arguments(&preferred, None, "mdraft-probe.tex"),
             PROBE_TIMEOUT * 3,
         )?,
         &AtomicBool::new(false),
@@ -640,13 +637,14 @@ fn validate(app: &AppHandle, directory: &str) -> Result<Capabilities, String> {
         .map(|entry| entry.id.clone())
         .unwrap_or_default();
     let engine = engine_path(&bin, &preferred);
-    let args = engine_arguments(&preferred, "mdraft-probe.tex");
+    let args = engine_arguments(&preferred, None, "mdraft-probe.tex");
     let cancel = AtomicBool::new(false);
     let outcome = runner::run(
         &runner::RunSpec {
             program: engine,
             args,
             cwd: temp.clone(),
+            scratch: temp.clone(),
             env,
             timeout: PROBE_TIMEOUT,
         },
@@ -694,6 +692,7 @@ fn probe_tool(program: &Path, cwd: &Path, env: &[(String, String)]) -> Result<St
             program: program.to_path_buf(),
             args: vec![OsString::from("--version")],
             cwd: cwd.to_path_buf(),
+            scratch: cwd.to_path_buf(),
             env: env.to_vec(),
             timeout: PROBE_TIMEOUT,
         },
@@ -825,9 +824,9 @@ fn directory_size(path: &Path) -> u64 {
     total
 }
 
-/// Remove generated auxiliary files after a failed build, keeping the staged
-/// inputs, caches and `tmp/` (the Biber extraction). A project file that
-/// happens to have one of these names is staged again by the next build.
+/// Remove generated auxiliary files from the outputs after a failed build.
+/// The caches and `tmp/` (the Biber extraction) live beside the outputs and
+/// stay.
 fn remove_auxiliary(work: &Path) {
     const EXTENSIONS: &[&str] = &[
         "aux", "toc", "lof", "lot", "out", "bbl", "blg", "bcf", "idx", "ind", "ilg", "nav", "snm",
@@ -968,50 +967,6 @@ fn collect_aux_control(root: &Path, dir: &Path, out: &mut BTreeMap<String, Strin
     }
 }
 
-/// Every `.bib`/`.bst` file the workspace can give the bibliography tool. A
-/// changed content forces a tool run even when the citation controls did not
-/// change.
-fn bibliography_inputs(workspace: &Path) -> String {
-    let mut entries = BTreeMap::new();
-    for root in [workspace.join("project"), workspace.join("texmf")] {
-        collect_bibliography_inputs(&root, &root, &mut entries);
-    }
-    let material = entries
-        .iter()
-        .map(|(path, digest)| format!("{path}\0{digest}\n"))
-        .collect::<String>();
-    crate::latex::digest(material.as_bytes())
-}
-
-fn collect_bibliography_inputs(root: &Path, dir: &Path, out: &mut BTreeMap<String, String>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let Ok(metadata) = std::fs::symlink_metadata(&path) else {
-            continue;
-        };
-        if metadata.is_dir() {
-            collect_bibliography_inputs(root, &path, out);
-        } else if metadata.is_file()
-            && path
-                .extension()
-                .and_then(|extension| extension.to_str())
-                .is_some_and(|extension| {
-                    extension.eq_ignore_ascii_case("bib") || extension.eq_ignore_ascii_case("bst")
-                })
-        {
-            let relative = path
-                .strip_prefix(root)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .replace('\\', "/");
-            out.insert(relative, file_digest(&path));
-        }
-    }
-}
-
 /// Which bibliography tool, if any, this pass needs. The `.bbl` is the
 /// authority: re-running a tool cannot fix keys that are absent from the
 /// `.bib`, so an unchanged `.bcf`/`.bib` is trusted instead of a persistent
@@ -1050,7 +1005,6 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
         return Err("The installed TeX distribution is turned off.".into());
     }
     let target = Target::from_settings(&settings)?;
-    let name = target.distribution();
     let (token, registration) = register(&request.job)?;
 
     let main_text = request_main_text(&request);
@@ -1061,20 +1015,33 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
         settings.latex_native_prefers_xelatex,
     )?;
     let identity = target.engine_identity(&engine);
-    let root = match request.root.as_deref() {
-        Some(root) => Some(
-            std::fs::canonicalize(root)
-                .map_err(|error| format!("Cannot read the project directory: {error}"))?,
-        ),
+    let folder = match request.root.as_deref() {
+        Some(root) => Some(std::fs::canonicalize(root).map_err(|error| {
+            format!(
+                "Cannot read the folder of the main LaTeX file {}: {error}",
+                Path::new(root).display()
+            )
+        })?),
         None => None,
     };
-    // A request without a root (the direct command and its integration test)
-    // keeps the old fresh-directory behaviour: eager files are staged, no
-    // manifest, and nothing is reused. The shipped frontend always sends root.
+    if let (Target::Wsl(selected), Some(root)) = (&target, folder.as_deref())
+        && inplace::is_network(root)
+    {
+        return Err(format!(
+            "{} is on a network share, and {} runs TeX in the document's own folder, which \
+             WSL cannot do there. Compile it with a Windows TeX distribution or the bundled \
+             engine, or move the folder to a local drive.",
+            inplace::plain(root).display(),
+            wsl_distribution_name(&selected.distro)
+        ));
+    }
+    // A request without a folder (the direct command and its integration test)
+    // keeps a fresh directory per job and nothing is reused. The shipped
+    // frontend always sends the folder.
     let _temporary_job: Option<runner::JobDir>;
     let workspace_path: PathBuf;
     let workspace_created: bool;
-    match &root {
+    match &folder {
         Some(root) => {
             let key = workspace_key(root, &request.main_file, &identity);
             if request.clean {
@@ -1096,53 +1063,114 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
         }
     }
     if workspace_created
-        && root.is_some()
+        && folder.is_some()
         && let Ok(session_root) = runner::workspace_root(app)
     {
         prune_workspaces(&session_root, &workspace_path);
     }
-    let work = workspace_path.join("project");
+    let progress = |phase: &str, detail: Option<&str>| emit(app, &request.job, phase, detail);
+    let mut result = build(Build {
+        target: &target,
+        engine: &engine,
+        identity: &identity,
+        workspace: &workspace_path,
+        folder: folder.as_deref(),
+        request: &request,
+        cancel: &token,
+        progress: &progress,
+    })?;
+    drop(registration);
+    result.elapsed_ms = started.elapsed().as_millis() as u64;
+    Ok(result)
+}
+
+/// One build in a workspace `compile` chose. It needs no app, so the
+/// real-distribution tests run exactly this.
+struct Build<'a> {
+    target: &'a Target,
+    engine: &'a str,
+    /// What the workspace record is checked against (`engine_identity`).
+    identity: &'a str,
+    workspace: &'a Path,
+    /// The main file's canonical folder, where TeX runs; None when the
+    /// request carries the whole project.
+    folder: Option<&'a Path>,
+    request: &'a NativeCompileRequest,
+    cancel: &'a AtomicBool,
+    progress: &'a dyn Fn(&str, Option<&str>),
+}
+
+fn build(job: Build<'_>) -> Result<NativeCompileResult, String> {
+    let started = Instant::now();
+    let Build {
+        target,
+        engine,
+        identity,
+        workspace,
+        folder,
+        request,
+        cancel: token,
+        progress,
+    } = job;
     let main_file = request.main_file.replace('\\', "/");
-    let mut workspace_state = load_workspace(
-        &workspace_path,
-        root.as_deref().unwrap_or(Path::new("")),
+    let source = workspace.join("source");
+    // The record is checked first: a stale workspace is emptied before
+    // anything is written into it.
+    let mut workspace_state =
+        load_workspace(workspace, folder.unwrap_or(&source), &main_file, identity);
+    let root = match folder {
+        Some(root) => root.to_path_buf(),
+        None => materialize(&source, &request.files)?,
+    };
+    let out = workspace.join("out");
+    let overlay = workspace.join("overlay");
+    std::fs::create_dir_all(&out)
+        .map_err(|error| format!("Cannot create the LaTeX output folder: {error}"))?;
+    let prepared = inplace::prepare(
+        &root,
+        &overlay,
+        &out,
         &main_file,
-        &identity,
-    );
-    // The previous `.bib`/`.bst` content, before this request's files are
-    // staged. A content change forces the bibliography tool even when the
-    // citation controls themselves did not change.
-    let bib_before = bibliography_inputs(&workspace_path);
-    let staged = stage(&workspace_path, &request, &mut workspace_state)?;
+        &request.files,
+        &mut workspace_state.bibliography,
+    )?;
     let roots = stage_texmf(
-        &workspace_path.join("texmf"),
+        &workspace.join("texmf"),
         request.texmf.as_ref(),
         &mut workspace_state,
     )?;
-    let bib_after = bibliography_inputs(&workspace_path);
-    let bib_changed = bib_before != bib_after;
-    save_workspace(&workspace_path, &workspace_state)?;
+    // A changed bibliography input forces the tool even when the citation
+    // controls did not change.
+    let bib_digest = bibliography_digest(&root, &prepared, &workspace_state.bibliography_reads);
+    let bib_changed = workspace_state.bibliography_digest.as_deref() != Some(bib_digest.as_str());
+    workspace_state.bibliography_digest = Some(bib_digest);
+    save_workspace(workspace, &workspace_state)?;
     if matches!(target, Target::Wsl(_)) {
-        emit(app, &request.job, "starting-wsl", None);
+        progress("starting-wsl", None);
     }
-    let env = target.environment(&workspace_path, &work, &engine, roots)?;
-    let main_name = staged
-        .main
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_else(|| "main.tex".into());
-    // The snapshot puts the main file at the project root, but the request is
-    // external input: pass its relative path, not only the file name, so a
-    // nested value still compiles exactly what was staged.
-    let main_argument = request.main_file.replace('\\', "/");
-    let stem = main_name
+    let paths = target.paths(workspace, &root, roots, !prepared.overlaid.is_empty())?;
+    let env = target.environment(workspace, &paths, engine);
+    let cwd = inplace::plain(&root);
+    let main_name = prepared.main.clone();
+    let file_name = main_name.rsplit('/').next().unwrap_or(&main_name);
+    let stem = file_name
         .strip_suffix(".tex")
-        .unwrap_or(&main_name)
+        .unwrap_or(file_name)
         .to_string();
-    let mut aux_before = auxiliary_signature(&work);
+    // `\include{chapters/one}` writes `chapters/one.aux` below the outputs,
+    // and TeX Live does not create the folder (MiKTeX does).
+    inplace::output_dirs(&out, prepared.carried.iter());
+    let mut aux_before = auxiliary_signature(&out);
+    // What this build read is stamped against its start: a file changed
+    // while TeX ran is recorded unsettled, and the next build reads it again.
+    let build_start = std::time::SystemTime::now();
+    let mut sources = prepared.sources.clone();
+    let mut inputs: BTreeSet<String> = BTreeSet::new();
+    let mut from_folder: BTreeSet<String> = BTreeSet::new();
 
     let mut logs: Vec<String> = Vec::new();
     let mut passes = 0u32;
+    let mut retries = 0u32;
     let mut bibliography_run = Bibliography::None;
     let mut missing_tool: Option<String> = None;
     let mut outcome = runner::RunOutcome::default();
@@ -1151,7 +1179,7 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
     let mut last_log = String::new();
     let mut force_rerun = false;
     loop {
-        if passes >= 3 {
+        if passes >= 3 + retries {
             break;
         }
         // A Cancel that arrived before registration, or between passes, stops
@@ -1161,14 +1189,14 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
             break;
         }
         // The previous pass's bibliography state, before this pass rewrites it.
-        let bcf_before = file_digest(&work.join(format!("{stem}.bcf")));
-        let control_before = aux_control(&work);
+        let bcf_before = file_digest(&out.join(format!("{stem}.bcf")));
+        let control_before = aux_control(&out);
         passes += 1;
-        emit(app, &request.job, "compiling", Some(&engine));
-        let args = engine_arguments(&engine, &main_argument);
+        progress("compiling", Some(engine));
+        let args = engine_arguments(engine, Some(&paths.out), &main_name);
         outcome = runner::run(
-            &target.spec(&engine, args, &work, &env, COMPILE_TIMEOUT)?,
-            &token,
+            &target.spec(engine, args, &cwd, &out, &env, COMPILE_TIMEOUT)?,
+            token,
         )?;
         if token.load(Ordering::SeqCst) || outcome.cancelled {
             cancelled = true;
@@ -1176,16 +1204,44 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
         if outcome.timed_out {
             timed_out = true;
         }
-        let log = read_log(&work, &stem);
+        let log = read_log(&out, &stem);
         last_log = log.clone();
         if !log.is_empty() {
             logs.push(log.clone());
         }
-        let parsed = log::parse(&log, &staged.sources);
-        let bcf_after = file_digest(&work.join(format!("{stem}.bcf")));
-        let control_after = aux_control(&work);
+        let recorded = std::fs::read_to_string(out.join(format!("{stem}.fls"))).unwrap_or_default();
+        for input in inplace::recorded_inputs(&recorded, &paths.engine) {
+            if input.to_ascii_lowercase().ends_with(".tex") {
+                sources.entry(input.clone()).or_default();
+            }
+            inputs.insert(input);
+        }
+        from_folder.extend(inplace::read_from_folder(&recorded, &paths.engine));
+        if cancelled || timed_out {
+            break;
+        }
+        // An `\include` whose folder the carried names did not show (a name
+        // built by a macro) needs its output folder too: create it and run the
+        // pass again.
+        let unwritable: Vec<String> = inplace::unwritable(&log)
+            .into_iter()
+            .filter(|name| {
+                name.rsplit_once('/')
+                    .is_some_and(|(dir, _)| !out.join(dir).is_dir())
+            })
+            .collect();
+        if !unwritable.is_empty() && retries < 2 {
+            retries += 1;
+            inplace::output_dirs(&out, unwritable.iter());
+            remove_auxiliary(&out);
+            aux_before = auxiliary_signature(&out);
+            continue;
+        }
+        let parsed = log::parse(&log, &sources);
+        let bcf_after = file_digest(&out.join(format!("{stem}.bcf")));
+        let control_after = aux_control(&out);
         let bibliography = decide_bibliography(
-            &work,
+            &out,
             &stem,
             &bcf_before,
             &bcf_after,
@@ -1201,19 +1257,32 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
             };
             if target.has_tool(tool) {
                 bibliography_run = bibliography;
-                emit(app, &request.job, "bibliography", Some(tool));
-                let args = vec![OsString::from(stem.clone())];
-                let bbl_before = file_digest(&work.join(format!("{stem}.bbl")));
+                progress("bibliography", Some(tool));
+                // The tool runs beside the outputs, where every `.aux` is and
+                // the declared `.bib`/`.bst` files were written. The folder is
+                // on its search path for the rest.
+                let mut args = Vec::new();
+                if tool == "bibtex" && target.family() == Family::Miktex {
+                    let mut include = OsString::from("-include-directory=");
+                    include.push(cwd.as_os_str());
+                    args.push(include);
+                }
+                args.push(OsString::from(stem.clone()));
+                let bbl_before = file_digest(&out.join(format!("{stem}.bbl")));
                 let helper = runner::run(
-                    &target.spec(tool, args, &work, &env, PROBE_TIMEOUT * 3)?,
-                    &token,
+                    &target.spec(tool, args, &out, &out, &env, PROBE_TIMEOUT * 3)?,
+                    token,
                 )?;
                 if !helper.console.trim().is_empty() {
                     logs.push(helper.console);
                 }
+                let blg =
+                    std::fs::read_to_string(out.join(format!("{stem}.blg"))).unwrap_or_default();
+                workspace_state.bibliography_reads =
+                    inplace::bibliography_inputs(&inplace::bibliography_reads(&blg), &paths.engine);
                 // Only a changed .bbl requires another LaTeX pass. A tool run
                 // that produced identical output does not.
-                let bbl_after = file_digest(&work.join(format!("{stem}.bbl")));
+                let bbl_after = file_digest(&out.join(format!("{stem}.bbl")));
                 if bbl_before != bbl_after {
                     force_rerun = true;
                 }
@@ -1223,10 +1292,7 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
                 ));
             }
         }
-        if cancelled || timed_out {
-            break;
-        }
-        let aux_after = auxiliary_signature(&work);
+        let aux_after = auxiliary_signature(&out);
         let aux_changed = aux_before != aux_after;
         aux_before = aux_after;
         if (!parsed.rerun && !aux_changed && !force_rerun) || outcome.status != 0 {
@@ -1234,10 +1300,18 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
         }
         force_rerun = false;
     }
-    drop(registration);
 
-    let pdf = find_output(&work, &stem, "pdf");
-    let parsed = log::parse(&last_log, &staged.sources);
+    let read = record_build_reads(
+        folder,
+        &prepared,
+        &inputs,
+        &workspace_state.bibliography_reads,
+        build_start,
+    );
+    let _ = save_workspace(workspace, &workspace_state);
+
+    let pdf = find_output(&out, &stem, "pdf");
+    let parsed = log::parse(&last_log, &sources);
     let log_text = {
         let joined = logs.join("\n");
         let (bounded, truncated) = log::bounded_log(&joined);
@@ -1293,6 +1367,7 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
             code: "missing-tool".into(),
         });
     }
+    diagnostics.extend(unsaved_diagnostics(&prepared, &from_folder));
     let warnings_truncated = parsed.truncated
         && parsed
             .diagnostics
@@ -1300,9 +1375,9 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
             .any(|entry| entry.severity == Severity::Warning);
     if !success {
         // A failed or cancelled pass can leave a half-written .aux/.bcf. Keep
-        // the staged sources, caches and tmp/ (the Biber extraction), but let
-        // the next build start from clean outputs.
-        remove_auxiliary(&work);
+        // the caches and tmp/ (the Biber extraction), but let the next build
+        // start from clean outputs.
+        remove_auxiliary(&out);
     }
     Ok(NativeCompileResult {
         pdf: if success {
@@ -1320,8 +1395,8 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
         success,
         cancelled,
         timed_out,
-        engine: engine.clone(),
-        distribution: name,
+        engine: engine.to_string(),
+        distribution: target.distribution(),
         passes,
         log: log_text.0,
         log_truncated: log_text.1,
@@ -1329,7 +1404,133 @@ fn compile(app: &AppHandle, request: NativeCompileRequest) -> Result<NativeCompi
         warnings_truncated,
         error,
         elapsed_ms: started.elapsed().as_millis() as u64,
+        inputs: read.into_iter().collect(),
     })
+}
+
+/// Warnings for unsaved buffers TeX did not compile: one named `./x` (found
+/// before the build, with its line), and any other the recorder shows was read
+/// from the folder instead of the overlay.
+fn unsaved_diagnostics(
+    prepared: &inplace::Prepared,
+    from_folder: &BTreeSet<String>,
+) -> Vec<NativeDiagnostic> {
+    let mut diagnostics: Vec<NativeDiagnostic> = prepared
+        .warnings
+        .iter()
+        .map(|warning| NativeDiagnostic {
+            file: warning.source.clone(),
+            line: warning.line,
+            severity: "warning".into(),
+            message: warning.message.clone(),
+            code: "unsaved-not-compiled".into(),
+        })
+        .collect();
+    for name in prepared.overlaid.intersection(from_folder) {
+        if prepared
+            .warnings
+            .iter()
+            .any(|warning| &warning.file == name)
+        {
+            continue;
+        }
+        diagnostics.push(NativeDiagnostic {
+            file: name.clone(),
+            line: 0,
+            severity: "warning".into(),
+            message: format!(
+                "{name} has unsaved changes, but TeX read the saved file from the folder. \
+                 Save it to compile the changes."
+            ),
+            code: "unsaved-not-compiled".into(),
+        });
+    }
+    diagnostics
+}
+
+/// Write a request's files into a private folder, for a request that names
+/// no folder of its own, and return its canonical path.
+fn materialize(source: &Path, files: &[NativeFile]) -> Result<PathBuf, String> {
+    let _ = std::fs::remove_dir_all(source);
+    std::fs::create_dir_all(source).map_err(|error| error.to_string())?;
+    for file in files {
+        let relative = inplace::safe_relative(&file.path)?;
+        let bytes = STANDARD
+            .decode(&file.data)
+            .map_err(|_| format!("{} is not valid project data.", file.path))?;
+        let target = source.join(&relative);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        std::fs::write(&target, bytes)
+            .map_err(|error| format!("Cannot write {}: {error}", file.path))?;
+    }
+    std::fs::canonicalize(source).map_err(|error| error.to_string())
+}
+
+/// The bibliography inputs this build would hand the tool: the declared ones
+/// by content, the others the tool reported reading by stamp.
+fn bibliography_digest(root: &Path, prepared: &inplace::Prepared, reads: &[String]) -> String {
+    let mut material = prepared.bibliography.clone();
+    for read in reads {
+        if prepared.carried.contains(read) {
+            continue;
+        }
+        material.push('\n');
+        material.push_str(read);
+        material.push('\0');
+        material.push_str(&crate::latex::current_stamp(
+            root,
+            read,
+            crate::latex::file_stamp,
+        ));
+    }
+    crate::latex::digest(material.as_bytes())
+}
+
+/// The project files this build read, by their names on disk, recorded with
+/// the folder's dependencies so the next snapshot can tell whether the PDF is
+/// still current.
+///
+/// A carried file is left out of the record: its bytes are in the preview's
+/// key already, and a just-saved buffer would otherwise invalidate the PDF it
+/// was compiled into. Every folder a read came from is recorded too, so a
+/// file added there (a `.sty` that now shadows the distribution's, a figure
+/// in a format TeX prefers) makes the next build run.
+fn record_build_reads(
+    folder: Option<&Path>,
+    prepared: &inplace::Prepared,
+    inputs: &BTreeSet<String>,
+    bibliography_reads: &[String],
+    build_start: std::time::SystemTime,
+) -> BTreeSet<String> {
+    let mut read: BTreeSet<String> = BTreeSet::new();
+    read.insert(prepared.main.clone());
+    read.extend(prepared.overlaid.iter().cloned());
+    let Some(root) = folder else {
+        return read;
+    };
+    for name in inputs.iter().chain(bibliography_reads) {
+        if let Some(disk) = inplace::on_disk(root, name) {
+            read.insert(disk);
+        }
+    }
+    let mut dirs = BTreeSet::new();
+    for name in &read {
+        dirs.insert(name.rsplit_once('/').map_or("", |(dir, _)| dir).to_string());
+        if prepared.carried.contains(name) {
+            continue;
+        }
+        let stamp = crate::latex::current_stamp(root, name, |metadata| {
+            crate::latex::settled_stamp(metadata, build_start)
+        });
+        crate::latex::record_file_read(root, name, stamp);
+    }
+    for dir in dirs {
+        let (_, digest) = crate::latex::list_project_dir(root, &dir);
+        crate::latex::record_dir_read(root, &dir, digest);
+    }
+    read
 }
 
 fn emit(app: &AppHandle, job: &str, phase: &str, detail: Option<&str>) {
@@ -1343,22 +1544,10 @@ fn emit(app: &AppHandle, job: &str, phase: &str, detail: Option<&str>) {
     );
 }
 
-/// Bump when the staging record or layout changes; an older record is discarded.
-const WORKSPACE_VERSION: u32 = 1;
-
-/// What one staged project file was copied from.
-///
-/// Eager files (the main file and open buffers) use `digest`; manifest files
-/// use the source's size and modification stamp. A generated file with the same
-/// name is not in this record, so reusing the workspace never overwrites it
-/// just because the source is unchanged.
-#[derive(Serialize, Deserialize, Clone)]
-struct StagedFile {
-    size: u64,
-    modified: u64,
-    /// Non-empty for an eager file; empty for a manifest file.
-    digest: String,
-}
+/// Bump when the workspace record or layout changes; an older record is
+/// discarded with its workspace. 2: TeX compiles in the folder itself, and
+/// the workspace holds the outputs and the overlay, never a project copy.
+const WORKSPACE_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize)]
 struct WorkspaceState {
@@ -1367,7 +1556,15 @@ struct WorkspaceState {
     main_file: String,
     engine: String,
     texmf_revision: Option<String>,
-    staged: BTreeMap<String, StagedFile>,
+    /// Declared `.bib`/`.bst` files written beside the outputs, by digest.
+    #[serde(default)]
+    bibliography: BTreeMap<String, String>,
+    /// What the bibliography inputs were at the last build.
+    #[serde(default)]
+    bibliography_digest: Option<String>,
+    /// Project files the bibliography tool reported reading (its `.blg`).
+    #[serde(default)]
+    bibliography_reads: Vec<String>,
 }
 
 impl WorkspaceState {
@@ -1378,276 +1575,11 @@ impl WorkspaceState {
             main_file: main_file.to_string(),
             engine: engine.to_string(),
             texmf_revision: None,
-            staged: BTreeMap::new(),
+            bibliography: BTreeMap::new(),
+            bibliography_digest: None,
+            bibliography_reads: Vec::new(),
         }
     }
-}
-
-/// A modification time this close to the staging clock cannot prove a later
-/// same-size edit is absent: filesystems record mtimes at a coarse tick (the
-/// kernel tick on ext4, two seconds on FAT), so a rewrite in the same tick
-/// keeps the old stamp. Such a file is recorded as unproven (stamp 0) and
-/// copied again on the next compile, as Git does with "racily clean" entries.
-const RACY_STAMP_WINDOW: Duration = Duration::from_secs(3);
-
-fn file_stamp(metadata: &std::fs::Metadata) -> u64 {
-    metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|age| u64::try_from(age.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0)
-}
-
-/// The stamp that may prove a staged copy current: the source's stamp, or 0
-/// when it is unknown or too recent to rule out a later same-size edit (see
-/// `RACY_STAMP_WINDOW`). A future mtime (clock skew) is as unprovable as a
-/// recent one.
-fn settled_stamp(metadata: &std::fs::Metadata, staged_at: std::time::SystemTime) -> u64 {
-    let settled = metadata.modified().is_ok_and(|modified| {
-        staged_at
-            .duration_since(modified)
-            .is_ok_and(|age| age >= RACY_STAMP_WINDOW)
-    });
-    if settled { file_stamp(metadata) } else { 0 }
-}
-
-struct Staged {
-    main: PathBuf,
-    sources: BTreeMap<String, String>,
-}
-
-fn stage(
-    workspace: &Path,
-    request: &NativeCompileRequest,
-    state: &mut WorkspaceState,
-) -> Result<Staged, String> {
-    if request.files.is_empty() {
-        return Err("The LaTeX project has no files.".into());
-    }
-    if request.files.len() > MAX_FILES {
-        return Err("The LaTeX project exceeds its file count limit.".into());
-    }
-    let work = workspace.join("project");
-    std::fs::create_dir_all(&work).map_err(|error| error.to_string())?;
-    let staged_at = std::time::SystemTime::now();
-    let mut total = 0usize;
-    let mut main = None;
-    let mut sources = BTreeMap::new();
-    let mut desired = BTreeSet::new();
-    let main_relative = request.main_file.replace('\\', "/");
-    for file in &request.files {
-        let relative = safe_relative(&file.path)?;
-        if is_executable(&relative) {
-            return Err(format!(
-                "{} is an executable file; project executables are never staged.",
-                file.path
-            ));
-        }
-        let bytes = STANDARD
-            .decode(&file.data)
-            .map_err(|_| format!("{} is not valid project data.", file.path))?;
-        if bytes.len() > MAX_FILE {
-            return Err(format!("{} exceeds the 32 MiB file limit.", file.path));
-        }
-        total = total
-            .checked_add(bytes.len())
-            .ok_or("The LaTeX project size overflowed.")?;
-        if total > MAX_PROJECT {
-            return Err("The LaTeX project exceeds 64 MiB.".into());
-        }
-        desired.insert(relative.clone());
-        let target = work.join(&relative);
-        // The eager bytes win over every disk copy, including one the engine
-        // rewrote in the previous build. Compare the staged file, not the
-        // record, so a generated overwrite cannot hide the reader's buffer.
-        let same = target
-            .metadata()
-            .ok()
-            .filter(|metadata| metadata.is_file() && metadata.len() == bytes.len() as u64)
-            .is_some_and(|_| {
-                std::fs::read(&target)
-                    .ok()
-                    .is_some_and(|current| current == bytes)
-            });
-        if !same {
-            ensure_parent_dirs(&work, &relative)?;
-            remove_conflicting_path(&target)?;
-            std::fs::write(&target, &bytes)
-                .map_err(|error| format!("Cannot stage {}: {error}", file.path))?;
-        }
-        if relative == main_relative {
-            main = Some(target.clone());
-        }
-        if relative.to_ascii_lowercase().ends_with(".tex")
-            && let Ok(text) = String::from_utf8(bytes.clone())
-        {
-            sources.insert(relative.clone(), text);
-        }
-        state.staged.insert(
-            relative,
-            StagedFile {
-                size: bytes.len() as u64,
-                modified: 0,
-                digest: crate::latex::digest(&bytes),
-            },
-        );
-    }
-    if let Some(root) = &request.root {
-        let root = std::fs::canonicalize(root)
-            .map_err(|error| format!("Cannot read the project directory: {error}"))?;
-        if request.manifest.len() > MAX_MANIFEST_FILES {
-            return Err(format!(
-                "The LaTeX project has more than {MAX_MANIFEST_FILES} files in its project manifest."
-            ));
-        }
-        let mut manifest_total = 0u64;
-        for relative in &request.manifest {
-            let target_relative = safe_relative(relative)?;
-            // An eager file (including an unsaved buffer's bytes) already won.
-            if desired.contains(&target_relative) {
-                continue;
-            }
-            let (source, size) = crate::latex::project_file_in(&root, relative)?;
-            if size > MAX_MANIFEST_FILE {
-                return Err(format!(
-                    "{relative} exceeds the 128 MiB project-file limit; move it outside the project."
-                ));
-            }
-            manifest_total = manifest_total
-                .checked_add(size)
-                .ok_or("The LaTeX project size overflowed.")?;
-            if manifest_total > MAX_MANIFEST_TOTAL {
-                return Err(
-                    "The LaTeX project exceeds the 1 GiB staged-project limit; split the project."
-                        .into(),
-                );
-            }
-            if is_executable(&target_relative) {
-                return Err(format!(
-                    "{relative} is an executable file; project executables are never staged."
-                ));
-            }
-            let metadata = std::fs::metadata(&source)
-                .map_err(|error| format!("Cannot read {relative}: {error}"))?;
-            let stamp = settled_stamp(&metadata, staged_at);
-            let target = work.join(&target_relative);
-            // A source that has not changed is left exactly as it is. This is
-            // what keeps a generated file (a PDF, .bbl, .aux) that happens to
-            // share a project name from being replaced on every compile.
-            let unchanged = state.staged.get(&target_relative).is_some_and(|previous| {
-                previous.size == size
-                    && previous.modified != 0
-                    && previous.modified == stamp
-                    && previous.digest.is_empty()
-                    && target.is_file()
-            });
-            if !unchanged {
-                ensure_parent_dirs(&work, &target_relative)?;
-                remove_conflicting_path(&target)?;
-                // Copy, never hard-link: a committed main.pdf, main.bbl or
-                // main.aux must not be writable through the staged copy.
-                std::fs::copy(&source, &target)
-                    .map_err(|error| format!("Cannot stage {relative}: {error}"))?;
-            }
-            if target_relative.to_ascii_lowercase().ends_with(".tex")
-                && let Ok(text) = std::fs::read_to_string(&target)
-            {
-                sources.insert(target_relative.clone(), text);
-            }
-            state.staged.insert(
-                target_relative.clone(),
-                StagedFile {
-                    size,
-                    modified: stamp,
-                    digest: String::new(),
-                },
-            );
-            desired.insert(target_relative);
-        }
-    }
-    // Remove a staged copy whose project file disappeared. Generated files are
-    // not in `staged`, so a .aux, .bbl or PDF the engine wrote is never
-    // deleted here.
-    let obsolete: Vec<String> = state
-        .staged
-        .keys()
-        .filter(|relative| !desired.contains(*relative))
-        .cloned()
-        .collect();
-    for relative in obsolete {
-        let target = work.join(&relative);
-        if target.is_file() {
-            let _ = std::fs::remove_file(&target);
-        }
-        state.staged.remove(&relative);
-    }
-    let main = main.ok_or("The main .tex file is not part of the project snapshot.")?;
-    Ok(Staged { main, sources })
-}
-
-/// Create every parent of a staged file, removing a stale file that now has to
-/// become a directory. A project rename can turn a file into a directory.
-fn ensure_parent_dirs(work: &Path, relative: &str) -> Result<(), String> {
-    let parts: Vec<&str> = relative.split('/').collect();
-    let mut path = work.to_path_buf();
-    for part in &parts[..parts.len().saturating_sub(1)] {
-        path.push(part);
-        if let Ok(metadata) = std::fs::symlink_metadata(&path)
-            && metadata.is_file()
-        {
-            std::fs::remove_file(&path)
-                .map_err(|error| format!("Cannot replace {}: {error}", path.display()))?;
-        }
-        std::fs::create_dir_all(&path)
-            .map_err(|error| format!("Cannot create {}: {error}", path.display()))?;
-    }
-    Ok(())
-}
-
-/// A staged path that is currently a directory cannot also be a file.
-fn remove_conflicting_path(target: &Path) -> Result<(), String> {
-    match std::fs::symlink_metadata(target) {
-        Ok(metadata) if metadata.is_dir() => std::fs::remove_dir_all(target)
-            .map_err(|error| format!("Cannot replace {}: {error}", target.display())),
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("Cannot read {}: {error}", target.display())),
-    }
-}
-/// A project-relative path that cannot leave the job directory.
-///
-/// Unicode is allowed, because a reader's folders are their own; what is refused
-/// is anything that is absolute, escapes with `..`, or uses a Windows device or
-/// drive prefix.
-fn safe_relative(path: &str) -> Result<String, String> {
-    let normal = path.replace('\\', "/");
-    if normal.is_empty()
-        || normal.len() > 512
-        || normal.starts_with('/')
-        || normal.contains(':')
-        || normal.chars().any(|ch| ch.is_control())
-    {
-        return Err(format!("Unsafe project path: {path}"));
-    }
-    let mut parts = Vec::new();
-    for part in normal.split('/') {
-        if part.is_empty() || part == "." || part == ".." {
-            return Err(format!("Unsafe project path: {path}"));
-        }
-        parts.push(part);
-    }
-    Ok(parts.join("/"))
-}
-
-fn is_executable(path: &str) -> bool {
-    let lower = path.to_ascii_lowercase();
-    [
-        ".exe", ".dll", ".com", ".bat", ".cmd", ".ps1", ".msi", ".scr", ".vbs", ".js", ".jse",
-        ".wsf", ".cpl", ".pif", ".lnk", ".sh", ".app",
-    ]
-    .iter()
-    .any(|suffix| lower.ends_with(suffix))
 }
 
 #[cfg(test)]
@@ -1796,7 +1728,7 @@ impl Target {
             Target::Path { bin, .. } => {
                 let path = engine_path(bin, engine);
                 let stamp = std::fs::metadata(&path)
-                    .map(|metadata| format!("{}:{}", metadata.len(), file_stamp(&metadata)))
+                    .map(|metadata| crate::latex::file_stamp(&metadata))
                     .unwrap_or_default();
                 format!("path:{}:{}:{stamp}", bin.display(), engine)
             }
@@ -1806,26 +1738,96 @@ impl Target {
         }
     }
 
+    /// One build's folders in the engine's own terms. A WSL build asks the
+    /// distribution for their Linux forms, once per folder and app session.
+    fn paths(
+        &self,
+        workspace: &Path,
+        root: &Path,
+        roots: usize,
+        overlaid: bool,
+    ) -> Result<BuildPaths, String> {
+        let overlay = workspace.join("overlay");
+        let out = workspace.join("out");
+        match self {
+            Target::Path { .. } => {
+                let text = |path: &Path| inplace::plain(path).to_string_lossy().replace('\\', "/");
+                let overlay_search = if overlaid {
+                    Some(inplace::search_form(&overlay)?)
+                } else {
+                    None
+                };
+                Ok(BuildPaths {
+                    state: inplace::plain(workspace).to_string_lossy().into_owned(),
+                    out: inplace::plain(&out).to_string_lossy().into_owned(),
+                    engine: inplace::EnginePaths {
+                        root: text(root),
+                        workspace: text(workspace),
+                        overlay: overlay_search.clone().unwrap_or_else(|| text(&overlay)),
+                        out: text(&out),
+                        windows: cfg!(windows),
+                    },
+                    overlay: overlay_search,
+                    libraries: (0..roots)
+                        .map(|n| inplace::search_form(&workspace.join("texmf").join(n.to_string())))
+                        .collect::<Result<_, _>>()?,
+                    output: inplace::search_form(&out).ok(),
+                    root: inplace::search_form(root).ok(),
+                })
+            }
+            Target::Wsl(selected) => {
+                let state = wsl_linux_path(&selected.distro, workspace, workspace)?;
+                let folder = wsl_linux_path(&selected.distro, root, workspace)?;
+                let overlay = format!("{state}/overlay");
+                let out = format!("{state}/out");
+                Ok(BuildPaths {
+                    engine: inplace::EnginePaths {
+                        root: folder.clone(),
+                        workspace: state.clone(),
+                        overlay: overlay.clone(),
+                        out: out.clone(),
+                        windows: false,
+                    },
+                    overlay: if overlaid {
+                        Some(inplace::linux_search_form(&overlay)?)
+                    } else {
+                        None
+                    },
+                    libraries: (0..roots)
+                        .map(|n| inplace::linux_search_form(&format!("{state}/texmf/{n}")))
+                        .collect::<Result<_, _>>()?,
+                    output: inplace::linux_search_form(&out).ok(),
+                    root: inplace::linux_search_form(&folder).ok(),
+                    out,
+                    state,
+                })
+            }
+        }
+    }
+
     fn environment(
         &self,
-        job: &Path,
-        _work: &Path,
+        workspace: &Path,
+        paths: &BuildPaths,
         engine: &str,
-        roots: usize,
-    ) -> Result<Vec<(String, String)>, String> {
+    ) -> Vec<(String, String)> {
         match self {
             Target::Path { bin, name } => {
-                let mut env = base_environment(bin, job, name);
-                for (key, value) in library_environment(self.family(), engine, roots) {
+                let mut env = base_environment(bin, workspace, name);
+                let separator = if cfg!(windows) { ';' } else { ':' };
+                for (key, value) in search_environment(self.family(), engine, paths, separator) {
                     set_env(&mut env, &key, value);
                 }
-                Ok(env)
+                env
             }
             Target::Wsl(selected) => {
                 // Creates the private directories on the Windows side.
-                let _ = base_environment(Path::new(&selected.bin), job, "TeX Live");
-                let linux = wsl_linux_path(&selected.distro, job)?;
-                Ok(wsl_environment(&selected.bin, &linux, engine, roots))
+                let _ = base_environment(Path::new(&selected.bin), workspace, "TeX Live");
+                let mut env = wsl_environment(&selected.bin, &paths.state);
+                for (key, value) in search_environment(Family::Kpathsea, engine, paths, ':') {
+                    set_env(&mut env, &key, value);
+                }
+                env
             }
         }
     }
@@ -1835,6 +1837,7 @@ impl Target {
         program: &str,
         args: Vec<OsString>,
         work: &Path,
+        scratch: &Path,
         env: &[(String, String)],
         timeout: Duration,
     ) -> Result<runner::RunSpec, String> {
@@ -1843,20 +1846,38 @@ impl Target {
                 program: engine_path(bin, program),
                 args,
                 cwd: work.to_path_buf(),
+                scratch: scratch.to_path_buf(),
                 env: env.to_vec(),
                 timeout,
             }),
-            Target::Wsl(selected) => wsl_engine_spec(selected, work, env, program, &args, timeout),
+            Target::Wsl(selected) => {
+                wsl_engine_spec(selected, work, scratch, env, program, &args, timeout)
+            }
         }
     }
 }
 
+/// One build's folders as the engine names them.
+struct BuildPaths {
+    /// The workspace: HOME, the caches and the temporary files.
+    state: String,
+    /// The value of `-output-directory`.
+    out: String,
+    /// For reading what the engine recorded.
+    engine: inplace::EnginePaths,
+    /// Search-path elements, each checked by `search_form`: the overlay when
+    /// a buffer differs from its file, the library roots, and the outputs and
+    /// the folder when their names allow it.
+    overlay: Option<String>,
+    libraries: Vec<String>,
+    output: Option<String>,
+    root: Option<String>,
+}
+
 /// The exact Linux environment of a WSL job. `job` is the Linux form of the
-/// Windows job directory; everything writable stays inside it.
-fn wsl_environment(bin: &str, job: &str, engine: &str, roots: usize) -> Vec<(String, String)> {
-    // Build state lives at the workspace root; `project` is the cwd only, so a
-    // project may have its own tmp/cache/data folder.
-    let mut env = vec![
+/// workspace; everything writable stays inside it.
+fn wsl_environment(bin: &str, job: &str) -> Vec<(String, String)> {
+    vec![
         // Not the Windows PATH that WSL interop appends.
         ("PATH".to_string(), format!("{bin}:/usr/bin:/bin")),
         ("LANG".to_string(), "C.UTF-8".to_string()),
@@ -1866,29 +1887,53 @@ fn wsl_environment(bin: &str, job: &str, engine: &str, roots: usize) -> Vec<(Str
         ("TEXMFVAR".to_string(), format!("{job}/data")),
         ("TEXMFCONFIG".to_string(), format!("{job}/config")),
         ("TEXMFHOME".to_string(), format!("{job}/home")),
-    ];
-    for (key, value) in library_environment(Family::Kpathsea, engine, roots) {
-        set_env(&mut env, &key, value);
-    }
-    env
+    ]
 }
 
-/// The search-path variables that put staged libraries after the project and
-/// before the distribution. Paths are relative to the engine's working
-/// directory (job/project), so a job path with a comma, brace or non-ASCII
-/// letter never enters a search-path expression. Measured on TeX Live 2025 and
-/// MiKTeX 23.1; see the support matrix in the local TEXMF plan.
-fn library_environment(family: Family, engine: &str, roots: usize) -> Vec<(String, String)> {
-    if roots == 0 {
-        return Vec::new();
-    }
-    let root = |n: usize| format!("../texmf/{n}");
+/// The search paths of one build. TeX's working directory is the document's
+/// folder, so `.` is the project: the overlay comes before it, the libraries
+/// after it and before the distribution. The bibliography tool runs beside
+/// the outputs, where the declared `.bib`/`.bst` files were written, and finds
+/// the rest in the folder.
+///
+/// Measured on TeX Live 2025 (Debian, in WSL) and MiKTeX 23.1: the libraries,
+/// the overlay, the output folder and the recorder.
+fn search_environment(
+    family: Family,
+    engine: &str,
+    paths: &BuildPaths,
+    separator: char,
+) -> Vec<(String, String)> {
+    let mut env: Vec<(String, String)> = Vec::new();
+    let bibliography = |libraries: String| {
+        let mut value = format!(".{separator}");
+        if let Some(root) = &paths.root {
+            value.push_str(root);
+            value.push(separator);
+        }
+        value.push_str(&libraries);
+        value
+    };
     match family {
         Family::Kpathsea => {
             // TEXMFHOME is part of $TEXMF, so the distribution's own cnf supplies
             // format-aware TEXINPUTS.<fmt>, BSTINPUTS, LUAINPUTS and font paths.
-            let list: Vec<String> = (0..roots).map(root).collect();
-            vec![("TEXMFHOME".into(), format!("{{{}}}", list.join(",")))]
+            if !paths.libraries.is_empty() {
+                env.push((
+                    "TEXMFHOME".into(),
+                    format!("{{{}}}", paths.libraries.join(",")),
+                ));
+            }
+            // The empty element after the overlay is the distribution's own,
+            // format-aware path, which starts with `.`.
+            if let Some(overlay) = &paths.overlay {
+                env.push(("TEXINPUTS".into(), format!("{overlay}{separator}")));
+            }
+            if let Some(output) = &paths.output {
+                env.push(("TEXMFOUTPUT".into(), output.clone()));
+            }
+            env.push(("BIBINPUTS".into(), bibliography(String::new())));
+            env.push(("BSTINPUTS".into(), bibliography(String::new())));
         }
         Family::Miktex => {
             let tex: &[&str] = match engine {
@@ -1896,22 +1941,31 @@ fn library_environment(family: Family, engine: &str, roots: usize) -> Vec<(Strin
                 "xelatex" => &["tex/xelatex", "tex/latex", "tex/xetex", "tex/generic"],
                 _ => &["tex/latex", "tex/pdftex", "tex/generic"],
             };
-            let over = |subdirs: &[&str]| -> String {
-                // The leading `.` keeps the project first: MiKTeX otherwise
-                // searches these variables before the working directory.
-                let mut value = String::from(".;");
-                for n in 0..roots {
+            let libraries = |subdirs: &[&str]| -> String {
+                let mut value = String::new();
+                for root in &paths.libraries {
                     for dir in subdirs {
-                        value.push_str(&format!("{}/{dir}//;", root(n)));
+                        value.push_str(&format!("{root}/{dir}//;"));
                     }
                 }
                 value
             };
-            vec![
-                ("TEXINPUTS".into(), over(tex)),
-                ("BSTINPUTS".into(), over(&["bibtex/bst"])),
-                ("BIBINPUTS".into(), over(&["bibtex/bib"])),
-                (
+            // The `.` keeps the folder before the libraries: MiKTeX otherwise
+            // searches these variables before the working directory.
+            let over = |subdirs: &[&str]| format!(".;{}", libraries(subdirs));
+            if paths.overlay.is_some() || !paths.libraries.is_empty() {
+                let mut value = String::new();
+                if let Some(overlay) = &paths.overlay {
+                    value.push_str(overlay);
+                    value.push(';');
+                }
+                value.push_str(&over(tex));
+                env.push(("TEXINPUTS".into(), value));
+            }
+            env.push(("BIBINPUTS".into(), bibliography(libraries(&["bibtex/bib"]))));
+            env.push(("BSTINPUTS".into(), bibliography(libraries(&["bibtex/bst"]))));
+            if !paths.libraries.is_empty() {
+                env.push((
                     "LUAINPUTS".into(),
                     over(&[
                         "scripts",
@@ -1920,12 +1974,13 @@ fn library_environment(family: Family, engine: &str, roots: usize) -> Vec<(Strin
                         "tex/latex",
                         "tex/generic",
                     ]),
-                ),
-                ("OPENTYPEFONTS".into(), over(&["fonts/opentype"])),
-                ("TTFONTS".into(), over(&["fonts/truetype"])),
-            ]
+                ));
+                env.push(("OPENTYPEFONTS".into(), over(&["fonts/opentype"])));
+                env.push(("TTFONTS".into(), over(&["fonts/truetype"])));
+            }
         }
     }
+    env
 }
 
 /// Write a validated library snapshot as job/texmf/<n>/<TDS path>.
@@ -1985,13 +2040,31 @@ fn wsl_registered(_distro: &str) -> bool {
     false
 }
 
+/// The Linux form of a Windows folder. The mapping changes only with the
+/// distribution's mount configuration, and asking costs a launch, so each
+/// answer is kept for the app session.
 #[cfg(windows)]
-fn wsl_linux_path(distro: &str, job: &Path) -> Result<String, String> {
-    wsl::linux_path(distro, job, job)
+fn wsl_linux_path(distro: &str, path: &Path, scratch: &Path) -> Result<String, String> {
+    type Known = Mutex<BTreeMap<(String, PathBuf), String>>;
+    static KNOWN: OnceLock<Known> = OnceLock::new();
+    let path = inplace::plain(path);
+    let key = (distro.to_string(), path.clone());
+    let known = KNOWN.get_or_init(Default::default);
+    if let Some(linux) = known.lock().ok().and_then(|map| map.get(&key).cloned()) {
+        return Ok(linux);
+    }
+    let linux = wsl::linux_path(distro, &path, scratch)?;
+    if let Ok(mut map) = known.lock() {
+        if map.len() >= 256 {
+            map.clear();
+        }
+        map.insert(key, linux.clone());
+    }
+    Ok(linux)
 }
 
 #[cfg(not(windows))]
-fn wsl_linux_path(_distro: &str, _job: &Path) -> Result<String, String> {
+fn wsl_linux_path(_distro: &str, _path: &Path, _scratch: &Path) -> Result<String, String> {
     Err("WSL is available only on Windows.".into())
 }
 
@@ -1999,6 +2072,7 @@ fn wsl_linux_path(_distro: &str, _job: &Path) -> Result<String, String> {
 fn wsl_engine_spec(
     selected: &wsl::WslInstallation,
     work: &Path,
+    scratch: &Path,
     env: &[(String, String)],
     program: &str,
     args: &[OsString],
@@ -2012,6 +2086,7 @@ fn wsl_engine_spec(
     wsl::engine_spec(
         &selected.distro,
         work,
+        scratch,
         env,
         &format!("{}/{program}", selected.bin),
         args,
@@ -2023,6 +2098,7 @@ fn wsl_engine_spec(
 fn wsl_engine_spec(
     _selected: &wsl::WslInstallation,
     _work: &Path,
+    _scratch: &Path,
     _env: &[(String, String)],
     _program: &str,
     _args: &[OsString],
@@ -2128,16 +2204,24 @@ fn base_environment(bin: &Path, state: &Path, distribution: &str) -> Vec<(String
     }
     env
 }
-fn engine_arguments(_engine: &str, main: &str) -> Vec<OsString> {
+/// The engine's command line. \`out\` is the output folder of a build; the
+/// installation probe compiles in its own scratch folder and passes None.
+fn engine_arguments(_engine: &str, out: Option<&str>, main: &str) -> Vec<OsString> {
     // Shell escape stays off: a document is not allowed to run arbitrary
     // commands. Package installation is left to the distribution, so MiKTeX's
-    // installer is not disabled.
-    vec![
+    // installer is not disabled. \`-recorder\` lists every file the engine
+    // opened, which is what the build depends on.
+    let mut args: Vec<OsString> = vec![
+        "-recorder".into(),
         "-no-shell-escape".into(),
         "-file-line-error".into(),
         "-interaction=nonstopmode".into(),
-        main.into(),
-    ]
+    ];
+    if let Some(out) = out {
+        args.push(format!("-output-directory={out}").into());
+    }
+    args.push(main.into());
+    args
 }
 
 fn read_log(work: &Path, stem: &str) -> String {
@@ -2203,208 +2287,91 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_staged_path_cannot_escape_the_job_directory() {
-        for bad in [
-            "../outside.tex",
-            "/etc/passwd",
-            "C:/Windows/system.ini",
-            "a/../../b.tex",
-            "a//b.tex",
-            "a/./b.tex",
-            "a\\..\\b.tex",
-            "",
-        ] {
-            assert!(safe_relative(bad).is_err(), "{bad} must be refused");
+    fn a_request_without_a_folder_is_written_privately() {
+        let base = temp_case("materialize");
+        let files = [NativeFile {
+            path: "chapters/one.tex".into(),
+            data: STANDARD.encode(b"one"),
+        }];
+        let root = materialize(&base.join("source"), &files).unwrap();
+        assert_eq!(
+            std::fs::read(root.join("chapters/one.tex")).unwrap(),
+            b"one"
+        );
+        let escaping = [NativeFile {
+            path: "../outside.tex".into(),
+            data: STANDARD.encode(b"x"),
+        }];
+        assert!(materialize(&base.join("other"), &escaping).is_err());
+        assert!(!base.join("outside.tex").exists());
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    /// A request the way the frontend sends one: the folder, and the editor's
+    /// state of the files the snapshot carries.
+    fn native_request(
+        root: &Path,
+        main: &str,
+        files: &[(&str, &[u8])],
+        texmf: Option<crate::latex_texmf::TexmfSnapshot>,
+    ) -> NativeCompileRequest {
+        NativeCompileRequest {
+            job: "test".into(),
+            main_file: main.into(),
+            files: files
+                .iter()
+                .map(|(path, data)| NativeFile {
+                    path: (*path).into(),
+                    data: STANDARD.encode(data),
+                })
+                .collect(),
+            root: Some(root.to_string_lossy().into_owned()),
+            texmf,
+            clean: false,
         }
-        assert_eq!(
-            safe_relative("chapters/ünïcode.tex").unwrap(),
-            "chapters/ünïcode.tex"
-        );
-        assert_eq!(safe_relative("figures/a b.png").unwrap(), "figures/a b.png");
     }
 
-    #[test]
-    fn stage_stages_the_manifest_but_keeps_eager_bytes() {
-        let base =
-            std::env::temp_dir().join(format!("mdraft-native-manifest-{}", std::process::id()));
-        let root = base.join("project");
-        let workspace = base.join("job");
-        let work = workspace.join("project");
-        std::fs::create_dir_all(root.join("figures")).unwrap();
-        std::fs::write(root.join("main.tex"), b"disk main").unwrap();
-        std::fs::write(root.join("extra.tex"), b"manifest source").unwrap();
-        std::fs::write(root.join("figures/a.bin"), b"figure").unwrap();
-        let request = NativeCompileRequest {
-            job: "manifest".into(),
-            main_file: "main.tex".into(),
-            files: vec![NativeFile {
-                path: "main.tex".into(),
-                data: STANDARD.encode(b"open buffer"),
-            }],
-            root: Some(root.to_string_lossy().into_owned()),
-            manifest: vec![
-                "main.tex".into(),
-                "extra.tex".into(),
-                "figures/a.bin".into(),
-            ],
-            texmf: None,
-            clean: false,
-        };
-        let mut state = WorkspaceState::new(&root, "main.tex", "lualatex");
-        let staged = stage(&workspace, &request, &mut state).unwrap();
-        assert_eq!(
-            std::fs::read(work.join("main.tex")).unwrap(),
-            b"open buffer"
-        );
-        assert_eq!(
-            std::fs::read(work.join("extra.tex")).unwrap(),
-            b"manifest source"
-        );
-        assert_eq!(
-            std::fs::read(work.join("figures/a.bin")).unwrap(),
-            b"figure"
-        );
-        assert!(staged.sources.contains_key("extra.tex"));
-        let _ = std::fs::remove_dir_all(base);
+    /// What `compile` runs once it has chosen the workspace.
+    fn run_build(
+        target: &Target,
+        engine: &str,
+        workspace: &Path,
+        request: &NativeCompileRequest,
+    ) -> Result<NativeCompileResult, String> {
+        let folder = std::fs::canonicalize(request.root.as_deref().unwrap()).unwrap();
+        let identity = target.engine_identity(engine);
+        std::fs::create_dir_all(workspace).unwrap();
+        build(Build {
+            target,
+            engine,
+            identity: &identity,
+            workspace,
+            folder: Some(&folder),
+            request,
+            cancel: &AtomicBool::new(false),
+            progress: &|_, _| {},
+        })
     }
 
-    #[test]
-    fn stage_copies_project_files_instead_of_linking_them() {
-        let base = std::env::temp_dir().join(format!("mdraft-native-copy-{}", std::process::id()));
-        let root = base.join("project");
-        let workspace = base.join("job");
-        std::fs::create_dir_all(&root).unwrap();
-        for (name, bytes) in [
-            ("main.tex", b"main".as_slice()),
-            ("main.pdf", b"project pdf".as_slice()),
-            ("main.bbl", b"project bbl".as_slice()),
-            ("main.aux", b"project aux".as_slice()),
-        ] {
-            std::fs::write(root.join(name), bytes).unwrap();
+    /// Every file below a folder with its bytes.
+    fn folder_state(dir: &Path) -> BTreeMap<String, Vec<u8>> {
+        let mut found = BTreeMap::new();
+        let mut pending = vec![dir.to_path_buf()];
+        while let Some(next) = pending.pop() {
+            for entry in std::fs::read_dir(&next).unwrap().flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else {
+                    let relative = path.strip_prefix(dir).unwrap();
+                    found.insert(
+                        relative.to_string_lossy().replace('\\', "/"),
+                        std::fs::read(&path).unwrap(),
+                    );
+                }
+            }
         }
-        let request = NativeCompileRequest {
-            job: "copy".into(),
-            main_file: "main.tex".into(),
-            files: vec![NativeFile {
-                path: "main.tex".into(),
-                data: STANDARD.encode(b"open buffer"),
-            }],
-            root: Some(root.to_string_lossy().into_owned()),
-            manifest: vec![
-                "main.tex".into(),
-                "main.pdf".into(),
-                "main.bbl".into(),
-                "main.aux".into(),
-            ],
-            texmf: None,
-            clean: false,
-        };
-        let mut state = WorkspaceState::new(&root, "main.tex", "lualatex");
-        stage(&workspace, &request, &mut state).unwrap();
-        let work = workspace.join("project");
-        // The engine writes generated names in its own folder. A hard link
-        // would write through to the reader's project; a copy must not.
-        std::fs::write(work.join("main.pdf"), b"engine pdf").unwrap();
-        std::fs::write(work.join("main.bbl"), b"engine bbl").unwrap();
-        std::fs::write(work.join("main.aux"), b"engine aux").unwrap();
-        assert_eq!(
-            std::fs::read(root.join("main.pdf")).unwrap(),
-            b"project pdf"
-        );
-        assert_eq!(
-            std::fs::read(root.join("main.bbl")).unwrap(),
-            b"project bbl"
-        );
-        assert_eq!(
-            std::fs::read(root.join("main.aux")).unwrap(),
-            b"project aux"
-        );
-        assert_eq!(std::fs::read(work.join("main.pdf")).unwrap(), b"engine pdf");
-        let _ = std::fs::remove_dir_all(base);
-    }
-
-    #[test]
-    fn stage_reuses_unchanged_files_and_removes_deleted_ones() {
-        let base = std::env::temp_dir().join(format!("mdraft-native-sync-{}", std::process::id()));
-        let root = base.join("project");
-        let workspace = base.join("job");
-        std::fs::create_dir_all(root.join("figures")).unwrap();
-        std::fs::write(root.join("main.tex"), b"main").unwrap();
-        std::fs::write(root.join("extra.tex"), b"one").unwrap();
-        std::fs::write(root.join("figures/a.bin"), b"a").unwrap();
-        let request = |manifest: Vec<String>| NativeCompileRequest {
-            job: "sync".into(),
-            main_file: "main.tex".into(),
-            files: vec![NativeFile {
-                path: "main.tex".into(),
-                data: STANDARD.encode(b"main"),
-            }],
-            root: Some(root.to_string_lossy().into_owned()),
-            manifest,
-            texmf: None,
-            clean: false,
-        };
-        let mut state = WorkspaceState::new(&root, "main.tex", "lualatex");
-        stage(
-            &workspace,
-            &request(vec![
-                "main.tex".into(),
-                "extra.tex".into(),
-                "figures/a.bin".into(),
-            ]),
-            &mut state,
-        )
-        .unwrap();
-        let work = workspace.join("project");
-        assert_eq!(std::fs::read(work.join("extra.tex")).unwrap(), b"one");
-
-        std::fs::write(root.join("extra.tex"), b"two").unwrap();
-        std::fs::write(root.join("new.tex"), b"new").unwrap();
-        std::fs::remove_file(root.join("figures/a.bin")).unwrap();
-        stage(
-            &workspace,
-            &request(vec![
-                "main.tex".into(),
-                "extra.tex".into(),
-                "new.tex".into(),
-            ]),
-            &mut state,
-        )
-        .unwrap();
-        assert_eq!(std::fs::read(work.join("extra.tex")).unwrap(), b"two");
-        assert_eq!(std::fs::read(work.join("new.tex")).unwrap(), b"new");
-        assert!(!work.join("figures/a.bin").exists());
-        assert_eq!(std::fs::read(work.join("main.tex")).unwrap(), b"main");
-        let _ = std::fs::remove_dir_all(base);
-    }
-    #[test]
-    fn a_recent_stamp_cannot_prove_a_file_unchanged() {
-        let path = std::env::temp_dir().join(format!("mdraft-racy-{}", std::process::id()));
-        std::fs::write(&path, b"one").unwrap();
-        let now = std::time::SystemTime::now();
-        // Written just now: a same-size rewrite in this tick would keep the stamp.
-        assert_eq!(settled_stamp(&std::fs::metadata(&path).unwrap(), now), 0);
-        let old = now - Duration::from_secs(60);
-        std::fs::File::options()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
-        let metadata = std::fs::metadata(&path).unwrap();
-        assert_ne!(settled_stamp(&metadata, now), 0);
-        assert_eq!(settled_stamp(&metadata, now), file_stamp(&metadata));
-        // A stamp ahead of the staging clock is not trusted either.
-        assert_eq!(settled_stamp(&metadata, old - Duration::from_secs(60)), 0);
-        let _ = std::fs::remove_file(path);
-    }
-    #[test]
-    fn an_executable_project_file_is_refused() {
-        assert!(is_executable("tool.exe"));
-        assert!(is_executable("obj/Debug/helper.DLL"));
-        assert!(is_executable("run.cmd"));
-        assert!(!is_executable("main.tex"));
-        assert!(!is_executable("data.json"));
+        found
     }
 
     #[test]
@@ -2477,8 +2444,9 @@ mod tests {
         let outcome = runner::run(
             &runner::RunSpec {
                 program: engine_path(&bin, "lualatex"),
-                args: engine_arguments("lualatex", "main.tex"),
+                args: engine_arguments("lualatex", None, "main.tex"),
                 cwd: job.clone(),
+                scratch: job.clone(),
                 env,
                 timeout: Duration::from_secs(120),
             },
@@ -2512,75 +2480,131 @@ mod tests {
         let _ = std::fs::remove_dir_all(job);
     }
 
-    #[cfg(windows)]
-    fn run_manifest_staging(target: &Target, base: &Path) {
-        let project = base.join("project");
-        let workspace = base.join("job");
-        let work = workspace.join("project");
-        std::fs::create_dir_all(project.join("figures")).unwrap();
+    /// The in-place build against a real distribution. The folder's name has a
+    /// space, a comma, braces and a non-ASCII letter; the main file is named
+    /// like a reader's; one chapter has unsaved changes, another is
+    /// `\include`d from a subfolder; a figure is named by a macro, so the
+    /// snapshot never saw it; a draft that does not compile sits beside it;
+    /// and there is a bibliography. The folder must not change by one byte.
+    fn run_in_place(target: &Target, base: &Path) {
+        let root = base.join("Thesis, {v2} \u{fc}");
+        std::fs::create_dir_all(root.join("chapters")).unwrap();
+        std::fs::create_dir_all(root.join("figures")).unwrap();
+        let main_name = "LaTeX Reference2.tex";
+        let main: &[u8] = b"\\documentclass{article}\n\\usepackage{graphicx}\n\\newcommand{\\fig}{figures/dot}\n\\begin{document}\n\\input{chapters/one}\n\\include{chapters/two}\n\\includegraphics[width=1cm]{\\fig}\n\\cite{key}\n\\bibliographystyle{plain}\n\\bibliography{refs}\n\\end{document}\n";
+        let two: &[u8] = b"\\typeout{RESULT-TWO: saved}Two.\n";
+        // Braced, so the style does not change its case.
+        let bib: &[u8] = b"@misc{key, title={{RESULTBIB}}}\n";
+        let unsaved: &[u8] = b"\\typeout{RESULT-ONE: unsaved}One, edited.\n";
+        std::fs::write(root.join(main_name), main).unwrap();
         std::fs::write(
-            project.join("main.tex"),
-            b"\\documentclass{article}\n\\usepackage{graphicx}\n\\newcommand{\\fig}{figures/dot}\n\\begin{document}\n\\includegraphics[width=1cm]{\\fig}\nManifest staging probe.\n\\end{document}\n",
+            root.join("chapters/one.tex"),
+            b"\\typeout{RESULT-ONE: saved}One.\n",
         )
         .unwrap();
-        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../samples/latex-on-demand/figures/dot.png");
-        std::fs::copy(source, project.join("figures/dot.png")).unwrap();
-        let main = std::fs::read(project.join("main.tex")).unwrap();
-        let request = NativeCompileRequest {
-            job: "manifest-real".into(),
-            main_file: "main.tex".into(),
-            files: vec![NativeFile {
-                path: "main.tex".into(),
-                data: STANDARD.encode(main),
-            }],
-            root: Some(project.to_string_lossy().into_owned()),
-            manifest: vec!["main.tex".into(), "figures/dot.png".into()],
-            texmf: None,
-            clean: false,
-        };
-        let mut state = WorkspaceState::new(&project, "main.tex", "lualatex");
-        let staged = stage(&workspace, &request, &mut state).unwrap();
-        assert!(
-            work.join("figures/dot.png").is_file(),
-            "the manifest image is staged"
-        );
-        for engine in ["lualatex", "pdflatex", "xelatex"] {
+        std::fs::write(root.join("chapters/two.tex"), two).unwrap();
+        std::fs::write(root.join("refs.bib"), bib).unwrap();
+        std::fs::write(root.join("draft.tex"), b"\\undefined\n").unwrap();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../samples/latex-on-demand/figures/dot.png"),
+            root.join("figures/dot.png"),
+        )
+        .unwrap();
+        let before = folder_state(&root);
+        let carried: Vec<(&str, &[u8])> = vec![
+            (main_name, main),
+            ("chapters/one.tex", unsaved),
+            ("chapters/two.tex", two),
+            ("refs.bib", bib),
+        ];
+        let request = native_request(&root, main_name, &carried, None);
+        let mut ran = None;
+        for engine in ["pdflatex", "lualatex", "xelatex"] {
             if !target.has_engine(engine) {
                 eprintln!("{engine}: not installed (not run)");
                 continue;
             }
-            let env = target.environment(&workspace, &work, engine, 0).unwrap();
-            let outcome = runner::run(
-                &target
-                    .spec(
-                        engine,
-                        engine_arguments(engine, "main.tex"),
-                        &work,
-                        &env,
-                        Duration::from_secs(600),
-                    )
-                    .unwrap(),
-                &AtomicBool::new(false),
-            )
-            .unwrap();
-            assert_eq!(
-                outcome.status, 0,
-                "{engine} failed with the staged manifest: {}",
-                outcome.console
+            let workspace = base.join(format!("workspace-{engine}"));
+            let result = run_build(target, engine, &workspace, &request).unwrap();
+            let tail = &result.log[result.log.len().saturating_sub(3000)..];
+            assert!(result.success, "{engine}: {:?}\n{tail}", result.error);
+            assert!(
+                result.log.contains("RESULT-ONE: unsaved")
+                    && !result.log.contains("RESULT-ONE: saved"),
+                "{engine}: the unsaved chapter is compiled, not the saved one\n{tail}"
             );
-            let pdf = find_output(&work, "main", "pdf").expect("a PDF from the staged manifest");
-            assert!(pdf.starts_with(b"%PDF-"), "{engine}: not a PDF");
-            eprintln!("{engine}: manifest staging verified");
+            assert!(result.log.contains("RESULT-TWO: saved"), "{engine}\n{tail}");
+            for name in [
+                main_name,
+                "chapters/one.tex",
+                "chapters/two.tex",
+                "figures/dot.png",
+            ] {
+                assert!(
+                    result.inputs.iter().any(|input| input == name),
+                    "{engine}: {name} is an input of the build: {:?}",
+                    result.inputs
+                );
+            }
+            assert!(
+                !result.inputs.iter().any(|input| input == "draft.tex"),
+                "{engine}: a file the build did not read is not its input"
+            );
+            assert!(
+                !result
+                    .diagnostics
+                    .iter()
+                    .any(|entry| entry.code == "unsaved-not-compiled"),
+                "{engine}: {:?}",
+                result.diagnostics
+            );
+            if target.has_tool("bibtex") {
+                let bbl = std::fs::read_to_string(workspace.join("out/LaTeX Reference2.bbl"))
+                    .unwrap_or_default();
+                assert!(
+                    bbl.contains("RESULTBIB"),
+                    "{engine}: BibTeX ran beside the outputs\n{bbl}\n{tail}\n{:?}",
+                    folder_state(&workspace.join("out"))
+                        .keys()
+                        .collect::<Vec<_>>()
+                );
+                assert!(
+                    result.inputs.iter().any(|input| input == "refs.bib"),
+                    "{engine}: {:?}",
+                    result.inputs
+                );
+            }
+            assert_eq!(
+                folder_state(&root),
+                before,
+                "{engine}: nothing is written into the folder"
+            );
+            eprintln!(
+                "{engine}: in-place build verified ({} passes)",
+                result.passes
+            );
+            ran = Some((engine, workspace));
         }
+        // Saved: the chapter is read from the folder and the overlay empties.
+        let (engine, workspace) = ran.expect("at least one engine ran");
+        std::fs::write(root.join("chapters/one.tex"), unsaved).unwrap();
+        let saved = folder_state(&root);
+        let result = run_build(target, engine, &workspace, &request).unwrap();
+        assert!(result.success, "{engine}: {:?}", result.error);
+        assert!(result.log.contains("RESULT-ONE: unsaved"));
+        assert!(
+            folder_state(&workspace.join("overlay")).is_empty(),
+            "a saved buffer is not overlaid"
+        );
+        assert_eq!(folder_state(&root), saved);
         let _ = std::fs::remove_dir_all(base);
-        let _ = staged;
     }
 
     #[cfg(windows)]
     #[test]
     #[ignore = "requires MDRAFT_TEST_TEX_BIN to name a real Windows TeX binary directory"]
-    fn a_real_windows_distribution_stages_the_manifest_for_every_engine() {
+    fn a_real_windows_distribution_compiles_in_place() {
         let Ok(bin) = std::env::var("MDRAFT_TEST_TEX_BIN") else {
             eprintln!("MDRAFT_TEST_TEX_BIN is not set");
             return;
@@ -2592,30 +2616,47 @@ mod tests {
         };
         let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target/test-tmp")
-            .join(format!("manifest-real-{}", std::process::id()));
+            .join(format!("in-place-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
-        run_manifest_staging(&target, &base);
+        run_in_place(&target, &base);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "requires TeX Live on the host"]
+    fn a_real_distribution_compiles_in_place() {
+        let bin = PathBuf::from(
+            std::env::var("MDRAFT_TEST_TEX_BIN").unwrap_or_else(|_| "/usr/bin".into()),
+        );
+        let target = Target::Path {
+            name: distribution_name(&bin.display().to_string()),
+            bin,
+        };
+        let base = std::env::temp_dir().join(format!("mdraft-in-place-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(&base).unwrap();
+        run_in_place(&target, &base);
     }
 
     #[cfg(windows)]
     #[test]
     #[ignore = "requires MDRAFT_TEST_WSL_DISTRO (and optionally MDRAFT_TEST_WSL_BIN)"]
-    fn a_wsl_distribution_stages_the_manifest_for_every_engine() {
+    fn a_wsl_distribution_compiles_in_place() {
         let distro = std::env::var("MDRAFT_TEST_WSL_DISTRO").unwrap();
         let bin = std::env::var("MDRAFT_TEST_WSL_BIN").unwrap_or_else(|_| "/usr/bin".into());
         let target = Target::Wsl(wsl::WslInstallation {
             distro,
             bin,
-            engines: vec!["lualatex".into(), "pdflatex".into()],
-            tools: Vec::new(),
+            engines: vec!["lualatex".into(), "pdflatex".into(), "xelatex".into()],
+            tools: vec!["bibtex".into()],
         });
         let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target/test-tmp")
-            .join(format!("manifest-wsl-{}", std::process::id()));
+            .join(format!("in-place-wsl-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(&base).unwrap();
-        run_manifest_staging(&target, &base);
+        run_in_place(&target, &base);
     }
 
     #[cfg(windows)]
@@ -2652,8 +2693,9 @@ mod tests {
         let outcome = runner::run(
             &runner::RunSpec {
                 program: engine_path(&bin, "lualatex"),
-                args: engine_arguments("lualatex", "main.tex"),
+                args: engine_arguments("lualatex", None, "main.tex"),
                 cwd: job.clone(),
+                scratch: job.clone(),
                 env,
                 timeout: Duration::from_secs(300),
             },
@@ -2691,6 +2733,7 @@ mod tests {
                 program: std::path::PathBuf::from("/bin/sleep"),
                 args: vec![OsString::from("30")],
                 cwd: job.clone(),
+                scratch: job.clone(),
                 env: vec![("PATH".into(), "/usr/bin:/bin".into())],
                 timeout: Duration::from_secs(20),
             },
@@ -2704,7 +2747,7 @@ mod tests {
 
     #[test]
     fn engine_arguments_keep_shell_escape_off_and_allow_packages() {
-        let args: Vec<String> = engine_arguments("lualatex", "main.tex")
+        let args: Vec<String> = engine_arguments("lualatex", None, "main.tex")
             .iter()
             .map(|arg| arg.to_string_lossy().into_owned())
             .collect();
@@ -2736,45 +2779,97 @@ mod tests {
     }
 
     #[test]
-    fn library_search_paths_follow_the_distribution_family() {
-        assert!(library_environment(Family::Kpathsea, "lualatex", 0).is_empty());
-        assert!(library_environment(Family::Miktex, "lualatex", 0).is_empty());
-        let kpathsea = library_environment(Family::Kpathsea, "pdflatex", 2);
+    fn search_paths_put_the_overlay_first_and_the_libraries_after_the_folder() {
+        // Nothing overlaid and no library: the distribution's own paths, with
+        // the folder after the outputs for the bibliography tool.
+        let plain = search_environment(
+            Family::Kpathsea,
+            "pdflatex",
+            &build_paths(0, false, Some("C:/Thesis")),
+            ';',
+        );
+        assert_eq!(value(&plain, "TEXINPUTS"), None);
+        assert_eq!(value(&plain, "TEXMFHOME"), None);
+        assert_eq!(value(&plain, "BIBINPUTS"), Some(".;C:/Thesis;"));
+        assert_eq!(value(&plain, "TEXMFOUTPUT"), Some("C:/ws/out"));
+
+        let kpathsea = search_environment(
+            Family::Kpathsea,
+            "pdflatex",
+            &build_paths(2, true, None),
+            ':',
+        );
         assert_eq!(
             value(&kpathsea, "TEXMFHOME"),
-            Some("{../texmf/0,../texmf/1}")
+            Some("{C:/ws/texmf/0,C:/ws/texmf/1}")
         );
-        let miktex = library_environment(Family::Miktex, "lualatex", 2);
+        // The empty element after the overlay is the distribution's own,
+        // format-aware path, which starts with `.`.
+        assert_eq!(value(&kpathsea, "TEXINPUTS"), Some("C:/ws/overlay:"));
+        assert_eq!(value(&kpathsea, "BSTINPUTS"), Some(".:"));
+
+        let miktex = search_environment(
+            Family::Miktex,
+            "lualatex",
+            &build_paths(2, true, Some("C:/Thesis")),
+            ';',
+        );
         let tex = value(&miktex, "TEXINPUTS").unwrap();
-        // Project first (MiKTeX searches these before the working directory),
-        // then roots in order with format-specific directories first.
+        // The overlay, then the folder (MiKTeX searches these variables
+        // before the working directory), then the roots in order with the
+        // format-specific directories first.
         assert!(
-            tex.starts_with(".;../texmf/0/tex/lualatex//;../texmf/0/tex/latex//;"),
+            tex.starts_with(
+                "C:/ws/overlay;.;C:/ws/texmf/0/tex/lualatex//;C:/ws/texmf/0/tex/latex//;"
+            ),
             "{tex}"
         );
-        assert!(tex.find("../texmf/0/").unwrap() < tex.find("../texmf/1/").unwrap());
+        assert!(tex.find("texmf/0/").unwrap() < tex.find("texmf/1/").unwrap());
         assert!(!tex.contains("tex/xelatex"));
         assert!(
             value(&miktex, "BSTINPUTS")
                 .unwrap()
-                .starts_with(".;../texmf/0/bibtex/bst//;")
+                .starts_with(".;C:/Thesis;C:/ws/texmf/0/bibtex/bst//;")
         );
         assert!(
             value(&miktex, "LUAINPUTS")
                 .unwrap()
-                .contains("../texmf/1/scripts//;")
+                .contains("C:/ws/texmf/1/scripts//;")
         );
         assert!(value(&miktex, "OPENTYPEFONTS").is_some());
-        let xelatex = library_environment(Family::Miktex, "xelatex", 1);
+        let xelatex =
+            search_environment(Family::Miktex, "xelatex", &build_paths(1, false, None), ';');
         assert!(
             value(&xelatex, "TEXINPUTS")
                 .unwrap()
-                .starts_with(".;../texmf/0/tex/xelatex//;")
+                .starts_with(".;C:/ws/texmf/0/tex/xelatex//;")
         );
-        // Every entry is relative: a job path never enters a search expression.
-        for (_, value) in kpathsea.iter().chain(&miktex) {
-            assert!(!value.contains(':') || value.starts_with(".;"), "{value}");
-            assert!(!value.contains('\\'));
+        let none = search_environment(
+            Family::Miktex,
+            "pdflatex",
+            &build_paths(0, false, None),
+            ';',
+        );
+        assert_eq!(value(&none, "TEXINPUTS"), None);
+        assert_eq!(value(&none, "LUAINPUTS"), None);
+        assert_eq!(value(&none, "BIBINPUTS"), Some(".;"));
+    }
+
+    fn build_paths(libraries: usize, overlay: bool, root: Option<&str>) -> BuildPaths {
+        BuildPaths {
+            state: "C:/ws".into(),
+            out: "C:/ws/out".into(),
+            engine: inplace::EnginePaths {
+                root: "C:/Thesis".into(),
+                workspace: "C:/ws".into(),
+                overlay: "C:/ws/overlay".into(),
+                out: "C:/ws/out".into(),
+                windows: true,
+            },
+            overlay: overlay.then(|| "C:/ws/overlay".to_string()),
+            libraries: (0..libraries).map(|n| format!("C:/ws/texmf/{n}")).collect(),
+            output: Some("C:/ws/out".into()),
+            root: root.map(str::to_string),
         }
     }
 
@@ -2783,22 +2878,18 @@ mod tests {
         let env = wsl_environment(
             "/usr/local/texlive/2025/bin/x86_64-linux",
             "/mnt/c/jobs/a, b",
-            "lualatex",
-            1,
         );
         assert_eq!(
             value(&env, "PATH"),
             Some("/usr/local/texlive/2025/bin/x86_64-linux:/usr/bin:/bin")
         );
         assert_eq!(value(&env, "HOME"), Some("/mnt/c/jobs/a, b"));
-        assert_eq!(value(&env, "TEXMFHOME"), Some("{../texmf/0}"));
+        assert_eq!(value(&env, "TEXMFHOME"), Some("/mnt/c/jobs/a, b/home"));
         assert!(
             value(&env, "TEXMFVAR")
                 .unwrap()
                 .starts_with("/mnt/c/jobs/a, b/")
         );
-        let without = wsl_environment("/usr/bin", "/mnt/c/jobs/x", "pdflatex", 0);
-        assert_eq!(value(&without, "TEXMFHOME"), Some("/mnt/c/jobs/x/home"));
     }
 
     fn library_snapshot(
@@ -2946,47 +3037,32 @@ mod tests {
             bin: bin.clone(),
             name,
         };
-        // A comma, a space and a non-ASCII letter in the job path: search paths
-        // are relative, so none of it reaches a search-path expression.
-        let job = std::env::temp_dir().join(format!("mdraft-texmf, real ü-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&job);
+        // A comma, a space and a non-ASCII letter in the document's folder,
+        // where TeX runs: no search path names it.
+        let base = std::env::temp_dir().join(format!("mdraft-texmf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let job = base.join("real, \u{fc}");
         let (snapshot, main) = library_fixture(&job);
-        let mut state = WorkspaceState::new(&job, "main.tex", "lualatex");
-        let roots = stage_texmf(&job.join("texmf"), Some(&snapshot), &mut state).unwrap();
-        let work = job.join("project");
+        let root = job.join("project");
+        let main_bytes = std::fs::read(root.join(main)).unwrap();
+        let request = native_request(&root, main, &[(main, &main_bytes)], Some(snapshot));
         for engine in ["lualatex", "pdflatex", "xelatex"] {
             if !target.has_engine(engine) {
                 eprintln!("{engine}: not installed (not run)");
                 continue;
             }
-            let env = target.environment(&job, &work, engine, roots).unwrap();
-            let run = |program: &str, args: Vec<OsString>| {
-                runner::run(
-                    &target
-                        .spec(program, args, &work, &env, Duration::from_secs(600))
-                        .unwrap(),
-                    &AtomicBool::new(false),
-                )
-                .unwrap()
-            };
-            run(engine, engine_arguments(engine, main));
-            run("bibtex", vec!["main".into()]);
-            let outcome = run(engine, engine_arguments(engine, main));
-            let log = read_log(&work, "main");
-            assert_library_markers(&log, engine);
-            let bbl = std::fs::read_to_string(work.join("main.bbl")).unwrap_or_default();
+            let workspace = base.join(format!("workspace-{engine}"));
+            let result = run_build(&target, engine, &workspace, &request).unwrap();
+            assert_library_markers(&result.log, engine);
+            let bbl = std::fs::read_to_string(workspace.join("out/main.bbl")).unwrap_or_default();
             assert!(
                 bbl.contains("RESULTBIB"),
                 "{engine}: the private .bst/.bib reached BibTeX"
             );
-            assert!(
-                find_output(&work, "main", "pdf").is_some_and(|pdf| pdf.starts_with(b"%PDF-")),
-                "{engine}: {}",
-                outcome.console
-            );
+            assert!(result.success, "{engine}: {:?}", result.error);
             eprintln!("{engine}: library resolution verified");
         }
-        let _ = std::fs::remove_dir_all(job);
+        let _ = std::fs::remove_dir_all(base);
     }
 
     #[cfg(windows)]
@@ -3002,38 +3078,32 @@ mod tests {
             tools: vec!["bibtex".into()],
         };
         let target = Target::Wsl(selected);
-        let job = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("target/test-tmp")
-            .join(format!("wsl, job ü-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&job);
+            .join(format!("wsl-texmf-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let job = base.join("wsl, job \u{fc}");
         let (snapshot, main) = library_fixture(&job);
-        let mut state = WorkspaceState::new(&job, "main.tex", "lualatex");
-        let roots = stage_texmf(&job.join("texmf"), Some(&snapshot), &mut state).unwrap();
-        let work = job.join("project");
+        let root = job.join("project");
+        let main_bytes = std::fs::read(root.join(main)).unwrap();
+        let request = native_request(&root, main, &[(main, &main_bytes)], Some(snapshot));
         for engine in ["lualatex", "pdflatex"] {
-            let env = target.environment(&job, &work, engine, roots).unwrap();
-            let run = |program: &str, args: Vec<OsString>| {
-                runner::run(
-                    &target
-                        .spec(program, args, &work, &env, Duration::from_secs(600))
-                        .unwrap(),
-                    &AtomicBool::new(false),
-                )
-                .unwrap()
-            };
-            run(engine, engine_arguments(engine, main));
-            run("bibtex", vec!["main".into()]);
-            run(engine, engine_arguments(engine, main));
-            assert_library_markers(&read_log(&work, "main"), engine);
-            let bbl = std::fs::read_to_string(work.join("main.bbl")).unwrap_or_default();
+            let workspace = base.join(format!("workspace-{engine}"));
+            let result = run_build(&target, engine, &workspace, &request).unwrap();
+            assert_library_markers(&result.log, engine);
+            let bbl = std::fs::read_to_string(workspace.join("out/main.bbl")).unwrap_or_default();
             assert!(
                 bbl.contains("RESULTBIB"),
                 "{engine}: BibTeX through the launcher"
             );
         }
         // Cancel ends the Linux process tree, not only wsl.exe.
-        std::fs::write(work.join("spin.tex"), "\\def\\spin{\\spin}\\spin\n").unwrap();
-        let env = target.environment(&job, &work, "pdflatex", roots).unwrap();
+        std::fs::write(root.join("spin.tex"), "\\def\\spin{\\spin}\\spin\n").unwrap();
+        let workspace = base.join("workspace-spin");
+        std::fs::create_dir_all(workspace.join("out")).unwrap();
+        let folder = std::fs::canonicalize(&root).unwrap();
+        let paths = target.paths(&workspace, &folder, 0, false).unwrap();
+        let env = target.environment(&workspace, &paths, "pdflatex");
         let cancel = std::sync::Arc::new(AtomicBool::new(false));
         let signal = cancel.clone();
         let canceller = std::thread::spawn(move || {
@@ -3045,8 +3115,9 @@ mod tests {
             &target
                 .spec(
                     "pdflatex",
-                    engine_arguments("pdflatex", "spin.tex"),
-                    &work,
+                    engine_arguments("pdflatex", Some(&paths.out), "spin.tex"),
+                    &inplace::plain(&folder),
+                    &workspace.join("out"),
                     &env,
                     Duration::from_secs(600),
                 )
@@ -3060,7 +3131,7 @@ mod tests {
         let survivors = runner::run(
             &wsl::spec(
                 &distro,
-                &work,
+                &workspace,
                 vec!["/usr/bin/pgrep".into(), "-f".into(), "spin.tex".into()],
                 Duration::from_secs(60),
             )
@@ -3073,7 +3144,7 @@ mod tests {
             "an engine survived Cancel: {}",
             survivors.console
         );
-        let _ = std::fs::remove_dir_all(job);
+        let _ = std::fs::remove_dir_all(base);
     }
 
     fn temp_case(name: &str) -> PathBuf {
@@ -3175,14 +3246,49 @@ mod tests {
     }
 
     #[test]
-    fn the_bibliography_inputs_track_bib_content() {
-        let workspace = temp_case("bib-inputs");
-        std::fs::create_dir_all(workspace.join("project")).unwrap();
-        std::fs::write(workspace.join("project/refs.bib"), b"@book{a}").unwrap();
-        let first = bibliography_inputs(&workspace);
-        assert_eq!(first, bibliography_inputs(&workspace));
-        std::fs::write(workspace.join("project/refs.bib"), b"@book{b}").unwrap();
-        assert_ne!(first, bibliography_inputs(&workspace));
-        let _ = std::fs::remove_dir_all(workspace);
+    fn the_bibliography_digest_follows_declared_content_and_read_stamps() {
+        let base = temp_case("bib-digest");
+        let root = base.join("root");
+        std::fs::create_dir_all(root.join("data")).unwrap();
+        std::fs::write(root.join("main.tex"), b"main").unwrap();
+        std::fs::write(root.join("refs.bib"), b"@book{a}").unwrap();
+        std::fs::write(root.join("data/found.bib"), b"@book{f}").unwrap();
+        let root = std::fs::canonicalize(&root).unwrap();
+        let mut staged = BTreeMap::new();
+        let prepare = |bib: &[u8], staged: &mut BTreeMap<String, String>| {
+            inplace::prepare(
+                &root,
+                &base.join("overlay"),
+                &base.join("out"),
+                "main.tex",
+                &[
+                    NativeFile {
+                        path: "main.tex".into(),
+                        data: STANDARD.encode(b"main"),
+                    },
+                    NativeFile {
+                        path: "refs.bib".into(),
+                        data: STANDARD.encode(bib),
+                    },
+                ],
+                staged,
+            )
+            .unwrap()
+        };
+        let reads = vec!["refs.bib".to_string(), "data/found.bib".to_string()];
+        let first = bibliography_digest(&root, &prepare(b"@book{a}", &mut staged), &reads);
+        assert_eq!(
+            first,
+            bibliography_digest(&root, &prepare(b"@book{a}", &mut staged), &reads)
+        );
+        let edited = bibliography_digest(&root, &prepare(b"@book{b}", &mut staged), &reads);
+        assert_ne!(first, edited, "a declared .bib is compared by content");
+        std::fs::write(root.join("data/found.bib"), b"@book{changed}").unwrap();
+        assert_ne!(
+            edited,
+            bibliography_digest(&root, &prepare(b"@book{b}", &mut staged), &reads),
+            "a .bib the tool found in the folder is compared by stamp"
+        );
+        let _ = std::fs::remove_dir_all(base);
     }
 }

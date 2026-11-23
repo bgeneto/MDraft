@@ -4,8 +4,8 @@
 //! confine its network or filesystem access. It controls what MDraft owns: the
 //! working directory, the environment, stdin/stdout/stderr, a hard timeout, and
 //! cancellation of the whole tree (a job object on Windows, a process group on
-//! Unix). The project snapshot is staged into a private directory first, so
-//! generated files never touch the reader's project.
+//! Unix). The engine may run in the reader's folder; what the runner itself
+//! writes (the console output) goes to the spec's private scratch folder.
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -27,6 +27,10 @@ pub struct RunSpec {
     pub program: PathBuf,
     pub args: Vec<std::ffi::OsString>,
     pub cwd: PathBuf,
+    /// A private folder for the child's console output and its empty input.
+    /// The working directory can be the reader's own folder, and nothing is
+    /// written there.
+    pub scratch: PathBuf,
     /// The complete environment the child receives.
     pub env: Vec<(String, String)>,
     pub timeout: Duration,

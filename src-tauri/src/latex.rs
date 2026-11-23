@@ -9,13 +9,14 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fs,
     path::{Path, PathBuf},
     sync::{
-        Mutex,
+        LazyLock, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    time::{Duration, SystemTime},
 };
 use tauri::{
     AppHandle, Manager, UriSchemeResponder,
@@ -25,12 +26,28 @@ use tauri::{
 use crate::text_encoding;
 
 pub const SCHEME: &str = "mdraft-tex";
+/// What one snapshot carries to the compiler up front: files up to `MAX_FILE`
+/// each, `MAX_FILES` of them and `MAX_PROJECT` bytes in all. A budget, not a
+/// limit: a referenced file past it is read from the folder on demand.
 const MAX_FILE: usize = 32 * 1024 * 1024;
 const MAX_PROJECT: usize = 64 * 1024 * 1024;
 const MAX_FILES: usize = 256;
-const MANIFEST_MAX_DEPTH: usize = 12;
-const MANIFEST_MAX_NAMES: usize = 20_000;
-const MANIFEST_SKIPPED_DIRS: [&str; 5] = [".git", ".hg", ".svn", "node_modules", ".mdraft-texmf"];
+/// Names one folder listing carries. A folder with more is still listed and
+/// digested in full; only the frame's copy is cut, and marked incomplete so a
+/// lookup there asks the route instead of trusting the list.
+const LISTING_MAX_ENTRIES: usize = 10_000;
+/// Names whose current stamp one snapshot reports, for the frame's fetched
+/// files. A fetched file past the cap gets no stamp and is fetched again.
+const STAMP_MAX_NAMES: usize = 16_384;
+/// Files and folders one root's dependency record holds. Past either cap the
+/// record cannot prove a build current, so every snapshot starts a new one.
+const DEPENDENCY_MAX_FILES: usize = 16_384;
+const DEPENDENCY_MAX_DIRS: usize = 1_024;
+/// Roots whose records are kept; an evicted root rebuilds once.
+const DEPENDENCY_ROOTS: usize = 64;
+/// A modification this recent cannot rule out a later same-size edit in the
+/// same clock tick (two seconds on FAT); see `settled_stamp`.
+const RACY_STAMP_WINDOW: Duration = Duration::from_secs(3);
 static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 static CACHE_LOCK: Mutex<()> = Mutex::new(());
 /// One engine installation at a time; Pandoc and Typst have their own locks.
@@ -394,7 +411,7 @@ pub fn serve(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResp
                 .contains(value)
             })
             .map(str::to_owned);
-        let result = (|| -> Result<(Vec<u8>, &str), String> {
+        let result = (|| -> Result<crate::latex_texpresso::Reply, String> {
             if request.method() != tauri::http::Method::GET {
                 return Err("GET required".into());
             }
@@ -403,23 +420,27 @@ pub fn serve(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResp
                 return Err("Bundled TeX is not enabled.".into());
             }
             let path = request.uri().path();
+            if let Some(reply) = crate::latex_texpresso::serve_project_route(path) {
+                return Ok(reply);
+            }
             if let Some(answer) = crate::latex_texpresso::serve(&root, path) {
-                return answer;
+                return answer.map(crate::latex_texpresso::Reply::ok);
             }
             if let Some(answer) = crate::latex_phitex::serve(&root, path) {
-                return answer;
+                return answer.map(crate::latex_texpresso::Reply::ok);
             }
             Err("Unknown resource".into())
         })();
-        let (status, body, content_type) = match result {
-            Ok((body, kind)) => (200, body, kind),
-            Err(error) => (404, error.into_bytes(), "text/plain; charset=utf-8"),
-        };
+        let reply = result.unwrap_or_else(|error| crate::latex_texpresso::Reply::text(404, error));
+        let content_type = reply.kind;
         let mut response = Response::builder()
-            .status(status)
+            .status(reply.status)
             .header(header::CONTENT_TYPE, content_type)
             .header(header::CACHE_CONTROL, "no-store")
             .header(header::X_CONTENT_TYPE_OPTIONS, "nosniff");
+        if let Some(stamp) = &reply.stamp {
+            response = response.header("x-mdraft-stamp", stamp.as_str());
+        }
         if content_type.starts_with("text/html") {
             response = response.header(
                 header::CONTENT_SECURITY_POLICY,
@@ -427,11 +448,13 @@ pub fn serve(app: AppHandle, request: Request<Vec<u8>>, responder: UriSchemeResp
             );
         }
         if let Some(origin) = origin {
-            response = response.header(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin);
+            response = response
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin)
+                .header(header::ACCESS_CONTROL_EXPOSE_HEADERS, "x-mdraft-stamp");
         }
         responder.respond(
             response
-                .body(body)
+                .body(reply.body)
                 .unwrap_or_else(|_| Response::new(Vec::new())),
         );
     });
@@ -465,25 +488,25 @@ pub struct ProjectFile {
     encoding: Option<String>,
 }
 
-/// One name in the bounded project-tree manifest.
-#[derive(Debug, PartialEq, Eq, Serialize)]
+/// One project folder, listed without descending into it.
+///
+/// The frame answers "does the project have this name?" from these lists, so a
+/// package or font name TeX tries in the project first costs no request. Only
+/// the main file's folder and the folders a build actually looked in are ever
+/// listed: the project is never enumerated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ManifestFile {
+pub struct DirListing {
+    /// Relative to the main file's folder, `/`-separated; empty for that folder.
     path: String,
-    size: u64,
-    /// Milliseconds since the Unix epoch; 0 when the file system has no stamp.
-    modified: u64,
-}
-
-/// The project tree without its bytes: the frame resolves a name TeX opens
-/// against this table, then fetches that file from the mdraft-tex origin.
-#[derive(Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ProjectManifest {
-    /// Bumped when the shape changes; the frame refuses an unknown version.
-    version: u32,
-    files: Vec<ManifestFile>,
-    /// Changes when any name, size or stamp changes.
+    /// `[name, isFolder]` for each entry, sorted by name. Links are left out:
+    /// they are never read, so a lookup must not be told they exist.
+    entries: Vec<(String, bool)>,
+    /// False when the folder could not be listed in full: it is missing or
+    /// unreadable, or it holds more than `LISTING_MAX_ENTRIES` names.
+    complete: bool,
+    /// Changes whenever a name in the folder does, past the cap too, so a
+    /// reader of a partial listing can tell that the folder changed.
     digest: String,
 }
 
@@ -495,22 +518,26 @@ pub struct ProjectSnapshot {
     /// live session root and is revoked when the frame is disposed.
     project_token: String,
     files: Vec<ProjectFile>,
-    /// The bounded project tree: relative names, sizes and modification
-    /// stamps, never bytes. The frame uses it as a membership table for files
-    /// the predictor did not name, then fetches a hit on demand.
-    manifest: ProjectManifest,
-    /// Paths skipped because they are links (symbolic links or junctions) in
-    /// the reference walk or the manifest walk.
+    /// The main file's folder first, then every folder a build of this root
+    /// has looked in. Never the folders below them.
+    listings: Vec<DirListing>,
+    /// The current stamp of each name the caller asked about (the preview's
+    /// fetched files), or `missing`. A name past `STAMP_MAX_NAMES` is absent.
+    stamps: BTreeMap<String, String>,
+    /// Paths the reference walk skipped because they are links (symbolic
+    /// links or junctions).
     ///
     /// Reported instead of aborting the project: one odd entry must not make a
     /// document uncompilable, and the reader is told which file was left out so a
     /// later "File not found" is not a mystery.
     skipped: Vec<String>,
-    /// A generation key over the main file and the referenced set.
+    /// A generation key over the main file and the referenced set, the
+    /// dependency epoch of the root, and the library revision.
     ///
     /// Keying on the *set* rather than a revision counter means an edit that does
     /// not change which files are read (a typo fix) does not invalidate a finished
-    /// PDF, while adding an `\input` does. It also covers the library revision.
+    /// PDF, while adding an `\input` does. The epoch changes when a file or folder
+    /// an earlier build read from has changed since (see `DependencyRecord`).
     generation: String,
     /// Registered local libraries, captured separately from the project so a
     /// library file never becomes a chapter, a source-map candidate or a
@@ -941,10 +968,7 @@ fn is_link(metadata: &fs::Metadata) -> bool {
     metadata.file_type().is_symlink()
 }
 
-/// The stamp the manifest reports for one file. Milliseconds are enough to
-/// invalidate a changed file without exposing a platform-specific SystemTime
-/// shape to the frame.
-fn file_stamp(metadata: &fs::Metadata) -> u64 {
+fn modified_ms(metadata: &fs::Metadata) -> u64 {
     metadata
         .modified()
         .ok()
@@ -953,106 +977,59 @@ fn file_stamp(metadata: &fs::Metadata) -> u64 {
         .unwrap_or(0)
 }
 
-/// Walk the project tree once and return its bounded manifest.
-///
-/// The walk never follows a link and never reads a file: the frame gets names,
-/// sizes and stamps, then asks for the bytes of a name TeX actually opens. The
-/// skipped names are returned separately so the snapshot can report them with
-/// the reference walk's skips.
-fn project_manifest(root: &Path) -> Result<(ProjectManifest, Vec<String>), String> {
-    project_manifest_with(root, MANIFEST_MAX_DEPTH, MANIFEST_MAX_NAMES)
+/// A file's stamp: its size and modification time in milliseconds. Two reads
+/// with the same stamp are taken to have read the same bytes.
+pub(crate) fn file_stamp(metadata: &fs::Metadata) -> String {
+    format!("{}:{}", metadata.len(), modified_ms(metadata))
 }
 
-fn project_manifest_with(
-    root: &Path,
-    max_depth: usize,
-    max_names: usize,
-) -> Result<(ProjectManifest, Vec<String>), String> {
-    let root = &fs::canonicalize(root).map_err(|e| e.to_string())?;
-    let mut files: Vec<ManifestFile> = Vec::new();
-    let mut skipped: Vec<String> = Vec::new();
-    let mut pending = vec![(root.to_path_buf(), 0usize)];
+/// The stamp to *record* for bytes read at `now`.
+///
+/// A file modified within `RACY_STAMP_WINDOW` of the read cannot rule out a
+/// later same-size edit in the same clock tick, so its stamp is recorded as
+/// unsettled: it never equals a later stamp, which costs one more build rather
+/// than a stale PDF. Git treats "racily clean" index entries the same way. A
+/// modification time in the future (clock skew) is as unprovable as a recent one.
+pub(crate) fn settled_stamp(metadata: &fs::Metadata, now: SystemTime) -> String {
+    let stamp = file_stamp(metadata);
+    let settled = metadata
+        .modified()
+        .ok()
+        .and_then(|modified| now.duration_since(modified).ok())
+        .is_some_and(|age| age >= RACY_STAMP_WINDOW);
+    if settled {
+        stamp
+    } else {
+        format!("unsettled:{stamp}")
+    }
+}
 
-    while let Some((dir, depth)) = pending.pop() {
-        if depth > max_depth {
-            return Err(format!(
-                "The LaTeX project is nested deeper than {max_depth} directory levels. Move the project into a folder of its own."
-            ));
-        }
-        let entries = fs::read_dir(&dir).map_err(|error| {
-            format!(
-                "Cannot list {} for the project manifest: {error}",
-                dir.display()
-            )
-        })?;
-        // Directory enumeration order is not stable; the digest and the tests
-        // must not depend on it.
-        let mut entries: Vec<_> = entries.flatten().collect();
-        entries.sort_by_key(|entry| entry.file_name());
+/// Why one project name was not served.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    /// No file or folder has exactly this name: TeX looks elsewhere.
+    Missing,
+    /// The name exists but is not read: a link, a path that leaves the root,
+    /// or a read the system denied. The text names the file and the reason.
+    Refused(String),
+}
 
-        for entry in entries {
-            let path = entry.path();
-            let relative = relative_to(root, &path)?;
-            let name = entry.file_name();
-            if name
-                .to_str()
-                .is_some_and(|name| MANIFEST_SKIPPED_DIRS.contains(&name))
-            {
-                continue;
-            }
-            let metadata = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
-            if is_link(&metadata) {
-                skipped.push(relative);
-                continue;
-            }
-            if metadata.is_dir() {
-                pending.push((path, depth + 1));
-                continue;
-            }
-            if !metadata.is_file() {
-                continue; // a device or socket is not project content
-            }
-            if files.len() >= max_names {
-                return Err(format!(
-                    "The LaTeX project has more than {max_names} files in its project manifest. Move the project into a folder of its own."
-                ));
-            }
-            files.push(ManifestFile {
-                path: relative,
-                size: metadata.len(),
-                modified: file_stamp(&metadata),
-            });
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Refusal::Missing => formatter.write_str("not found"),
+            Refusal::Refused(reason) => formatter.write_str(reason),
         }
     }
-
-    files.sort_by(|left, right| left.path.cmp(&right.path));
-    skipped.sort();
-    skipped.dedup();
-    let mut key = String::new();
-    for file in &files {
-        key.push_str(&file.path);
-        key.push('\u{0}');
-        key.push_str(&file.size.to_string());
-        key.push('\u{0}');
-        key.push_str(&file.modified.to_string());
-        key.push('\n');
-    }
-    Ok((
-        ProjectManifest {
-            version: 1,
-            files,
-            digest: digest(key.as_bytes()),
-        },
-        skipped,
-    ))
 }
 
 /// The components of a project-relative path, or an error.
 ///
-/// This is the confinement gate shared by the on-demand route and native
-/// staging. It accepts the names the manifest may hold (Unicode, spaces) but no
-/// empty, dot, dot-dot, drive/alternate-stream or backslash component. The
-/// caller still checks links and canonicalizes the joined path.
+/// This is the confinement gate shared by the on-demand route, the folder
+/// listings and the dependency record. It accepts the names a folder may hold
+/// (Unicode, spaces) but no empty, dot, dot-dot, drive/alternate-stream or
+/// backslash component. The caller still checks links and canonicalizes the
+/// joined path.
 pub(crate) fn project_components(relative: &str) -> Result<Vec<&str>, String> {
     if relative.is_empty()
         || relative.len() > 4096
@@ -1072,33 +1049,363 @@ pub(crate) fn project_components(relative: &str) -> Result<Vec<&str>, String> {
     Ok(parts)
 }
 
-/// Resolve one project file without following a link or leaving the root.
+/// Resolve `relative` below the canonical `root` without following a link,
+/// leaving the root, or matching a differently spelled name.
 ///
-/// Returns the canonical path and its size. The route and native staging both
-/// call this: a new reader of project bytes must not re-implement the checks.
-/// Resolve one project file when the caller already canonicalized the root.
-pub(crate) fn project_file_in(root: &Path, relative: &str) -> Result<(PathBuf, u64), String> {
-    let parts = project_components(relative)?;
+/// The spelling must match exactly. A case-insensitive file system would
+/// otherwise answer TeX's `article.cls` with a project's `Article.cls` and
+/// shadow TeX Live's copy, and a Windows short name or a trailing dot would
+/// alias another file. The frame's case-insensitive lookup resolves a
+/// differently spelled name itself, from the folder listings.
+fn resolve_exact(root: &Path, relative: &str) -> Result<PathBuf, Refusal> {
+    let parts = project_components(relative).map_err(Refusal::Refused)?;
     let mut path = root.to_path_buf();
-    for part in parts {
+    for part in &parts {
         path.push(part);
-        let metadata = fs::symlink_metadata(&path)
-            .map_err(|error| format!("Cannot read {relative}: {error}"))?;
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) =>
+            {
+                return Err(Refusal::Missing);
+            }
+            Err(error) => return Err(Refusal::Refused(format!("Cannot read {relative}: {error}"))),
+        };
         if is_link(&metadata) {
-            return Err(format!(
+            return Err(Refusal::Refused(format!(
                 "{relative} is a link; project links are never read."
-            ));
+            )));
         }
     }
-    let full = fs::canonicalize(&path).map_err(|e| format!("Cannot read {relative}: {e}"))?;
-    if !full.starts_with(root) {
-        return Err(format!("{relative} resolves outside the project."));
+    let full = fs::canonicalize(&path)
+        .map_err(|error| Refusal::Refused(format!("Cannot read {relative}: {error}")))?;
+    let Ok(inside) = full.strip_prefix(root) else {
+        return Err(Refusal::Refused(format!(
+            "{relative} resolves outside the project."
+        )));
+    };
+    let spelled = inside
+        .components()
+        .map(|part| part.as_os_str().to_str())
+        .collect::<Option<Vec<_>>>();
+    if spelled.as_deref() != Some(parts.as_slice()) {
+        return Err(Refusal::Missing);
     }
-    let metadata = fs::metadata(&full).map_err(|e| format!("Cannot read {relative}: {e}"))?;
+    Ok(full)
+}
+
+/// Resolve one project file for reading.
+///
+/// The route and the dependency record both call this: a new reader of project
+/// bytes must not re-implement the checks. `root` must be canonical.
+pub(crate) fn project_file_in(
+    root: &Path,
+    relative: &str,
+) -> Result<(PathBuf, fs::Metadata), Refusal> {
+    let full = resolve_exact(root, relative)?;
+    let metadata = fs::metadata(&full)
+        .map_err(|error| Refusal::Refused(format!("Cannot read {relative}: {error}")))?;
     if !metadata.is_file() {
-        return Err(format!("{relative} is not a file."));
+        // A folder by that name is not a file TeX can open.
+        return Err(Refusal::Missing);
     }
-    Ok((full, metadata.len()))
+    Ok((full, metadata))
+}
+
+/// Resolve one project folder for listing; empty `relative` is the root.
+fn project_dir_in(root: &Path, relative: &str) -> Result<PathBuf, Refusal> {
+    if relative.is_empty() {
+        return Ok(root.to_path_buf());
+    }
+    let full = resolve_exact(root, relative)?;
+    if !full.is_dir() {
+        return Err(Refusal::Missing);
+    }
+    Ok(full)
+}
+
+/// List one project folder, and digest every name in it.
+///
+/// Reads names and types only, never a file, never a subfolder. The digest
+/// covers every name past the listing cap too, so a change anywhere in the
+/// folder is seen. A folder that is missing or unreadable is an incomplete,
+/// empty listing with a digest saying so, never an error: a compile must not
+/// fail because of a folder it may not even use.
+pub(crate) fn list_project_dir(root: &Path, relative: &str) -> (DirListing, String) {
+    list_project_dir_capped(root, relative, LISTING_MAX_ENTRIES)
+}
+
+fn list_project_dir_capped(root: &Path, relative: &str, cap: usize) -> (DirListing, String) {
+    let empty = |reason: &str| {
+        (
+            DirListing {
+                path: relative.to_string(),
+                entries: Vec::new(),
+                complete: false,
+                digest: reason.to_string(),
+            },
+            reason.to_string(),
+        )
+    };
+    let dir = match project_dir_in(root, relative) {
+        Ok(dir) => dir,
+        Err(Refusal::Missing) => return empty("missing"),
+        Err(Refusal::Refused(_)) => return empty("refused"),
+    };
+    let Ok(read) = fs::read_dir(&dir) else {
+        return empty("unreadable");
+    };
+    // 0 file, 1 folder, 2 link, 3 anything else; only 0 and 1 are listed.
+    let mut names: Vec<(String, u8)> = Vec::new();
+    let mut complete = true;
+    for entry in read {
+        let Ok(entry) = entry else {
+            complete = false;
+            continue;
+        };
+        let kind = match entry.file_type() {
+            Ok(kind) if kind.is_symlink() => 2,
+            Ok(kind) if kind.is_dir() => 1,
+            Ok(kind) if kind.is_file() => 0,
+            Ok(_) => 3,
+            Err(_) => {
+                complete = false;
+                continue;
+            }
+        };
+        match entry.file_name().into_string() {
+            Ok(name) => names.push((name, kind)),
+            // TeX cannot ask for a name that is not Unicode through the route,
+            // but a change to one is still a change to the folder.
+            Err(raw) => names.push((raw.to_string_lossy().into_owned(), 3)),
+        }
+    }
+    names.sort();
+    let mut key = String::new();
+    for (name, kind) in &names {
+        key.push_str(name);
+        key.push('\0');
+        key.push(char::from(b'0' + kind));
+        key.push('\n');
+    }
+    let listable = names.iter().filter(|(_, kind)| *kind <= 1);
+    if listable.clone().count() > cap {
+        complete = false;
+    }
+    let entries = listable
+        .take(cap)
+        .map(|(name, kind)| (name.clone(), *kind == 1))
+        .collect();
+    let digest = if complete {
+        digest(key.as_bytes())
+    } else {
+        format!("partial:{}", digest(key.as_bytes()))
+    };
+    (
+        DirListing {
+            path: relative.to_string(),
+            entries,
+            complete,
+            digest: digest.clone(),
+        },
+        digest,
+    )
+}
+
+/// The stamp of one project name now, never an error: `missing` when there is
+/// no such file, `refused` when it may not be read. A build that looked a name
+/// up and missed records `missing`, so the file appearing later is a change.
+pub(crate) fn current_stamp(
+    root: &Path,
+    relative: &str,
+    stamp: impl Fn(&fs::Metadata) -> String,
+) -> String {
+    match project_file_in(root, relative) {
+        Ok((_, metadata)) => stamp(&metadata),
+        Err(Refusal::Missing) => "missing".into(),
+        Err(Refusal::Refused(_)) => "refused".into(),
+    }
+}
+
+/// What builds of one root have read: the files with the stamp they had when
+/// read, the folders with the digest of their names when looked in.
+///
+/// The generation key depends on this record, never on a listing of the tree. A
+/// snapshot re-checks only these entries; when one has changed since it was
+/// read, the record moves to a new epoch and every result built before it stops
+/// matching. A file the record has never seen cannot have been read by an
+/// earlier build, so adding entries never changes the epoch: a project that
+/// reads more files does not rebuild for that alone.
+struct DependencyRecord {
+    epoch: u64,
+    files: BTreeMap<String, String>,
+    dirs: BTreeMap<String, String>,
+    /// A cap was reached: the record no longer covers every read, so it cannot
+    /// prove a result current and every snapshot takes a new epoch.
+    overflow: bool,
+    used: u64,
+}
+
+static DEPENDENCIES: LazyLock<Mutex<HashMap<PathBuf, DependencyRecord>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+/// Epochs come from one counter for every root, so a record created again
+/// after eviction can never reuse an epoch an older result was keyed with.
+static DEPENDENCY_EPOCH: AtomicU64 = AtomicU64::new(1);
+static DEPENDENCY_USE: AtomicU64 = AtomicU64::new(0);
+
+fn next_epoch() -> u64 {
+    DEPENDENCY_EPOCH.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Run `change` on the record of `root`, creating it when absent.
+fn with_record<T>(root: &Path, change: impl FnOnce(&mut DependencyRecord) -> T) -> Option<T> {
+    let mut records = DEPENDENCIES.lock().ok()?;
+    if !records.contains_key(root) && records.len() >= DEPENDENCY_ROOTS {
+        let oldest = records
+            .iter()
+            .min_by_key(|(_, record)| record.used)
+            .map(|(path, _)| path.clone());
+        if let Some(oldest) = oldest {
+            records.remove(&oldest);
+        }
+    }
+    let record = records
+        .entry(root.to_path_buf())
+        .or_insert_with(|| DependencyRecord {
+            epoch: next_epoch(),
+            files: BTreeMap::new(),
+            dirs: BTreeMap::new(),
+            overflow: false,
+            used: 0,
+        });
+    record.used = DEPENDENCY_USE.fetch_add(1, Ordering::Relaxed);
+    Some(change(record))
+}
+
+/// Record that a build read `relative` with `stamp` (from `settled_stamp`).
+///
+/// A file read again with a different stamp moves the record to a new epoch:
+/// whatever was built from the older bytes is no longer current.
+pub(crate) fn record_file_read(root: &Path, relative: &str, stamp: String) {
+    with_record(root, |record| {
+        let noted = note_read(&mut record.files, DEPENDENCY_MAX_FILES, relative, stamp);
+        record.apply(noted);
+    });
+}
+
+/// Record that a build looked names up in the folder `relative`.
+pub(crate) fn record_dir_read(root: &Path, relative: &str, digest: String) {
+    with_record(root, |record| {
+        let noted = note_read(&mut record.dirs, DEPENDENCY_MAX_DIRS, relative, digest);
+        record.apply(noted);
+    });
+}
+
+enum Noted {
+    Known,
+    Changed,
+    Added,
+    Full,
+}
+
+fn note_read(
+    entries: &mut BTreeMap<String, String>,
+    cap: usize,
+    relative: &str,
+    value: String,
+) -> Noted {
+    if let Some(known) = entries.get_mut(relative) {
+        if *known == value {
+            return Noted::Known;
+        }
+        *known = value;
+        return Noted::Changed;
+    }
+    if entries.len() >= cap {
+        return Noted::Full;
+    }
+    entries.insert(relative.to_string(), value);
+    Noted::Added
+}
+
+impl DependencyRecord {
+    fn apply(&mut self, noted: Noted) {
+        match noted {
+            Noted::Changed => self.epoch = next_epoch(),
+            Noted::Full => self.overflow = true,
+            Noted::Known | Noted::Added => {}
+        }
+    }
+}
+
+/// Re-check the record of `root` and return its epoch with the listing of the
+/// root and of every folder in the record.
+///
+/// The checks run outside the lock; an entry a concurrent read updated in the
+/// meantime is left to that read.
+fn refresh_dependencies(root: &Path) -> (u64, Vec<DirListing>) {
+    let now = SystemTime::now();
+    let (files, dirs) =
+        with_record(root, |record| (record.files.clone(), record.dirs.clone())).unwrap_or_default();
+    let changed_files: Vec<(String, String, String)> = files
+        .into_iter()
+        .filter_map(|(path, known)| {
+            let current = current_stamp(root, &path, |metadata| settled_stamp(metadata, now));
+            // An unsettled read proves nothing about the bytes now on disk:
+            // it moves the epoch until a build reads the file settled.
+            (current != known || known.starts_with("unsettled:")).then_some((path, known, current))
+        })
+        .collect();
+    let mut listings = Vec::new();
+    let mut changed_dirs = Vec::new();
+    let (root_listing, root_digest) = list_project_dir(root, "");
+    listings.push(root_listing);
+    for (path, known) in dirs {
+        let digest = if path.is_empty() {
+            root_digest.clone()
+        } else {
+            let (listing, digest) = list_project_dir(root, &path);
+            listings.push(listing);
+            digest
+        };
+        if digest != known {
+            changed_dirs.push((path, known, digest));
+        }
+    }
+    let epoch = with_record(root, |record| {
+        let mut changed = false;
+        for (path, known, current) in changed_files {
+            if let Some(entry) = record.files.get_mut(&path)
+                && *entry == known
+            {
+                *entry = current;
+                changed = true;
+            }
+        }
+        for (path, known, current) in changed_dirs {
+            if let Some(entry) = record.dirs.get_mut(&path)
+                && *entry == known
+            {
+                *entry = current;
+                changed = true;
+            }
+        }
+        // The frame consults the root's listing for every bare name, so the
+        // root is always a folder this root's builds looked in.
+        if !record.dirs.contains_key("") {
+            record.dirs.insert(String::new(), root_digest.clone());
+        }
+        if changed || record.overflow {
+            record.epoch = next_epoch();
+            record.overflow = false;
+        }
+        record.epoch
+    })
+    .unwrap_or_else(next_epoch);
+    (epoch, listings)
 }
 
 /// Collect the files a document actually reads, following its references.
@@ -1132,8 +1439,10 @@ fn collect_referenced(
     // symlinked or non-normalised prefix would silently collect nothing. The
     // command canonicalizes already; doing it here makes the invariant the
     // function's own rather than the caller's.
-    let root = &fs::canonicalize(root).map_err(|e| e.to_string())?;
-    let main = &fs::canonicalize(main).map_err(|e| e.to_string())?;
+    let root = &fs::canonicalize(root)
+        .map_err(|e| format!("Cannot read the folder of the main LaTeX file: {e}"))?;
+    let main =
+        &fs::canonicalize(main).map_err(|e| format!("Cannot read the main LaTeX file: {e}"))?;
     let mut files: Vec<(PathBuf, Vec<u8>)> = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
     let mut encodings: BTreeMap<PathBuf, String> = BTreeMap::new();
@@ -1145,9 +1454,6 @@ fn collect_referenced(
     while let Some(path) = pending.pop() {
         if !seen.insert(path.clone()) {
             continue;
-        }
-        if files.len() >= MAX_FILES {
-            return Err("The LaTeX project exceeds its file count limit.".into());
         }
 
         let is_text = path.extension().is_some_and(|e| {
@@ -1184,15 +1490,33 @@ fn collect_referenced(
                 (bytes, is_text.then(|| entry.text.clone()))
             }
             None => {
-                let meta = fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+                let is_main = path == *main;
+                let meta = match fs::symlink_metadata(&path) {
+                    Ok(meta) => meta,
+                    Err(error) if is_main => return Err(format!("Cannot read {named}: {error}")),
+                    // TeX opens it itself and reports the cause by name.
+                    Err(_) => continue,
+                };
                 if is_link(&meta) {
                     skipped.push(named);
                     continue;
                 }
-                if meta.len() > MAX_FILE as u64 {
-                    return Err("A LaTeX project file exceeds 32 MiB.".into());
+                // Past the budget a file is not carried, never refused: the
+                // compile reads it from the folder on demand like any file the
+                // document names through a macro. A text source within the
+                // per-file size is still read, so the open buffers it leads to
+                // are carried with their unsaved edits.
+                let over_budget = files.len() >= MAX_FILES
+                    || total.saturating_add(usize::try_from(meta.len()).unwrap_or(usize::MAX))
+                        > MAX_PROJECT;
+                if !is_main && (meta.len() > MAX_FILE as u64 || (over_budget && !is_text)) {
+                    continue;
                 }
-                let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+                let bytes = match fs::read(&path) {
+                    Ok(bytes) => bytes,
+                    Err(error) if is_main => return Err(format!("Cannot read {named}: {error}")),
+                    Err(_) => continue,
+                };
                 let text = if is_text {
                     let decoded = text_encoding::decode(&bytes)
                         .map_err(|error| format!("Cannot compile {named}: {error}"))?;
@@ -1208,12 +1532,11 @@ fn collect_referenced(
             }
         };
 
-        total = total
-            .checked_add(bytes.len())
-            .ok_or("Project size overflow")?;
-        if total > MAX_PROJECT {
-            return Err("The LaTeX project exceeds 64 MiB.".into());
-        }
+        // The main file and the open buffers are always carried: they are the
+        // edit state, and a disk read would lose the unsaved text.
+        let carried = path == *main
+            || overlay.is_some()
+            || (files.len() < MAX_FILES && total.saturating_add(bytes.len()) <= MAX_PROJECT);
 
         // Only a text source declares further references; an image does not.
         if let Some(text) = text {
@@ -1281,10 +1604,17 @@ fn collect_referenced(
             }
         }
 
-        files.push((path, bytes));
+        if carried {
+            total += bytes.len();
+            files.push((path, bytes));
+        } else {
+            encodings.remove(&path);
+        }
     }
 
-    // The generation key covers the main file and the referenced set.
+    // The generation key covers the main file and the carried set. A file
+    // left to be read on demand is covered by the dependency record instead,
+    // from the first build that reads it.
     let mut key = String::new();
     for (path, bytes) in &files {
         key.push_str(&relative_to(root, path).unwrap_or_default());
@@ -1293,16 +1623,23 @@ fn collect_referenced(
         key.push('\n');
     }
     skipped.sort();
+    skipped.dedup();
     Ok((files, skipped, digest(key.as_bytes()), encodings))
 }
 
-/// Capture the project directory and overlay the current open text buffers.
+/// Capture the files a document declares, with the open text buffers overlaid.
+///
+/// Never lists the project: it reads the main file and what it references, the
+/// main file's own folder entries, and the folders and files earlier builds of
+/// this root actually read. `watch` names the files the caller holds from an
+/// earlier build (the preview's fetched files); each gets its current stamp.
 #[tauri::command]
 pub async fn latex_project_snapshot(
     app: AppHandle,
     path: String,
     overlays: Vec<Overlay>,
     include_libraries: Option<bool>,
+    watch: Option<Vec<String>>,
 ) -> Result<ProjectSnapshot, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let requested = Path::new(&path);
@@ -1314,7 +1651,8 @@ pub async fn latex_project_snapshot(
         let parent = requested
             .parent()
             .ok_or("The project has no parent directory.")?;
-        let root = fs::canonicalize(parent).map_err(|e| e.to_string())?;
+        let root = fs::canonicalize(parent)
+            .map_err(|e| format!("Cannot read the folder of the main LaTeX file: {e}"))?;
         let main = fs::canonicalize(requested)
             .map_err(|e| format!("Cannot read the main LaTeX file: {e}"))?;
         if main.parent() != Some(root.as_path()) {
@@ -1336,15 +1674,22 @@ pub async fn latex_project_snapshot(
         skipped.extend(skipped_paths);
         generation.push_str(&key);
 
-        // The manifest is the frame's membership table. Its digest travels
-        // with it; the generation key stays tied to the files TeX actually
-        // reads so an unrelated draft does not invalidate a finished PDF.
-        let (manifest, manifest_skipped) = project_manifest(&root)?;
-        skipped.extend(manifest_skipped);
-        skipped.sort();
-        skipped.dedup();
-        generation.push_str("\nmanifest:");
-        generation.push_str(&manifest.digest);
+        // What earlier builds read beyond the declared files is checked here,
+        // file by file and folder by folder, instead of fingerprinting the
+        // whole folder: a draft next to the document neither invalidates a
+        // finished PDF nor costs a walk.
+        let (epoch, listings) = refresh_dependencies(&root);
+        generation.push_str(&format!("\ndeps:{epoch}"));
+        let stamps = watch
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|name| project_components(name).is_ok())
+            .take(STAMP_MAX_NAMES)
+            .map(|name| {
+                let stamp = current_stamp(&root, &name, file_stamp);
+                (name, stamp)
+            })
+            .collect();
         let main_file = relative_to(&root, &main)?;
         let files = files
             .into_iter()
@@ -1363,17 +1708,15 @@ pub async fn latex_project_snapshot(
             None
         };
         if let Some(texmf) = &texmf {
-            generation.push_str(
-                "
-texmf:",
-            );
+            generation.push_str("\ntexmf:");
             generation.push_str(&texmf.revision);
         }
         Ok(ProjectSnapshot {
             main_file,
             project_token: crate::latex_texpresso::project_token(&root)?,
             files,
-            manifest,
+            listings,
+            stamps,
             skipped,
             generation,
             texmf,
@@ -1470,10 +1813,12 @@ pub async fn print_compiled_pdf<R: tauri::Runtime>(
 #[cfg(test)]
 mod tests {
     use super::{
-        MANIFEST_MAX_DEPTH, MANIFEST_MAX_NAMES, MANIFEST_SKIPPED_DIRS, MAX_PROJECT, Overlay,
-        cache_size, collect_referenced, declared_references, evict_to_limit, mask_literal_regions,
-        project_manifest, project_manifest_with, remove_if_present,
+        DirListing, MAX_FILES, MAX_PROJECT, Overlay, Refusal, cache_size, collect_referenced,
+        declared_references, evict_to_limit, file_stamp, list_project_dir, list_project_dir_capped,
+        mask_literal_regions, project_file_in, record_dir_read, record_file_read,
+        refresh_dependencies, remove_if_present, settled_stamp,
     };
+    use std::time::{Duration, SystemTime};
 
     #[test]
     fn removing_an_asset_another_install_removed_is_not_an_error() {
@@ -1872,181 +2217,374 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
     }
 
+    fn names(listing: &DirListing) -> Vec<(&str, bool)> {
+        listing
+            .entries
+            .iter()
+            .map(|(name, folder)| (name.as_str(), *folder))
+            .collect()
+    }
+
+    /// A stamp that is settled: the modification lies well before `now`.
+    fn settled(path: &Path) -> String {
+        let metadata = fs::metadata(path).unwrap();
+        settled_stamp(&metadata, SystemTime::now() + Duration::from_secs(60))
+    }
+
+    fn age(path: &Path) {
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(60))
+            .unwrap();
+    }
+
     #[test]
-    fn manifest_lists_names_sizes_and_tracks_changes() {
-        let root = scratch("manifest");
-        fs::create_dir_all(root.join("chapters")).unwrap();
+    fn a_listing_holds_the_folders_own_entries_only() {
+        let root = scratch("listing-own");
+        fs::create_dir_all(root.join("chapters/deep/deeper")).unwrap();
         fs::write(root.join("main.tex"), b"main").unwrap();
         fs::write(root.join("chapters/one.tex"), b"chapter").unwrap();
+        fs::write(root.join("chapters/deep/deeper/two.tex"), b"x").unwrap();
+        let root = fs::canonicalize(&root).unwrap();
 
-        let (first, skipped) = project_manifest(&root).unwrap();
-        assert!(skipped.is_empty(), "{skipped:?}");
-        assert_eq!(first.version, 1);
-        assert_eq!(
-            first
-                .files
-                .iter()
-                .map(|file| file.path.as_str())
-                .collect::<Vec<_>>(),
-            ["chapters/one.tex", "main.tex"]
-        );
-        assert_eq!(
-            first
-                .files
-                .iter()
-                .find(|file| file.path == "main.tex")
-                .map(|file| file.size),
-            Some(4)
-        );
-
-        fs::write(root.join("chapters/one.tex"), b"a longer chapter").unwrap();
-        let (second, _) = project_manifest(&root).unwrap();
-        assert_ne!(
-            first.digest, second.digest,
-            "a changed size changes the digest"
-        );
+        let (listing, _) = list_project_dir(&root, "");
+        assert!(listing.complete);
+        assert_eq!(names(&listing), [("chapters", true), ("main.tex", false)]);
+        let (listing, _) = list_project_dir(&root, "chapters");
+        assert_eq!(listing.path, "chapters");
+        assert_eq!(names(&listing), [("deep", true), ("one.tex", false)]);
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn manifest_skips_and_reports_links_without_following_them() {
-        let root = scratch("manifest-links");
-        let outside = scratch("manifest-links-outside");
+    fn a_listing_digest_follows_names_not_contents() {
+        let root = scratch("listing-digest");
         fs::write(root.join("main.tex"), b"main").unwrap();
-        fs::write(outside.join("secret.tex"), b"secret").unwrap();
-        fs::create_dir_all(outside.join("dir")).unwrap();
-        fs::write(outside.join("dir/secret.tex"), b"secret").unwrap();
+        fs::write(root.join("notes.txt"), b"a").unwrap();
+        let root = fs::canonicalize(&root).unwrap();
 
-        #[cfg(unix)]
-        let (file_link, dir_link) = {
-            use std::os::unix::fs::symlink;
-            (
-                symlink(outside.join("secret.tex"), root.join("linked.tex")).is_ok(),
-                symlink(outside.join("dir"), root.join("linked-dir")).is_ok(),
-            )
-        };
-        #[cfg(windows)]
-        let (file_link, dir_link) = {
-            use std::os::windows::fs::{symlink_dir, symlink_file};
-            (
-                symlink_file(outside.join("secret.tex"), root.join("linked.tex")).is_ok(),
-                symlink_dir(outside.join("dir"), root.join("linked-dir")).is_ok(),
-            )
-        };
-        if !(file_link && dir_link) {
-            // Creating a symlink needs a privilege on Windows; without it there
-            // is nothing to test. The junction test below covers that host.
-            let _ = fs::remove_dir_all(&root);
-            let _ = fs::remove_dir_all(&outside);
-            return;
-        }
-
-        let (manifest, skipped) = project_manifest(&root).unwrap();
-        assert_eq!(
-            manifest
-                .files
-                .iter()
-                .map(|file| file.path.as_str())
-                .collect::<Vec<_>>(),
-            ["main.tex"]
-        );
-        assert_eq!(skipped, ["linked-dir", "linked.tex"]);
-        fs::remove_dir_all(&root).unwrap();
-        fs::remove_dir_all(&outside).unwrap();
+        let (_, first) = list_project_dir(&root, "");
+        fs::write(root.join("notes.txt"), b"a much longer note").unwrap();
+        let (_, edited) = list_project_dir(&root, "");
+        assert_eq!(first, edited, "a content change is not a folder change");
+        fs::write(root.join("article.cls"), b"% shadows TeX's class").unwrap();
+        let (_, added) = list_project_dir(&root, "");
+        assert_ne!(first, added, "a new name is a folder change");
+        fs::remove_dir_all(root).unwrap();
     }
 
-    #[cfg(windows)]
     #[test]
-    fn manifest_skips_and_reports_a_junction() {
-        let root = scratch("manifest-junction");
-        let outside = scratch("manifest-junction-outside");
+    fn a_listing_past_its_cap_or_of_a_missing_folder_is_incomplete_not_an_error() {
+        let root = scratch("listing-cap");
+        for name in ["a.tex", "b.tex", "c.tex"] {
+            fs::write(root.join(name), b"x").unwrap();
+        }
+        let root = fs::canonicalize(&root).unwrap();
+
+        let (listing, capped) = list_project_dir_capped(&root, "", 2);
+        assert!(!listing.complete);
+        assert_eq!(names(&listing), [("a.tex", false), ("b.tex", false)]);
+        let (_, full) = list_project_dir(&root, "");
+        assert_ne!(capped, full, "a capped digest still covers every name");
+
+        let (listing, digest) = list_project_dir(&root, "absent");
+        assert!(!listing.complete && listing.entries.is_empty());
+        assert_eq!(digest, "missing");
+        let (listing, digest) = list_project_dir(&root, "../outside");
+        assert!(!listing.complete && listing.entries.is_empty());
+        assert_eq!(digest, "refused");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The reported failure: a document next to a folder the user may not read
+    /// and next to more files than the old walk allowed. Neither is read, so
+    /// neither can fail the snapshot or cost it time.
+    #[test]
+    fn a_document_next_to_a_protected_folder_and_many_files_is_captured() {
+        let root = scratch("listing-protected");
+        fs::write(
+            root.join("main.tex"),
+            "\\documentclass{article}\\begin{document}x\\end{document}\n",
+        )
+        .unwrap();
+        let crowd = root.join("unrelated");
+        fs::create_dir_all(&crowd).unwrap();
+        for index in 0..20_001 {
+            fs::write(crowd.join(format!("{index}.tex")), b"").unwrap();
+        }
+        let locked = root.join("locked");
+        fs::create_dir_all(locked.join("inner")).unwrap();
+        let guard = Locked::new(&locked);
+        let root = fs::canonicalize(&root).unwrap();
+
+        let (files, skipped, _, _) =
+            collect_referenced(&root, &root.join("main.tex"), &[]).unwrap();
+        assert_eq!(files.len(), 1);
+        assert!(skipped.is_empty());
+        let (_, listings) = refresh_dependencies(&root);
+        assert_eq!(listings.len(), 1, "only the main file's folder is listed");
+        assert_eq!(
+            names(&listings[0]),
+            [("locked", true), ("main.tex", false), ("unrelated", true)]
+        );
+        if guard.applied {
+            let (listing, digest) = list_project_dir(&root, "locked");
+            assert!(
+                !listing.complete,
+                "an unreadable folder lists as incomplete"
+            );
+            assert_eq!(digest, "unreadable");
+        }
+        drop(guard);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// Denies listing one folder for the test's lifetime.
+    struct Locked {
+        path: std::path::PathBuf,
+        applied: bool,
+    }
+
+    impl Locked {
+        fn new(path: &Path) -> Self {
+            #[cfg(windows)]
+            let applied = std::process::Command::new("icacls")
+                .arg(path)
+                .args(["/deny", "*S-1-1-0:(RD)"])
+                .output()
+                .is_ok_and(|output| output.status.success());
+            #[cfg(unix)]
+            let applied = {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(path, fs::Permissions::from_mode(0o000)).is_ok()
+                    && fs::read_dir(path).is_err()
+            };
+            Self {
+                path: path.to_path_buf(),
+                applied,
+            }
+        }
+    }
+
+    impl Drop for Locked {
+        fn drop(&mut self) {
+            #[cfg(windows)]
+            let _ = std::process::Command::new("icacls")
+                .arg(&self.path)
+                .args(["/remove:d", "*S-1-1-0"])
+                .output();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = fs::set_permissions(&self.path, fs::Permissions::from_mode(0o755));
+            }
+        }
+    }
+
+    #[test]
+    fn resolution_needs_the_exact_spelling_and_stays_inside() {
+        let root = scratch("resolve-exact");
+        fs::create_dir_all(root.join("Figures")).unwrap();
+        fs::write(root.join("Figures/Plot.PNG"), b"png").unwrap();
+        let root = fs::canonicalize(&root).unwrap();
+
+        let (full, metadata) = project_file_in(&root, "Figures/Plot.PNG").unwrap();
+        assert_eq!(full, root.join("Figures").join("Plot.PNG"));
+        assert_eq!(metadata.len(), 3);
+        for alias in ["figures/Plot.PNG", "Figures/plot.png", "Figures/Plot.PNG."] {
+            assert_eq!(
+                project_file_in(&root, alias).unwrap_err(),
+                Refusal::Missing,
+                "{alias}"
+            );
+        }
+        assert_eq!(
+            project_file_in(&root, "Figures").unwrap_err(),
+            Refusal::Missing,
+            "a folder is not a file"
+        );
+        for escape in ["../x", "a/../b", "./a", "C:x", "a\\b", "/abs", ""] {
+            assert!(
+                matches!(project_file_in(&root, escape), Err(Refusal::Refused(_))),
+                "{escape}"
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn links_are_neither_listed_nor_resolved() {
+        let root = scratch("links-out");
+        let outside = scratch("links-out-target");
         fs::write(root.join("main.tex"), b"main").unwrap();
         fs::write(outside.join("secret.tex"), b"secret").unwrap();
-        let status = std::process::Command::new("cmd")
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(&outside, root.join("escape")).is_ok();
+        #[cfg(windows)]
+        let linked = std::process::Command::new("cmd")
             .args(["/C", "mklink", "/J"])
             .arg(root.join("escape"))
             .arg(&outside)
             .output()
-            .unwrap();
-        if !status.status.success() {
+            .is_ok_and(|output| output.status.success());
+        if !linked {
             let _ = fs::remove_dir_all(&root);
             let _ = fs::remove_dir_all(&outside);
-            return; // mklink unavailable in this environment
+            return; // no link can be made in this environment
         }
+        let root = fs::canonicalize(&root).unwrap();
 
-        let (manifest, skipped) = project_manifest(&root).unwrap();
-        assert_eq!(
-            manifest
-                .files
-                .iter()
-                .map(|file| file.path.as_str())
-                .collect::<Vec<_>>(),
-            ["main.tex"]
-        );
-        assert_eq!(skipped, ["escape"]);
+        let (listing, _) = list_project_dir(&root, "");
+        assert!(listing.complete);
+        assert_eq!(names(&listing), [("main.tex", false)]);
+        assert!(matches!(
+            project_file_in(&root, "escape/secret.tex"),
+            Err(Refusal::Refused(reason)) if reason.contains("link")
+        ));
+        let (listing, digest) = list_project_dir(&root, "escape");
+        assert!(listing.entries.is_empty());
+        assert_eq!(digest, "refused");
         let _ = fs::remove_dir(root.join("escape"));
         fs::remove_dir_all(&root).unwrap();
         fs::remove_dir_all(&outside).unwrap();
     }
 
     #[test]
-    fn manifest_refuses_the_name_and_depth_caps_with_a_named_error() {
-        let root = scratch("manifest-caps");
-        fs::write(root.join("main.tex"), b"main").unwrap();
-        for name in ["a.tex", "b.tex", "c.tex"] {
-            fs::write(root.join(name), b"x").unwrap();
-        }
-        let error = project_manifest_with(&root, MANIFEST_MAX_DEPTH, 3).unwrap_err();
-        assert!(error.contains("3 files"), "{error}");
-        assert!(error.contains("manifest"), "{error}");
-
-        let deep = scratch("manifest-depth");
-        let mut dir = deep.clone();
-        for _ in 0..3 {
-            dir.push("level");
-            fs::create_dir_all(&dir).unwrap();
-        }
-        fs::write(dir.join("main.tex"), b"x").unwrap();
-        let error = project_manifest_with(&deep, 2, MANIFEST_MAX_NAMES).unwrap_err();
-        assert!(error.contains("deeper than 2"), "{error}");
-        assert!(error.contains("directory levels"), "{error}");
-
-        fs::remove_dir_all(root).unwrap();
-        fs::remove_dir_all(deep).unwrap();
-    }
-
-    #[test]
-    fn manifest_skips_tool_and_library_folders() {
-        let root = scratch("manifest-skipped-dirs");
-        for dir in MANIFEST_SKIPPED_DIRS {
-            let path = root.join(dir);
-            fs::create_dir_all(&path).unwrap();
-            fs::write(path.join("hidden.tex"), b"x").unwrap();
-        }
-        fs::write(root.join("main.tex"), b"main").unwrap();
-
-        let (manifest, skipped) = project_manifest(&root).unwrap();
+    fn a_recent_modification_is_recorded_unsettled() {
+        let root = scratch("stamp-racy");
+        let file = root.join("plot.png");
+        fs::write(&file, b"png").unwrap();
+        let metadata = fs::metadata(&file).unwrap();
+        let now = SystemTime::now();
+        assert!(settled_stamp(&metadata, now).starts_with("unsettled:"));
         assert_eq!(
-            manifest
-                .files
-                .iter()
-                .map(|file| file.path.as_str())
-                .collect::<Vec<_>>(),
-            ["main.tex"]
+            settled_stamp(&metadata, now + Duration::from_secs(60)),
+            file_stamp(&metadata)
         );
-        assert!(skipped.is_empty());
+        // A modification after the read (clock skew) proves nothing either.
+        assert!(settled_stamp(&metadata, now - Duration::from_secs(60)).starts_with("unsettled:"));
         fs::remove_dir_all(root).unwrap();
     }
 
-    #[cfg(unix)]
     #[test]
-    fn manifest_refuses_a_name_that_is_not_unicode() {
-        use std::os::unix::ffi::OsStringExt;
-        let root = scratch("manifest-non-unicode");
-        let name = std::ffi::OsString::from_vec(vec![b'b', b'a', b'd', 0xff]);
-        fs::write(root.join(&name), b"x").unwrap();
-        let error = project_manifest(&root).unwrap_err();
-        assert!(error.contains("valid Unicode"), "{error}");
+    fn a_new_read_keeps_the_epoch_and_a_changed_one_moves_it() {
+        let root = scratch("deps-change");
+        fs::write(root.join("main.tex"), b"main").unwrap();
+        fs::create_dir_all(root.join("figs")).unwrap();
+        fs::write(root.join("figs/plot.png"), b"png").unwrap();
+        age(&root.join("figs/plot.png"));
+        let root = fs::canonicalize(&root).unwrap();
+
+        let (first, _) = refresh_dependencies(&root);
+        record_file_read(&root, "figs/plot.png", settled(&root.join("figs/plot.png")));
+        let (dir, digest) = list_project_dir(&root, "figs");
+        record_dir_read(&root, "figs", digest);
+        let (second, listings) = refresh_dependencies(&root);
+        assert_eq!(first, second, "reading more files is not a change");
+        assert!(
+            listings.contains(&dir),
+            "a folder a build looked in is listed"
+        );
+
+        fs::write(root.join("figs/plot.png"), b"a redrawn plot").unwrap();
+        let (third, _) = refresh_dependencies(&root);
+        assert_ne!(second, third, "a file a build read has changed");
+
+        // Once the change is seen, the record holds the new stamp.
+        age(&root.join("figs/plot.png"));
+        record_file_read(&root, "figs/plot.png", settled(&root.join("figs/plot.png")));
+        let (fourth, _) = refresh_dependencies(&root);
+        let (fifth, _) = refresh_dependencies(&root);
+        assert_eq!(fourth, fifth, "nothing changed since");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn an_unsettled_read_moves_the_epoch_until_it_is_read_settled() {
+        let root = scratch("deps-racy");
+        fs::write(root.join("plot.png"), b"png").unwrap();
+        age(&root.join("plot.png"));
+        let root = fs::canonicalize(&root).unwrap();
+        let metadata = fs::metadata(root.join("plot.png")).unwrap();
+
+        let (first, _) = refresh_dependencies(&root);
+        record_file_read(
+            &root,
+            "plot.png",
+            format!("unsettled:{}", file_stamp(&metadata)),
+        );
+        let (second, _) = refresh_dependencies(&root);
+        assert_ne!(first, second, "an unsettled read proves nothing");
+        let (third, _) = refresh_dependencies(&root);
+        assert_eq!(second, third, "the file is settled now and unchanged");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_missed_name_that_appears_moves_the_epoch() {
+        let root = scratch("deps-missing");
+        fs::write(root.join("main.tex"), b"main").unwrap();
+        fs::create_dir_all(root.join("figs")).unwrap();
+        let root = fs::canonicalize(&root).unwrap();
+
+        let (first, _) = refresh_dependencies(&root);
+        record_file_read(&root, "figs/late.png", "missing".into());
+        assert_eq!(first, refresh_dependencies(&root).0);
+        fs::write(root.join("figs/late.png"), b"png").unwrap();
+        assert_ne!(first, refresh_dependencies(&root).0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_new_name_in_the_main_folder_moves_the_epoch_and_an_edit_beside_it_does_not() {
+        let root = scratch("deps-root");
+        fs::write(root.join("main.tex"), b"main").unwrap();
+        fs::write(root.join("draft.txt"), b"a").unwrap();
+        let root = fs::canonicalize(&root).unwrap();
+
+        let (first, _) = refresh_dependencies(&root);
+        fs::write(root.join("draft.txt"), b"an unrelated edit").unwrap();
+        assert_eq!(first, refresh_dependencies(&root).0);
+        fs::write(root.join("mystyle.sty"), b"% may shadow a package").unwrap();
+        assert_ne!(first, refresh_dependencies(&root).0);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_reference_past_the_budget_is_left_on_demand_but_open_buffers_are_carried() {
+        let root = scratch("budget");
+        fs::create_dir_all(root.join("img")).unwrap();
+        let mut main = String::from("\\input{late}\n\\begin{document}\n");
+        for index in 0..300 {
+            fs::write(root.join(format!("img/{index}.png")), b"png").unwrap();
+            main.push_str(&format!("\\includegraphics{{img/{index}.png}}\n"));
+        }
+        main.push_str("\\end{document}\n");
+        fs::write(root.join("main.tex"), &main).unwrap();
+        fs::write(root.join("late.tex"), b"on disk").unwrap();
+        let root = fs::canonicalize(&root).unwrap();
+        let overlays = [Overlay {
+            path: root.join("late.tex").to_string_lossy().into_owned(),
+            text: "unsaved".into(),
+            encoding: None,
+            had_bom: None,
+            line_ending: None,
+        }];
+
+        let (files, _, _, _) =
+            collect_referenced(&root, &root.join("main.tex"), &overlays).unwrap();
+        assert_eq!(
+            files.len(),
+            MAX_FILES + 1,
+            "the budget plus the open buffer"
+        );
+        let late = files
+            .iter()
+            .find(|(path, _)| path.ends_with("late.tex"))
+            .expect("the open buffer is carried past the budget");
+        assert_eq!(late.1, b"unsaved");
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -251,13 +251,24 @@ LuaLaTeX for settings from before that change) and the engines actually
 present. A missing individual tool is reported when it is needed; an otherwise
 usable installation is not rejected for lacking an unrelated one.
 
-A native build stages the same bounded project snapshot as the bundled engine
-into an app-owned private workspace, and runs there. The workspace lasts for the
-app session and is reused by the next build, so its auxiliary files, font caches
-and Biber runtime are warm; **Recompile from scratch** discards it. Generated
-files — the PDF, `.aux`, `.log`, `.bbl` and the font cache — never enter your
-project. Staged project files are copied, never hard-linked, so a committed
-`main.pdf`, `.bbl` or `.aux` cannot be written through.
+A native build runs TeX in the main file's own folder, as a terminal or another
+editor would, and writes every output — the PDF, `.aux`, `.log`, `.bbl`, the
+recorder's `.fls` and the font cache — to an app-owned private workspace with
+`-output-directory`. Nothing is copied out of your folder and nothing is written
+into it, so a committed `main.pdf`, `.bbl` or `.aux` is never touched. A file
+with unsaved changes is compiled from an overlay folder that TeX searches before
+the working directory; a saved file is read where it is. The workspace lasts for
+the app session and is reused by the next build, so its auxiliary files, font
+caches and Biber runtime are warm; **Recompile from scratch** discards it.
+
+The engine's `-recorder` file lists every file the build opened, and that list
+is what the PDF depends on: changing, adding or removing a file the build read,
+or adding a file to a folder it read from, compiles again; anything else in the
+folder does not. A file the document names with `./` (`\input{./chapter}`) is
+looked up in the working directory only, so TeX reads its saved copy even when
+the editor holds changes; Problems then says so, at that line. BibTeX and Biber
+run beside the outputs, where the declared `.bib` and `.bst` files are
+written, and find the rest in your folder.
 
 MDraft runs the selected engine directly, compares the generated auxiliary
 files after each pass, and reruns only when they changed. BibTeX or Biber runs
@@ -278,9 +289,12 @@ chose. It runs with your operating-system permissions, and its package manager
 may use the network to install its own packages; MDraft does not control,
 monitor or proxy that traffic. MDraft itself makes no network request to start a
 native compile. Only use a trusted installation and trusted documents. Shell
-escape and project-supplied executables remain disabled, and a native job never
-compiles inside your project directory. The bundled engine remains the fully
-local choice for readers who do not opt in.
+escape and project-supplied executables remain disabled, and nothing a native
+job generates is written into your folder. On Windows the engine starts in your
+document's folder, which Windows also searches, after its own system folders,
+for a library a program needs and its installation lacks: compile documents from
+folders you trust. The bundled engine remains the fully local choice for
+readers who do not opt in.
 
 The installed distribution owns its packages and cache. MDraft's *Clear package
 cache* and *Cache limit* apply only to the bundled engine. If a package is
@@ -304,10 +318,13 @@ was still starting. Validation then runs the same version probes and probe
 compile, inside the distribution. Repeating the click while that work is in
 flight does nothing; the row stays disabled until it settles.
 
-A WSL build stages the project on the Windows side, as usual, and runs the
-engine with `wsl.exe --exec` — no shell, no login profile — with an exact Linux
-environment and a `PATH` that leaves out the Windows `PATH`. The engine runs as
-your Linux user and can read the Windows drives mounted in that distribution.
+A WSL build runs TeX in the document's folder as the distribution sees it on
+the mounted Windows drive, with `wsl.exe --cd … --exec` — no shell, no login
+profile — an exact Linux environment and a `PATH` that leaves out the Windows
+`PATH`; the outputs go to the workspace on the Windows side. The engine runs as
+your Linux user and can read the Windows drives mounted in that distribution. A
+document on a network share cannot be compiled this way: MDraft says so and
+names the alternatives, a Windows distribution or the bundled engine.
 Cancel and the time limit end the engine inside the distribution too. The first
 compile after the distribution stopped takes a few seconds longer while WSL
 starts it.
@@ -404,24 +421,38 @@ the main file's preamble, such as `\graphicspath{{figures/}{images/}}`, are
 searched for images too. Macro-expanded paths and directories declared later in
 the document are not resolved by the snapshot.
 
-The snapshot is bounded: 256 files, 32 MiB per file, 64 MiB total and 12
-directory levels. Hidden directories are skipped. A symlink is skipped with a
-named warning instead of aborting the project.
+The snapshot sends the main file, every open buffer and the files the document
+declares ahead of the build: up to 256 files, 32 MiB per file and 64 MiB in all.
+That is a budget for what is sent ahead, not a limit on the project: a declared
+file past it is read when TeX opens it. Hidden directories are skipped. A
+symlink is skipped with a named warning instead of aborting the project.
 
-The TeXpresso preview also receives a **bounded project manifest**: names, sizes
-and modification stamps for up to 20,000 files, at most 12 directory levels,
-skipping `.git`, `.hg`, `.svn`, `node_modules`, the reserved
-`.mdraft-texmf` library folder and links. When the engine opens a name the
-eager snapshot did not carry, the frame fetches that one file from the same
-`mdraft-tex` origin through a per-frame capability
-(`/project/<token>/...`); the route rejects traversal, links, files outside the
-root and files above 128 MiB, and holds at most 1 GiB per session. This is what
-makes fontspec `Path=` fonts, `\subfile`, `\includepdf`,
-`\lstinputlisting`, pgfplots tables and files a local class loads work without
-extending the predictor. The eager snapshot remains the preload hint for
-SyncTeX and the outline. Installed TeX stages the same manifest from the project
-root, using hard links where the volume allows and copies otherwise; an open
-buffer's bytes still win.
+Nothing lists your folder as a whole, and no folder's size, depth or
+permissions can stop a compile: a document in `C:\`, on the Desktop or in
+Downloads compiles like any other, and a build costs what the document reads. A
+file that cannot be read is reported by name, with the reason.
+
+The TeXpresso preview fetches what the snapshot did not send when the engine
+opens it. The frame holds listings of the main file's folder and of every folder
+an earlier build looked in — each folder's own names, never its subfolders'
+contents — so a name TeX tries in the project first, such as a package or a
+font, is ruled out without a request. A folder below them is listed when TeX
+first names a file inside it; a folder of more than 10,000 names is listed in
+part, and a name it cannot rule out is asked for. A file that exists is fetched,
+by its exact spelling, from the same `mdraft-tex` origin through a per-frame
+capability (`/project/<token>/...`); the route refuses traversal, links and
+files outside the folder, files above 128 MiB (a limit of the bundled engine,
+which the message names), and more than 1 GiB per session. This is what makes
+fontspec `Path=` fonts, `\subfile`, `\includepdf`, `\lstinputlisting`,
+pgfplots tables and files a local class loads work without extending the
+predictor. The eager snapshot remains the preload hint for SyncTeX and the
+outline. Installed TeX needs none of this: it reads the folder itself.
+
+Whether a stored PDF is still current is decided from what the builds read:
+each file a build opened is checked by size and modification time, and each
+folder it looked in by its names. A file modified within three seconds of being
+read counts as changed until it is read again, so a save in the same instant is
+never missed.
 
 Real BibTeX runs in the bundled engine. **Biber and the full `biblatex` feature
 set are not available there**; `biblatex-lite` covers the common cases, and the
@@ -638,14 +669,16 @@ files, then the local library, then the TeX Live bundle — through the patched
 
 The pinned release asks its own hook,
 `texpresso_project_file`, for a project file the snapshot did not send, and the
-shell's `worker.js` answers it from the project manifest.
+shell's `worker.js` answers it from the folder listings and the project route.
 `scripts/texpresso-patch-worker.mjs` turns the release's `ocaml-worker.js` into
 the pinned one with six anchored edits:
 
-- a name the current manifest holds is always offered to that hook;
-- the local libraries answer after the project and the manifest and before the
+- a name the folder listings do not rule out is offered to that hook again
+  after a miss, so a file created later is found; the worker remembers what the
+  route did not find until a listing changes;
+- the local libraries answer after the project and its folders and before the
   bundle, and report a library file that replaces a TeX Live one;
-- the case-insensitive lookup checks the manifest, then the libraries;
+- the case-insensitive lookup checks the folder listings, then the libraries;
 - the export's `xdvipdfmx`, which never asks for that lookup, gets its answer
   after an exact miss everywhere;
 - after `retcon_trail: the arena is full` the worker reports the failure

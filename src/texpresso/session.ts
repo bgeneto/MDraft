@@ -7,7 +7,7 @@
 //! answering is resynced, then restarted once, then reported.
 
 import { TexpressoFrame, type ReadyInfo } from "./frame";
-import { textPrint, type Held, type PreparedProject } from "./project";
+import { listedNames, textPrint, type Held, type PreparedProject } from "./project";
 import {
   textHash,
   type EditChange,
@@ -86,8 +86,8 @@ export class TexpressoSession {
   readonly libraryOverrides = new Set<string>();
   /** Project files the engine fetched on demand in this frame. */
   readonly projectFetched = new Set<string>();
-  /** The manifest stamp each fetched file had when the frame received it. */
-  private fetchedStamps = new Map<string, { size: number; modified: number }>();
+  /** The route's stamp of each fetched file's bytes, null when it sent none. */
+  private fetchedStamps = new Map<string, string | null>();
   /** The edit sequence the last paint reflects, and when it was sent. */
   lastPainted = 0;
   readonly sentAt = new Map<number, number>();
@@ -233,13 +233,14 @@ export class TexpressoSession {
     }
     const remove = new Set([...this.files.keys()].filter((path) => !prepared.files.has(path)));
     for (const path of remove) this.files.delete(path);
-    // A file the engine fetched earlier is not in `this.files`: a manifest
-    // stamp change or a disappearance has to remove it explicitly so the next
-    // lookup fetches the new bytes (or reports the file missing).
+    // A file the engine fetched earlier is not in `this.files`: a stamp
+    // change or a disappearance has to remove it explicitly so the next lookup
+    // fetches the new bytes (or reports the file missing). Only the snapshot's
+    // own stamps decide: a file fetched after it was taken is newer than it.
     for (const path of this.projectFetched) {
+      if (!prepared.watched.has(path)) continue;
       const before = this.fetchedStamps.get(path);
-      const now = prepared.manifest.get(path);
-      if (before && now && before.size === now.size && before.modified === now.modified) continue;
+      if (before && before === prepared.stamps.get(path)) continue;
       remove.add(path);
       remove.add(path.toLowerCase());
       this.projectFetched.delete(path);
@@ -275,9 +276,11 @@ export class TexpressoSession {
     if (path) this.onceReady(() => this.frame.post({ type: "open", file: path }));
   }
 
-  /** The names the frame's project holds or may fetch on demand. */
+  /** The names the frame's project holds, or its listed folders show. */
   projectNames(): string[] {
-    return this.project ? [...this.project.files.keys(), ...this.project.manifest.keys()] : [];
+    return this.project
+      ? [...this.project.files.keys(), ...listedNames([...this.project.listings.values()])]
+      : [];
   }
 
   /**
@@ -453,12 +456,10 @@ export class TexpressoSession {
       case "library-override":
         this.libraryOverrides.add(message.name);
         break;
-      case "project-fetched": {
+      case "project-fetched":
         this.projectFetched.add(message.name);
-        const stamp = this.project?.manifest.get(message.name);
-        if (stamp) this.fetchedStamps.set(message.name, stamp);
+        this.fetchedStamps.set(message.name, message.stamp);
         break;
-      }
       default:
         break;
     }

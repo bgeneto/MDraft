@@ -14,7 +14,7 @@
 //   - the pins in src-tauri/texpresso.json, and the absence of any TeXpresso
 //     service host in shipped bytes;
 //   - project preparation: LF normalisation, non-UTF-8 detection, and how
-//     local libraries reach the frame (reserved folder, manifest, TeX Live's
+//     local libraries reach the frame (reserved folder, index, TeX Live's
 //     per-engine search order, project files first);
 //   - the XeLaTeX font family table and the `.fontspec` files made from it;
 //   - the scroll and selection mapping;
@@ -487,15 +487,19 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
   const snapshot = {
     mainFile: "main.tex",
     projectToken: "test-token",
-    manifest: {
-      version: 1,
-      files: [
-        { path: "main.tex", size: 60, modified: 0 },
-        { path: "chapters/one.tex", size: 13, modified: 0 },
-        { path: "figures/plot.png", size: 4, modified: 0 },
-      ],
-      digest: "test-digest",
-    },
+    listings: [
+      {
+        path: "",
+        entries: [
+          ["chapters", true],
+          ["figures", true],
+          ["main.tex", false],
+        ],
+        complete: true,
+      },
+      { path: "figures", entries: [["plot.png", false]], complete: true },
+    ],
+    stamps: {},
     files: [
       {
         path: "main.tex",
@@ -578,11 +582,13 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
   );
   const onDemand = JSON.parse(prepared.files.get(".mdraft-project.json")?.text ?? "null");
   check(
-    onDemand?.version === 1 &&
+    onDemand?.version === 2 &&
       onDemand.token === "test-token" &&
-      onDemand.names.includes("main.tex") &&
-      onDemand.names.includes("figures/plot.png"),
-    "the project manifest reaches the frame with its capability",
+      onDemand.dirs?.[""]?.entries.some(([name]) => name === "main.tex") &&
+      onDemand.dirs?.figures?.entries.some(([name]) => name === "plot.png") &&
+      onDemand.dirs?.figures?.complete === true &&
+      !("names" in onDemand),
+    "the listed folders reach the frame with its capability, and nothing else of the folder",
     JSON.stringify(onDemand),
   );
   const manifest = JSON.parse(prepared.files.get(".mdraft-texmf/index.json")?.text ?? "null");
@@ -693,14 +699,17 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
   );
 
   const encode = (text) => Buffer.from(text, "utf8").toString("base64");
-  const project = (main, { extra = [], manifest = [], texmf } = {}) => ({
+  const project = (main, { extra = [], listed = [], texmf } = {}) => ({
     mainFile: "main.tex",
     projectToken: "font-token",
-    manifest: {
-      version: 1,
-      files: [{ path: "main.tex", size: main.length, modified: 0 }, ...manifest],
-      digest: "font-digest",
-    },
+    listings: [
+      {
+        path: "",
+        entries: [["main.tex", false], ...listed.map((name) => [name, false])],
+        complete: true,
+      },
+    ],
+    stamps: {},
     files: [
       { path: "main.tex", data: encode(main), language: "latex" },
       ...extra.map(([path, text]) => ({ path, data: encode(text), language: "latex" })),
@@ -787,7 +796,7 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
       ].join("\n"),
       {
         extra: [["ebgaramond.fontspec", "% the reader's own"]],
-        manifest: [{ path: "FiraSans.fontspec", size: 1, modified: 0 }],
+        listed: ["FiraSans.fontspec"],
       },
     ),
   );
@@ -1298,7 +1307,13 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
       broken: false,
       files: new Map(),
       active: "main.tex",
-      project: { main: "main.tex", files: new Map(), manifest: new Map() },
+      project: {
+        main: "main.tex",
+        files: new Map(),
+        listings: new Map(),
+        watched: new Set(),
+        stamps: new Map(),
+      },
       outstanding: new Map(),
       frame: { post: (message) => (posted.push(message), posted.length) },
     });
@@ -1317,7 +1332,8 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
 
     // A file the worker fetched is not in the host's `files` map. A changed
     // stamp or a disappearance must therefore be an explicit remove, or the
-    // worker keeps serving the old bytes forever.
+    // worker keeps serving the old bytes forever. The route's stamp of what
+    // was fetched is compared with the snapshot's stamp of the file now.
     const sent = [];
     const invalidated = Object.assign(Object.create(TexpressoSession.prototype), {
       files: new Map(),
@@ -1325,11 +1341,14 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
       held: false,
       active: null,
       projectToken: "token",
-      projectFetched: new Set(["changed.png", "gone.png", "same.png"]),
+      projectFetched: new Set(["changed.png", "gone.png", "same.png", "racy.png", "later.png"]),
       fetchedStamps: new Map([
-        ["changed.png", { size: 4, modified: 1 }],
-        ["gone.png", { size: 4, modified: 1 }],
-        ["same.png", { size: 4, modified: 1 }],
+        ["changed.png", "4:1"],
+        ["gone.png", "4:1"],
+        ["same.png", "4:1"],
+        // Fetched within the racy window: its bytes are not proven current.
+        ["racy.png", "unsettled:4:1"],
+        ["later.png", "9:9"],
       ]),
       outstanding: new Map(),
       frame: { post: (message) => (sent.push(message), sent.length) },
@@ -1339,9 +1358,15 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
         main: "main.tex",
         projectToken: "token",
         files: new Map(),
-        manifest: new Map([
-          ["changed.png", { size: 5, modified: 2 }],
-          ["same.png", { size: 4, modified: 1 }],
+        listings: new Map(),
+        // `later.png` was fetched after the snapshot was taken, so the
+        // snapshot has no stamp for it and says nothing about it.
+        watched: new Set(["changed.png", "gone.png", "same.png", "racy.png"]),
+        stamps: new Map([
+          ["changed.png", "5:2"],
+          ["gone.png", "missing"],
+          ["same.png", "4:1"],
+          ["racy.png", "4:1"],
         ]),
       },
       false,
@@ -1350,14 +1375,18 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     check(
       update?.remove.includes("changed.png") &&
         update.remove.includes("gone.png") &&
-        !update.remove.includes("same.png"),
-      "a changed or vanished fetched file is removed for the next lookup",
+        update.remove.includes("racy.png") &&
+        !update.remove.includes("same.png") &&
+        !update.remove.includes("later.png"),
+      "a changed, vanished or unproven fetched file is removed for the next lookup",
       JSON.stringify(update?.remove),
     );
     check(
       !invalidated.projectFetched.has("changed.png") &&
         !invalidated.projectFetched.has("gone.png") &&
-        invalidated.projectFetched.has("same.png"),
+        !invalidated.projectFetched.has("racy.png") &&
+        invalidated.projectFetched.has("same.png") &&
+        invalidated.projectFetched.has("later.png"),
       "the fetched-file set forgets only what was invalidated",
     );
   } finally {

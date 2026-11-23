@@ -41,6 +41,7 @@ const CONFIG: &str = include_str!("../texpresso.json");
 const FRAME_PREFIX: &str = "/texpresso/";
 const DATA_PREFIX: &str = "/texpresso-data/";
 const PROJECT_PREFIX: &str = "/project/";
+const PROJECT_DIR_PREFIX: &str = "/project-dir/";
 /// A project file the frame may fetch on demand.
 const PROJECT_FILE_LIMIT: u64 = 128 * 1024 * 1024;
 /// Bytes held by one frame's project table. A refetch replaces its entry, so a
@@ -856,49 +857,178 @@ fn project_kind(name: &str) -> &'static str {
     }
 }
 
+/// One answer of the `mdraft-tex` scheme.
+pub(crate) struct Reply {
+    pub(crate) status: u16,
+    pub(crate) body: Vec<u8>,
+    pub(crate) kind: &'static str,
+    /// The stamp of the project bytes served (`x-mdraft-stamp`). The frame
+    /// keeps it with the file and fetches the file again once the snapshot
+    /// reports a different one.
+    pub(crate) stamp: Option<String>,
+}
+
+impl Reply {
+    pub(crate) fn ok((body, kind): (Vec<u8>, &'static str)) -> Self {
+        Self {
+            status: 200,
+            body,
+            kind,
+            stamp: None,
+        }
+    }
+
+    pub(crate) fn text(status: u16, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            body: message.into().into_bytes(),
+            kind: "text/plain; charset=utf-8",
+            stamp: None,
+        }
+    }
+}
+
+fn project_root(token: &str) -> Result<PathBuf, Reply> {
+    PROJECT_SESSIONS
+        .lock()
+        .ok()
+        .and_then(|sessions| sessions.get(token).map(|session| session.root.clone()))
+        .ok_or_else(|| Reply::text(404, "The preview project session has ended."))
+}
+
+/// The project-relative name a request carries, or the 404 that answers it: a
+/// name no project file can have is absent, and TeX looks elsewhere.
+fn project_name(encoded: &str) -> Result<String, Reply> {
+    percent_decode(encoded)
+        .ok()
+        .filter(|name| crate::latex::project_components(name).is_ok())
+        .ok_or_else(|| Reply::text(404, "Not a project file name."))
+}
+
 /// Serve one project file through the frame's capability.
-fn serve_project(rest: &str) -> Answer {
-    let (token, encoded) = rest
-        .split_once('/')
-        .ok_or("Unknown project file request.")?;
-    let relative = percent_decode(encoded)?;
-    let root = PROJECT_SESSIONS
-        .lock()
-        .map_err(|_| "The preview session registry is unavailable.".to_string())?
-        .get(token)
-        .map(|session| session.root.clone())
-        .ok_or("The preview project session has ended.")?;
-    let (path, size) = crate::latex::project_file_in(&root, &relative)?;
-    if size > PROJECT_FILE_LIMIT {
-        return Err(format!(
-            "{relative} exceeds the 128 MiB project-file limit; move it outside the project."
-        ));
+///
+/// 404 means TeX should look elsewhere; 403 and 413 mean the file exists and
+/// was not read, and the text says why, so the preview can report it by name
+/// rather than as a file TeX did not find. Every answer is recorded with the
+/// root's dependencies, a miss included: a file appearing later changes what
+/// the build would read.
+fn serve_project(rest: &str) -> Reply {
+    let Some((token, encoded)) = rest.split_once('/') else {
+        return Reply::text(404, "Unknown project file request.");
+    };
+    let root = match project_root(token) {
+        Ok(root) => root,
+        Err(reply) => return reply,
+    };
+    let relative = match project_name(encoded) {
+        Ok(relative) => relative,
+        Err(reply) => return reply,
+    };
+    // The clock is read before the file, so a write racing the read can only
+    // make the stamp unsettled, never let it vouch for bytes it did not see.
+    let now = SystemTime::now();
+    let (path, metadata) = match crate::latex::project_file_in(&root, &relative) {
+        Ok(found) => found,
+        Err(crate::latex::Refusal::Missing) => {
+            crate::latex::record_file_read(&root, &relative, "missing".into());
+            return Reply::text(404, format!("{relative} is not in the project."));
+        }
+        Err(crate::latex::Refusal::Refused(reason)) => {
+            crate::latex::record_file_read(&root, &relative, "refused".into());
+            return Reply::text(403, reason);
+        }
+    };
+    let stamp = crate::latex::settled_stamp(&metadata, now);
+    let too_large = || {
+        Reply::text(
+            413,
+            format!(
+                "{relative} is larger than 128 MiB, the most the bundled TeX engine reads from \
+                 a project file. An installed TeX distribution has no such limit."
+            ),
+        )
+    };
+    if metadata.len() > PROJECT_FILE_LIMIT {
+        crate::latex::record_file_read(&root, &relative, stamp);
+        return too_large();
     }
-    let bytes = fs::read(&path).map_err(|error| format!("Cannot read {relative}: {error}"))?;
+    let bytes = match fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            crate::latex::record_file_read(&root, &relative, "refused".into());
+            return Reply::text(403, format!("Cannot read {relative}: {error}"));
+        }
+    };
+    crate::latex::record_file_read(&root, &relative, stamp.clone());
     if bytes.len() as u64 > PROJECT_FILE_LIMIT {
-        return Err(format!(
-            "{relative} exceeds the 128 MiB project-file limit; move it outside the project."
-        ));
+        return too_large();
     }
-    let mut sessions = PROJECT_SESSIONS
-        .lock()
-        .map_err(|_| "The preview session registry is unavailable.".to_string())?;
-    let session = sessions
-        .get_mut(token)
-        .ok_or("The preview project session has ended.")?;
+    let Ok(mut sessions) = PROJECT_SESSIONS.lock() else {
+        return Reply::text(404, "The preview session registry is unavailable.");
+    };
+    let Some(session) = sessions.get_mut(token) else {
+        return Reply::text(404, "The preview project session has ended.");
+    };
     let held: u64 = session.served.values().sum();
     let previous = session.served.get(&relative).copied().unwrap_or(0);
     let next = held
         .saturating_sub(previous)
         .saturating_add(bytes.len() as u64);
     if next > PROJECT_HELD_LIMIT {
-        return Err(
-            "The preview has fetched more than 1 GiB of project files; Clear cache or split the project."
-                .into(),
+        return Reply::text(
+            413,
+            format!(
+                "{relative} was not read: this preview already holds 1 GiB of project files. \
+                 Close and reopen the preview, or compile with an installed TeX distribution."
+            ),
         );
     }
     session.served.insert(relative.clone(), bytes.len() as u64);
-    Ok((bytes, project_kind(&relative)))
+    Reply {
+        status: 200,
+        body: bytes,
+        kind: project_kind(&relative),
+        stamp: Some(stamp),
+    }
+}
+
+/// List one project folder, without descending into it, for the frame's
+/// lookups below the main file's folder. An empty name is that folder itself.
+fn serve_project_dir(rest: &str) -> Reply {
+    let (token, encoded) = rest.split_once('/').unwrap_or((rest, ""));
+    let root = match project_root(token) {
+        Ok(root) => root,
+        Err(reply) => return reply,
+    };
+    let relative = if encoded.is_empty() {
+        String::new()
+    } else {
+        match project_name(encoded) {
+            Ok(relative) => relative,
+            Err(reply) => return reply,
+        }
+    };
+    let (listing, digest) = crate::latex::list_project_dir(&root, &relative);
+    crate::latex::record_dir_read(&root, &relative, digest);
+    match serde_json::to_vec(&listing) {
+        Ok(body) => Reply {
+            status: 200,
+            body,
+            kind: "application/json",
+            stamp: None,
+        },
+        Err(error) => Reply::text(500, error.to_string()),
+    }
+}
+
+/// Answer a project file or folder request; `None` when the path is neither.
+/// The caller has checked the switch.
+pub(crate) fn serve_project_route(path: &str) -> Option<Reply> {
+    if let Some(rest) = path.strip_prefix(PROJECT_DIR_PREFIX) {
+        return Some(serve_project_dir(rest));
+    }
+    let rest = path.strip_prefix(PROJECT_PREFIX)?;
+    Some(serve_project(rest))
 }
 
 type Answer = Result<(Vec<u8>, &'static str), String>;
@@ -974,9 +1104,6 @@ fn serve_data(root: &Path, relative: &str) -> Answer {
 /// Answer a frame, engine or data request; `None` when the path is not ours.
 /// `root` is the LaTeX data directory. The caller has checked the switch.
 pub fn serve(root: &Path, path: &str) -> Option<Answer> {
-    if let Some(rest) = path.strip_prefix(PROJECT_PREFIX) {
-        return Some(serve_project(rest));
-    }
     if let Some(name) = path.strip_prefix(FRAME_PREFIX) {
         return Some(serve_frame(root, name));
     }
@@ -1582,31 +1709,49 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    fn route(path: &str) -> Reply {
+        serve_project_route(path).expect("a project route")
+    }
+
     #[test]
     fn the_project_route_serves_a_file_with_a_live_token() {
         let root = scratch("project-route");
         fs::write(root.join("hello world.tex"), b"project bytes").unwrap();
         let token = project_token(&root).unwrap();
-        let (bytes, kind) = serve(&root, &format!("/project/{token}/hello%20world.tex"))
-            .unwrap()
-            .unwrap();
-        assert_eq!(bytes, b"project bytes");
-        assert!(kind.starts_with("text/plain"), "{kind}");
+        let reply = route(&format!("/project/{token}/hello%20world.tex"));
+        assert_eq!(reply.status, 200);
+        assert_eq!(reply.body, b"project bytes");
+        assert!(reply.kind.starts_with("text/plain"), "{}", reply.kind);
+        // Just written, so the stamp cannot vouch for a same-size rewrite yet.
+        let stamp = reply.stamp.expect("a served file carries its stamp");
+        assert!(stamp.starts_with("unsettled:13:"), "{stamp}");
         let probe = project_token(&root).unwrap();
         assert_eq!(probe, token);
         revoke_project_token(&probe);
-        assert!(
-            serve(&root, &format!("/project/{token}/hello%20world.tex"))
-                .unwrap()
-                .is_ok()
+        assert_eq!(
+            route(&format!("/project/{token}/hello%20world.tex")).status,
+            200
         );
         revoke_project_token(&token);
-        assert!(
-            serve(&root, &format!("/project/{token}/hello%20world.tex"))
-                .unwrap()
-                .is_err(),
+        assert_eq!(
+            route(&format!("/project/{token}/hello%20world.tex")).status,
+            404,
             "a revoked token no longer names a root"
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_project_route_answers_a_missing_or_misspelled_name_with_404() {
+        let root = scratch("project-missing");
+        fs::write(root.join("Plot.png"), b"png").unwrap();
+        let token = project_token(&root).unwrap();
+        assert_eq!(route(&format!("/project/{token}/absent.sty")).status, 404);
+        // A case-insensitive disk must not answer TeX's `plot.png` with
+        // `Plot.png`: the frame resolves spellings from the listings.
+        assert_eq!(route(&format!("/project/{token}/plot.png")).status, 404);
+        assert_eq!(route(&format!("/project/{token}/Plot.png")).status, 200);
+        revoke_project_token(&token);
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1621,16 +1766,20 @@ mod tests {
             format!("/project/{token}/a/%2e%2e/%2e%2e/secret.tex"),
             format!("/project/{token}/%2fsecret.tex"),
             format!("/project/{token}/a%5cb.tex"),
+            format!("/project/{token}/C%3a/secret.tex"),
+            format!("/project-dir/{token}/%2e%2e"),
+            format!("/project-dir/{token}/..%2f.."),
         ] {
-            let answer = serve(&root, &path).unwrap();
-            assert!(answer.is_err(), "{path} was served: {answer:?}");
+            let reply = route(&path);
+            assert_eq!(reply.status, 404, "{path} was answered {}", reply.status);
+            assert!(reply.stamp.is_none(), "{path}");
         }
         revoke_project_token(&token);
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn the_project_route_refuses_a_link_and_an_oversized_file() {
+    fn the_project_route_refuses_a_link_and_an_oversized_file_by_name() {
         let root = scratch("project-link");
         let outside = scratch("project-link-outside");
         fs::write(outside.join("secret.tex"), b"secret").unwrap();
@@ -1645,20 +1794,68 @@ mod tests {
             std::os::windows::fs::symlink_file(outside.join("secret.tex"), root.join("linked.tex"))
                 .is_ok();
         if made {
-            let answer = serve(&root, &format!("/project/{token}/linked.tex")).unwrap();
-            assert!(answer.is_err(), "a symlink was served");
+            let reply = route(&format!("/project/{token}/linked.tex"));
+            assert_eq!(reply.status, 403, "a symlink was served");
+            assert!(String::from_utf8_lossy(&reply.body).contains("linked.tex"));
         }
 
         let large = root.join("large.bin");
         let file = fs::File::create(&large).unwrap();
         file.set_len(PROJECT_FILE_LIMIT + 1).unwrap();
         drop(file);
-        let answer = serve(&root, &format!("/project/{token}/large.bin")).unwrap();
-        assert!(answer.is_err(), "an oversized file was served");
+        let reply = route(&format!("/project/{token}/large.bin"));
+        assert_eq!(reply.status, 413, "an oversized file was served");
+        let message = String::from_utf8_lossy(&reply.body);
+        assert!(message.contains("large.bin"), "{message}");
+        assert!(!message.contains(r"\\?\"), "{message}");
 
         revoke_project_token(&token);
         let _ = fs::remove_dir_all(root);
         let _ = fs::remove_dir_all(outside);
+    }
+
+    #[test]
+    fn the_folder_route_lists_one_folder_without_descending() {
+        let root = scratch("project-dir");
+        fs::create_dir_all(root.join("figs/deep")).unwrap();
+        fs::write(root.join("main.tex"), b"main").unwrap();
+        fs::write(root.join("figs/plot.png"), b"png").unwrap();
+        fs::write(root.join("figs/deep/hidden.png"), b"png").unwrap();
+        let token = project_token(&root).unwrap();
+
+        let reply = route(&format!("/project-dir/{token}/figs"));
+        assert_eq!(reply.status, 200);
+        let mut listing: serde_json::Value = serde_json::from_slice(&reply.body).unwrap();
+        let digest = listing
+            .as_object_mut()
+            .and_then(|fields| fields.remove("digest"));
+        assert!(
+            digest
+                .as_ref()
+                .and_then(|value| value.as_str())
+                .is_some_and(|value| !value.is_empty()),
+            "a listing carries the digest of its names: {digest:?}"
+        );
+        assert_eq!(
+            listing,
+            serde_json::json!({
+                "path": "figs",
+                "entries": [["deep", true], ["plot.png", false]],
+                "complete": true,
+            })
+        );
+        let root_listing: serde_json::Value =
+            serde_json::from_slice(&route(&format!("/project-dir/{token}/")).body).unwrap();
+        assert_eq!(root_listing["path"], "");
+        assert_eq!(
+            root_listing["entries"],
+            serde_json::json!([["figs", true], ["main.tex", false]])
+        );
+        let missing: serde_json::Value =
+            serde_json::from_slice(&route(&format!("/project-dir/{token}/absent")).body).unwrap();
+        assert_eq!(missing["complete"], false);
+        revoke_project_token(&token);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
