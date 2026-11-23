@@ -16,6 +16,7 @@
 //   - project preparation: LF normalisation, non-UTF-8 detection, and how
 //     local libraries reach the frame (reserved folder, manifest, TeX Live's
 //     per-engine search order, project files first);
+//   - the XeLaTeX font family table and the `.fontspec` files made from it;
 //   - the scroll and selection mapping;
 //   - the bounded wait an export uses before it asks the frame for a PDF.
 
@@ -37,7 +38,7 @@ import {
 } from "../src/latex-backend.ts";
 import { parseFrameMessage, PROTOCOL_VERSION, textHash } from "../src/texpresso/protocol.ts";
 import { libraryIndex } from "../src/texpresso/library.ts";
-import { normaliseText, prepareProject } from "../src/texpresso/project.ts";
+import { editedFontspecs, normaliseText, prepareProject } from "../src/texpresso/project.ts";
 import { editorLineAt, editorScrollFor } from "../src/texpresso/scroll.ts";
 import {
   lineRangeAt,
@@ -639,6 +640,222 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
   );
 }
 
+// --- XeLaTeX font family names ------------------------------------------------
+{
+  // The preview's XeTeX has no fontconfig: `\setmainfont{Latin Modern Roman}`
+  // failed with "cannot be found" (2026-11-23) until the frame's copy got a
+  // generated `LatinModernRoman.fontspec`.
+  const table = JSON.parse(read("src/texpresso/font-families.json"));
+  const cachePin = config.bundle.files.find((file) => file.path.endsWith(".luatex-cache"));
+  check(
+    table.snapshot === config.snapshot &&
+      Object.keys(table.sources).length === 2 &&
+      table.sources[config.bundle.list.path] === config.bundle.list.sha256 &&
+      table.sources[cachePin?.path] === cachePin?.sha256,
+    "the font family table matches the pinned snapshot (else: node scripts/texpresso-font-families.mjs)",
+    JSON.stringify(table.sources),
+  );
+  const same = (actual, expected) => JSON.stringify(actual) === JSON.stringify(expected);
+  const four = (stem, styles) => styles.map((style) => `${stem}${style}`);
+  check(
+    same(
+      table.families.latinmodernroman,
+      four("lmroman10-", ["regular.otf", "bold.otf", "italic.otf", "bolditalic.otf"]),
+    ),
+    "Latin Modern Roman maps each style to its 10 pt design",
+    JSON.stringify(table.families.latinmodernroman),
+  );
+  check(
+    same(
+      table.families.texgyrepagella,
+      four("texgyrepagella-", ["regular.otf", "bold.otf", "italic.otf", "bolditalic.otf"]),
+    ),
+    "TeX Gyre Pagella maps to its four OpenType files",
+  );
+  check(
+    same(
+      table.families.dejavusans,
+      four("DejaVuSans", [".ttf", "-Bold.ttf", "-Oblique.ttf", "-BoldOblique.ttf"]),
+    ),
+    "DejaVu Sans maps to its TrueType files",
+  );
+  check(
+    same(table.families.latinmodernmath, ["latinmodern-math.otf", null, null, null]),
+    "a math family has its one style",
+  );
+  check(
+    table.shipped.includes("XCharter") && table.shipped.length > 100,
+    "TeX Live's own .fontspec names are listed",
+    String(table.shipped.length),
+  );
+
+  const encode = (text) => Buffer.from(text, "utf8").toString("base64");
+  const project = (main, { extra = [], manifest = [], texmf } = {}) => ({
+    mainFile: "main.tex",
+    projectToken: "font-token",
+    manifest: {
+      version: 1,
+      files: [{ path: "main.tex", size: main.length, modified: 0 }, ...manifest],
+      digest: "font-digest",
+    },
+    files: [
+      { path: "main.tex", data: encode(main), language: "latex" },
+      ...extra.map(([path, text]) => ({ path, data: encode(text), language: "latex" })),
+    ],
+    texmf,
+  });
+  const fontspecs = (snapshot, engine = "xetex") =>
+    new Map(
+      [...prepareProject(snapshot, () => null, engine, table).files]
+        .filter(([path]) => path.endsWith(".fontspec") && !path.includes("/"))
+        .map(([path, file]) => [path, file.text ?? "(bytes)"]),
+    );
+
+  const preamble = [
+    "\\documentclass{article}",
+    "\\usepackage{fontspec}",
+    "\\setmainfont{Latin Modern Roman}",
+    "\\setsansfont[Scale=MatchLowercase]{TeX Gyre Heros}",
+    "\\setmonofont{DejaVu Sans Mono}[Scale={0.9}]",
+    "\\newfontfamily\\pagella{TeX Gyre Pagella}[Numbers=OldStyle]",
+    "\\newfontface{\\termes}{TeX Gyre Termes}",
+    "\\babelfont[german]{rm}[Language=Default]{Libertinus Serif}",
+    "\\setmathfont{TeX Gyre Pagella Math}",
+    "\\setCJKfamilyfont{zhsong}{Latin Modern Sans}",
+    "% \\setmainfont{EB Garamond} is a comment",
+    "\\begin{document}x\\end{document}",
+  ].join("\n");
+  const added = fontspecs(project(preamble));
+  check(
+    same([...added.keys()].sort(), [
+      "DejaVuSansMono.fontspec",
+      "LatinModernRoman.fontspec",
+      "LatinModernSans.fontspec",
+      "LibertinusSerif.fontspec",
+      "TeXGyreHeros.fontspec",
+      "TeXGyrePagella.fontspec",
+      "TeXGyrePagellaMath.fontspec",
+      "TeXGyreTermes.fontspec",
+    ]),
+    "every font command and option position yields its family's .fontspec; a comment does not",
+    JSON.stringify([...added.keys()]),
+  );
+  const latin = added.get("LatinModernRoman.fontspec") ?? "";
+  check(
+    latin.includes("\\defaultfontfeatures[Latin Modern Roman]") &&
+      latin.includes("Extension = .otf") &&
+      latin.includes("Font = lmroman10-regular,") &&
+      latin.includes("UprightFont = lmroman10-regular,") &&
+      latin.includes("BoldFont = lmroman10-bold,") &&
+      latin.includes("ItalicFont = lmroman10-italic,") &&
+      latin.includes("BoldItalicFont = lmroman10-bolditalic}"),
+    "the generated file names the family as written and each style's file",
+    JSON.stringify(latin),
+  );
+  const math = added.get("TeXGyrePagellaMath.fontspec") ?? "";
+  check(
+    math.includes("UprightFont = texgyrepagella-math}") && !math.includes("BoldFont"),
+    "a style the family lacks is left to fontspec",
+    JSON.stringify(math),
+  );
+  // unicode-math loads script sizes with SizeFeatures = {…, Font = <name>}, and
+  // fontspec then reads only `Font` from the name's options (2026-11-23:
+  // `\setmathfont{TeX Gyre Pagella Math}` failed without it).
+  check(
+    math.includes("Font = texgyrepagella-math,"),
+    "a name loaded as one face (unicode-math's script sizes) gets its file through Font",
+  );
+  check(
+    (added.get("DejaVuSansMono.fontspec") ?? "").includes("Extension = .ttf"),
+    "a TrueType family loads with its own extension",
+  );
+
+  const skipped = fontspecs(
+    project(
+      [
+        "\\setmainfont{lmroman10-regular.otf}",
+        "\\setsansfont{TeX Gyre Heros}[Extension=.otf, UprightFont=*-regular]",
+        "\\setmonofont[Path=./fonts/]{Latin Modern Mono}",
+        "\\newfontfamily\\x{Not A TeX Live Font}",
+        "\\newfontfamily\\y{XCharter}",
+        "\\newfontfamily\\z{\\myfont}",
+        "\\setmainfont{EB Garamond}",
+        "\\setsansfont{Fira Sans}",
+      ].join("\n"),
+      {
+        extra: [["ebgaramond.fontspec", "% the reader's own"]],
+        manifest: [{ path: "FiraSans.fontspec", size: 1, modified: 0 }],
+      },
+    ),
+  );
+  check(
+    skipped.size === 1 && skipped.get("ebgaramond.fontspec") === "(bytes)",
+    "file names, file options, unknown and macro names, TeX Live's own files and the reader's are left alone",
+    JSON.stringify([...skipped.keys()]),
+  );
+
+  const library = fontspecs(
+    project("\\usepackage{house}\n", {
+      texmf: {
+        files: [
+          {
+            root: 0,
+            path: "tex/latex/house/house.sty",
+            origin: "house.sty",
+            data: encode("\\setmainfont{Libertinus Serif}\n\\setsansfont{Latin Modern Sans}"),
+          },
+          {
+            root: 0,
+            path: "tex/latex/house/LatinModernSans.fontspec",
+            origin: "LatinModernSans.fontspec",
+            data: encode("% the library's own"),
+          },
+        ],
+      },
+    }),
+  );
+  check(
+    same([...library.keys()], ["LibertinusSerif.fontspec"]),
+    "a library style's fonts are found, and a library's own .fontspec is not shadowed",
+    JSON.stringify([...library.keys()]),
+  );
+  check(
+    fontspecs(project(preamble), "luatex").size === 0 &&
+      [...prepareProject(project(preamble), () => null, "xetex").files.keys()].every(
+        (path) => !path.endsWith(".fontspec"),
+      ),
+    "LuaLaTeX, and a preview without the table, get no generated .fontspec",
+  );
+  check(
+    same([...fontspecs(project(preamble))], [...added]),
+    "the generated files are stable, so an unchanged project sends nothing new",
+  );
+
+  // A family typed live: the engine never looks again for a file it missed,
+  // so the edit's own text is scanned and the file goes first (2026-11-23).
+  const typed = editedFontspecs(
+    "chapters/one.tex",
+    String.raw`\newfontfamily\heros{TeX Gyre Heros}`,
+    ["main.tex", "LatinModernRoman.fontspec"],
+    table,
+  );
+  check(
+    same([...typed.keys()], ["TeXGyreHeros.fontspec"]) &&
+      typed.get("TeXGyreHeros.fontspec") === added.get("TeXGyreHeros.fontspec"),
+    "an edited source yields the same .fontspec the next snapshot will",
+  );
+  check(
+    editedFontspecs("refs.bib", String.raw`\setmainfont{TeX Gyre Heros}`, [], table).size === 0 &&
+      editedFontspecs(
+        "main.tex",
+        String.raw`\setmainfont{Latin Modern Roman}`,
+        ["LatinModernRoman.fontspec"],
+        table,
+      ).size === 0,
+    "an edit outside a TeX source, or to a family the frame holds, adds nothing",
+  );
+}
+
 // --- the local library index ----------------------------------------------------
 {
   const file = (root, path) => ({ root, path, origin: `r${root}:${path}`, data: "" });
@@ -939,6 +1156,30 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     const interrupted = session.exportPdf();
     session.broken = true;
     check((await interrupted) === null, "a broken session releases its waiting export");
+
+    // Generated files go ahead of the edit that names them, once.
+    const posted = [];
+    const generating = Object.assign(Object.create(TexpressoSession.prototype), {
+      info: {},
+      broken: false,
+      files: new Map(),
+      active: "main.tex",
+      project: { main: "main.tex", files: new Map(), manifest: new Map() },
+      outstanding: new Map(),
+      frame: { post: (message) => (posted.push(message), posted.length) },
+    });
+    const generated = new Map([["TeXGyreHeros.fontspec", "% generated"]]);
+    generating.putGenerated(generated);
+    generating.putGenerated(generated);
+    check(
+      posted.length === 1 &&
+        posted[0].type === "project" &&
+        posted[0].compile === false &&
+        posted[0].replace === false &&
+        posted[0].files[0]?.path === "TeXGyreHeros.fontspec",
+      "a generated file is put once, without a compile",
+      JSON.stringify(posted),
+    );
 
     // A file the worker fetched is not in the host's `files` map. A changed
     // stamp or a disappearance must therefore be an explicit remove, or the

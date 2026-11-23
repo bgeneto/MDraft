@@ -252,7 +252,13 @@ import {
   webAssemblyJspi,
   type TexpressoFallback,
 } from "./latex-backend";
-import { normaliseText, prepareProject, TexpressoSession } from "./texpresso/session";
+import {
+  editedFontspecs,
+  normaliseText,
+  prepareProject,
+  TexpressoSession,
+} from "./texpresso/session";
+import type { FontFamilies } from "./texpresso/fontspec-families";
 import type {
   ClickPrecision,
   EngineFailure,
@@ -4258,7 +4264,11 @@ async function renderLatexPreview(
       path: root.path,
       overlays: overlays.length,
     });
-    const snapshot = await api.latexProjectSnapshot(root.path, overlays);
+    const [snapshot] = await Promise.all([
+      api.latexProjectSnapshot(root.path, overlays),
+      // Any bundled engine: a document asking for pdfLaTeX compiles with XeLaTeX too.
+      engineStatus.backend === "bundled" ? loadXetexFontFamilies() : null,
+    ]);
     snapshotToken = snapshot.projectToken;
     perfMeasure("snapshot-ipc", snapshotStarted, {
       files: snapshot.files.length,
@@ -5284,6 +5294,26 @@ function texpressoPrepare(build: LatexBuildRequest): boolean {
   return true;
 }
 
+/**
+ * The TeX Live family table the XeLaTeX preview names fonts from
+ * (texpresso/fontspec-families.ts). It is loaded with the first XeLaTeX
+ * preview, not at start-up; null until then, or when its chunk failed to load.
+ */
+let xetexFontFamilies: FontFamilies | null = null;
+let xetexFontFamiliesLoad: Promise<void> | null = null;
+
+function loadXetexFontFamilies(): Promise<void> {
+  xetexFontFamiliesLoad ??= import("./texpresso/font-families.json").then(
+    (table) => {
+      xetexFontFamilies = table.default;
+    },
+    () => {
+      xetexFontFamiliesLoad = null;
+    },
+  );
+  return xetexFontFamiliesLoad;
+}
+
 /** An open tab's text for a project file, LF-normalised, or null. */
 function texpressoLiveText(directory: string, path: string): string | null {
   const session = sessions.findByPath(joinDir(directory, path));
@@ -5306,6 +5336,7 @@ function texpressoSyncSnapshot(
     snapshot,
     (path) => texpressoLiveText(directory, path),
     session.key.engine,
+    xetexFontFamilies,
   );
   if (prepared.nonUtf8) {
     texpressoFallbackTo("encoding", prepared.nonUtf8);
@@ -5883,6 +5914,9 @@ function texpressoEdit(changes: Array<[number, number, string]>, base: number, t
     return;
   }
   texpressoKey = null;
+  if (session.key.engine === "xetex" && xetexFontFamilies) {
+    session.putGenerated(editedFontspecs(file, text, session.projectNames(), xetexFontFamilies));
+  }
   preview.dataset.texpressoEdit = session.edit(file, base, changes, text);
   // PhiTeX's document-change handler paints the burst status for this transaction.
   if (session.key.backend !== "phitex" && texpressoShowing()) texpressoRefreshStatus();

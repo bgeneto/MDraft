@@ -551,9 +551,27 @@ and 1 GB, repeated on every compile. The preview turns that rebuild off (it adds
 a `luaotfload.conf` with `update-live = false` to its own copy of the project,
 unless the project has one), so a missing font now fails at once with
 fontspec's "cannot be found" error. The PhiTeX compatibility preview has no Lua
-font loader; a missing XeLaTeX font fails at the font/package lookup. Fonts that are part of TeX Live are still
-found by family name. Fonts of your own are found by file name, from a local
-library or the project.
+font loader; a missing XeLaTeX font fails at the font/package lookup. Fonts of
+your own are found by file name, from a local library or the project.
+
+Fonts that are part of TeX Live are found by family name with both engines, as
+in `\setmainfont{TeX Gyre Pagella}`. LuaLaTeX finds them through the font index
+the preview ships. The preview's XeLaTeX has no font index, so for each TeX Live
+family a document names in a fontspec command (`\setmainfont`, `\newfontfamily`,
+`\babelfont`, `\setmathfont` and the like, in the project or a local library),
+the preview adds a `<Family>.fontspec` file to its own copy of the project. That
+file names the family's files; your folder is not changed, and a `.fontspec` of
+the same name in the project, a local library or TeX Live is used instead. Some
+limits:
+
+- Each style uses the family's 10 pt design at every size, so an optical-size
+  family such as Latin Modern can differ slightly from an installed TeX, which
+  picks the design for each size.
+- A family named through a macro of your own, or in a file the project only
+  fetches on demand, is not found this way: name it by file instead
+  (`\setmainfont{lmroman10-regular.otf}`).
+- The PhiTeX compatibility preview receives the same files, but family names
+  have not been checked there.
 
 On TeXpresso, as a backstop, the preview pauses a download that would pass 100
 font files, 1,500 files or 750 MB in one session and asks whether to continue. Continue
