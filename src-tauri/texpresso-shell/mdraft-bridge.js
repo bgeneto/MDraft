@@ -1106,6 +1106,10 @@
       clickDetail = event.type === "dblclick" ? 2 : event.detail || 1;
       pendingClick = performance.now();
       if (event.type === "mousedown") {
+        // Cancel any pending editor-click blink so it cannot pulse or clear the
+        // preview selection this gesture is about to make.
+        clearTimeout(blinkTimer);
+        document.documentElement.removeAttribute("data-mdraft-blink");
         down = event.button === 0;
         dragged = false;
       }
