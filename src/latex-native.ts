@@ -140,10 +140,9 @@ export function nativeToLatex(
   return {
     pdf: decodeBase64Data(result.pdf),
     sources,
-    files: new Set([
-      ...snapshot.files.map((file) => file.path),
-      ...snapshot.manifest.files.map((file) => file.path),
-    ]),
+    // What this build read: the files the snapshot carried and those TeX
+    // opened from the folder. The folder around them is not the project.
+    files: new Set([...snapshot.files.map((file) => file.path), ...result.inputs]),
     mainFile: snapshot.mainFile,
     log: result.log,
     warnings,

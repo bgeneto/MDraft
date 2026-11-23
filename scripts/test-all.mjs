@@ -463,9 +463,11 @@ const SUITES = [
   },
   {
     // The synthetic on-demand fixture names an image through a macro, so the
-    // predictor cannot send it; the frame must fetch it from the manifest.
+    // predictor cannot send it; the frame must fetch it from the project route.
+    // A second document beside 30,000 files and a protected folder must compile
+    // without the folder being walked or written.
     id: "latex-on-demand",
-    title: "On-demand project manifest",
+    title: "On-demand project files",
     kind: "cdp",
     script: "latex-on-demand-test.mjs",
     doc: "samples/latex-on-demand/main.tex",

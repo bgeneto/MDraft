@@ -154,8 +154,11 @@ export type FrameMessage =
   | { type: "pong"; seq: number }
   /** The engine loaded a local library file in place of TeX Live's `name`. */
   | { type: "library-override"; name: string }
-  /** The engine fetched a project file the snapshot had not sent eagerly. */
-  | { type: "project-fetched"; name: string }
+  /**
+   * The engine fetched a project file the snapshot had not sent eagerly.
+   * `stamp` is the route's stamp of the bytes served, null when it sent none.
+   */
+  | { type: "project-fetched"; name: string; stamp: string | null }
   /** One line of the bridge's compile activity, for Logs. */
   | { type: "trace"; text: string };
 
@@ -319,7 +322,11 @@ export function parseFrameMessage(data: unknown): FrameMessage | null {
         : null;
     case "project-fetched":
       return str(m.name) && m.name.length > 0 && m.name.length <= 4096
-        ? { type: "project-fetched", name: m.name }
+        ? {
+            type: "project-fetched",
+            name: m.name,
+            stamp: str(m.stamp) && m.stamp.length <= 200 ? m.stamp : null,
+          }
         : null;
     case "trace":
       // Bounded: the text goes straight into the Logs panel.

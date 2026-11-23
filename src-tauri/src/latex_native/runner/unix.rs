@@ -102,7 +102,7 @@ pub(super) fn run(spec: &RunSpec, cancel: &AtomicBool) -> Result<RunOutcome, Str
         .truncate(true)
         .write(true)
         .read(true)
-        .open(spec.cwd.join("console.log"))
+        .open(spec.scratch.join("console.log"))
         .map_err(|error| format!("Cannot open the compiler output file: {error}"))?;
     let stderr = console
         .try_clone()
@@ -152,7 +152,7 @@ pub(super) fn run(spec: &RunSpec, cancel: &AtomicBool) -> Result<RunOutcome, Str
         std::thread::sleep(POLL);
     }
     let mut console_text = String::new();
-    if let Ok(mut file) = std::fs::File::open(spec.cwd.join("console.log")) {
+    if let Ok(mut file) = std::fs::File::open(spec.scratch.join("console.log")) {
         let _ = file.read_to_string(&mut console_text);
     }
     let (console_text, _) = crate::latex_native::log::bounded_log(&console_text);

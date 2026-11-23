@@ -36,6 +36,13 @@ export function editedFontspecs(
 /** The special project file the frame's worker reads for on-demand names. */
 export const PROJECT_INDEX = ".mdraft-project.json";
 
+/** Every name the listings show, as project-relative paths. */
+export function listedNames(listings: readonly api.LatexDirListing[]): string[] {
+  return listings.flatMap((listing) =>
+    listing.entries.map(([name]) => (listing.path ? `${listing.path}/${name}` : name)),
+  );
+}
+
 /** What the frame holds for one file. */
 export interface Held {
   fingerprint: string;
@@ -46,8 +53,16 @@ export interface PreparedProject {
   main: string;
   /** The capability the frame presents on its on-demand route. */
   projectToken: string;
-  /** Names, sizes and stamps the frame may fetch on demand. */
-  manifest: Map<string, { size: number; modified: number }>;
+  /** The folders the frame answers names from: path to its listing. */
+  listings: Map<string, api.LatexDirListing>;
+  /**
+   * The names the snapshot was asked to stamp (the files the frame had
+   * fetched when it was taken) and their stamps then. A fetched name whose
+   * stamp differs, or is absent, is fetched again; a name fetched after the
+   * snapshot was taken is newer than it and is left alone.
+   */
+  watched: Set<string>;
+  stamps: Map<string, string>;
   files: Map<string, { text?: string; bytes?: Uint8Array; fingerprint: string }>;
   /** A project text file that is not UTF-8, or null. */
   nonUtf8: string | null;
@@ -95,6 +110,7 @@ export function prepareProject(
   currentText: (path: string) => string | null,
   engine: TexpressoEngine,
   fontFamilies: FontFamilies | null = null,
+  watched: Iterable<string> = [],
 ): PreparedProject {
   const files: PreparedProject["files"] = new Map();
   let nonUtf8: string | null = null;
@@ -138,7 +154,7 @@ export function prepareProject(
     );
     // A name the project fetches on demand, or a local library answers, is
     // the reader's own file and is never shadowed.
-    const taken = [...files.keys(), ...snapshot.manifest.files.map((file) => file.path)];
+    const taken = [...files.keys(), ...listedNames(snapshot.listings)];
     for (const file of snapshot.texmf?.files ?? []) {
       taken.push(file.path.slice(file.path.lastIndexOf("/") + 1));
       // A library style can set the fonts too.
@@ -150,12 +166,20 @@ export function prepareProject(
       files.set(path, { text, fingerprint: textPrint(text) });
     }
   }
-  // The worker's membership table and capability. It is a project file so the
+  // The worker's folder listings and capability. It is a project file so the
   // existing put/remove/ack protocol carries it; TeX never asks for the name.
+  // It changes only when a listed folder gains or loses a name.
   const project = JSON.stringify({
-    version: 1,
+    version: 2,
     token: snapshot.projectToken,
-    names: snapshot.manifest.files.map((file) => file.path),
+    dirs: Object.fromEntries(
+      snapshot.listings.map((listing) => [
+        listing.path,
+        // The digest makes a partial listing change when its folder does,
+        // which is what clears the worker's remembered misses.
+        { entries: listing.entries, complete: listing.complete, digest: listing.digest },
+      ]),
+    ),
   });
   files.set(PROJECT_INDEX, { text: project, fingerprint: textPrint(project) });
   const library = libraryIndex(snapshot.texmf, engine, new Set(files.keys()));
@@ -172,12 +196,9 @@ export function prepareProject(
   return {
     main: snapshot.mainFile,
     projectToken: snapshot.projectToken,
-    manifest: new Map(
-      snapshot.manifest.files.map((file) => [
-        file.path,
-        { size: file.size, modified: file.modified },
-      ]),
-    ),
+    listings: new Map(snapshot.listings.map((listing) => [listing.path, listing])),
+    watched: new Set(watched),
+    stamps: new Map(Object.entries(snapshot.stamps ?? {})),
     files,
     nonUtf8,
     libraryConflict,
