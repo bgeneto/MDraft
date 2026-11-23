@@ -622,8 +622,15 @@ the pinned one with six anchored edits:
 - after `retcon_trail: the arena is full` the worker reports the failure
   instead of restarting from scratch. The retry stopped at the same page every
   time, and while it ran the frame's process held the first engine's memory as
-  well: on a 452-page book, 11.1 GB at peak instead of 7.4 GB. Out of memory at
-  the heap cap still retries once.
+  well: on the 0.2 build's 452-page run, 11.1 GB at peak instead of 7.4 GB. Out
+  of memory at the heap cap still retries once.
+
+Since MDraft 0.9.8, the pinned build also fixes the old long-document stop on drawings and plots:
+upstream reports it, and a 592-page `infdesc` project reached its final page
+(576 pages in the preview's counter) in about 90 s under XeLaTeX in the public
+editor, where the 0.2 build stopped near page 452. The 4 GiB heap cap is
+unchanged; the engine retains less memory and answers completion queries from
+logs. MDraft's release validation repeats the run through its own frame.
 
 A new release means re-anchoring the edits, re-pinning, and uploading under its
 own `engine/<appRelease>/` keys. The bundle list `tt2026/v4.lst` names the same

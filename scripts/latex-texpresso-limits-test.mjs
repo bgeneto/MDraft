@@ -153,9 +153,8 @@ try {
     JSON.stringify(fontRows.slice(0, 3)),
   );
   // Every glyph of the fixture is in a virtual font, the formula included.
-  // Measured on 2026-11-17: release-0-133-g454f1bc drew 0 inked pixels, the
-  // VF-capable release-0.2-13-g6a91b6a 1,039 (anti-aliased, mean channel
-  // below 200).
+  // The VF-capable build measured 1,039 inked pixels on 2026-11-17
+  // (anti-aliased, mean channel below 200); the assertion is a floor.
   const ink = await frameEval(`(() => {
     const canvas = document.querySelector("#pages .page canvas");
     if (!canvas) return -1;
