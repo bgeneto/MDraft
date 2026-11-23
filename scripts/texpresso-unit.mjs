@@ -45,7 +45,7 @@ import {
   markForPreviewGesture,
   projectRelativePath,
 } from "../src/texpresso/selection.ts";
-import { waitUntil } from "../src/texpresso/wait.ts";
+import { waitUntil, whileAnswering } from "../src/texpresso/wait.ts";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const read = (path) => readFileSync(join(root, path), "utf8");
@@ -233,6 +233,7 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     { v: 1, type: "error", seq: 6, message: "boom" },
     { v: 1, type: "error", message: "boom" },
     { v: 1, type: "disposed", seq: 7 },
+    { v: 1, type: "pong", seq: 8 },
     { v: 1, type: "library-override", name: "size10.clo" },
     { v: 1, type: "trace", text: "compile asked" },
   ];
@@ -274,6 +275,8 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     { v: 1, type: "library-override", name: 7 },
     { v: 1, type: "trace", text: 7 },
     { v: 1, type: "trace", text: "x".repeat(501) },
+    { v: 1, type: "pong" },
+    { v: 1, type: "pong", seq: "8" },
     { v: 1, type: "unknown" },
   ];
   for (const message of invalid) {
@@ -1101,6 +1104,90 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     "the wait is bounded",
     `gave up at ${c.state.now} ms after ${c.state.sleeps} sleeps`,
   );
+
+  // The export's liveness wait: the work is a reply the test settles by hand,
+  // and an "answer" is a ping the fake frame returns.
+  const deferred = () => {
+    let resolve;
+    const promise = new Promise((done) => (resolve = done));
+    return { promise, resolve };
+  };
+
+  c = clock();
+  let asked = 0;
+  let work = deferred();
+  check(
+    JSON.stringify(
+      await whileAnswering(
+        work.promise,
+        () => 0,
+        () => (asked += 1),
+        30_000,
+        never,
+        c.now,
+        c.sleep,
+        2000,
+      ),
+    ) === JSON.stringify({ silent: 30_000 }) && asked === 15,
+    "a frame that answers nothing is silent after the budget, pinged all along",
+    `${asked} pings, now ${c.state.now}`,
+  );
+
+  c = clock();
+  work = deferred();
+  let heard = 0;
+  const answering = whileAnswering(
+    work.promise,
+    () => heard,
+    () => {
+      heard = c.state.now;
+      // The reply lands after a minute of answers: twice the silence budget.
+      if (c.state.now >= 60_000) work.resolve("pdf");
+    },
+    30_000,
+    never,
+    c.now,
+    c.sleep,
+    2000,
+  );
+  check(
+    (await answering)?.value === "pdf" && c.state.now >= 60_000,
+    "a frame that keeps answering is waited for past the silence budget",
+    `reply at ${c.state.now} ms`,
+  );
+
+  c = clock();
+  work = deferred();
+  work.resolve("pdf");
+  check(
+    (
+      await whileAnswering(
+        work.promise,
+        () => -1e9,
+        () => {},
+        1,
+        never,
+        c.now,
+        c.sleep,
+      )
+    )?.value === "pdf",
+    "a reply that has arrived wins over silence",
+  );
+
+  c = clock();
+  work = deferred();
+  check(
+    (await whileAnswering(
+      work.promise,
+      c.now,
+      () => {},
+      30_000,
+      () => c.state.sleeps >= 2,
+      c.now,
+      c.sleep,
+    )) === null,
+    "a broken session ends the liveness wait without a verdict",
+  );
 }
 
 // Exercise the session's real export method with a fake frame, without a DOM.
@@ -1125,12 +1212,19 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
   const previousWindow = globalThis.window;
   globalThis.window = { setTimeout };
   try {
+    let pings = 0;
     const session = Object.assign(Object.create(TexpressoSession.prototype), {
+      key: { backend: "texpresso" },
       exports: 0,
+      heardAt: 0,
       busy: true,
       broken: false,
       outstanding: new Map([[1, {}]]),
       whenReady: async () => true,
+      post: (message) => {
+        if (message.type === "ping") pings += 1;
+        return 1;
+      },
     });
     let requests = 0;
     session.request = async () => {
@@ -1156,6 +1250,46 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
     const interrupted = session.exportPdf();
     session.broken = true;
     check((await interrupted) === null, "a broken session releases its waiting export");
+
+    // While the export waits, the frame is pinged. One that answers nothing is
+    // frozen; one that answers is waited for however long the export takes.
+    session.broken = false;
+    session.busy = false;
+    const reply = (byte, ms) => () =>
+      new Promise((resolve) =>
+        setTimeout(() => resolve({ type: "pdf", pdf: new Uint8Array([byte]).buffer, ms: 1 }), ms),
+      );
+    pings = 0;
+    session.request = () => new Promise(() => {});
+    const frozen = await session.exportPdf(10_000, 150, 10);
+    check(
+      frozen?.frozen >= 150 && frozen.pdf === undefined && pings >= 5,
+      "a frame that stops answering ends its export as frozen",
+      `${JSON.stringify(frozen)} after ${pings} pings`,
+    );
+    pings = 0;
+    const post = session.post;
+    session.post = (message) => {
+      session.heardAt = performance.now();
+      return post(message);
+    };
+    session.request = reply(2, 400);
+    const slow = await session.exportPdf(10_000, 150, 10);
+    check(
+      slow?.pdf?.[0] === 2 && pings >= 5,
+      "a frame that answers is waited for past the silence budget",
+      `${pings} pings`,
+    );
+    pings = 0;
+    session.post = post;
+    session.key = { backend: "phitex" };
+    session.request = reply(3, 300);
+    const phitex = await session.exportPdf(10_000, 50, 10);
+    check(
+      phitex?.pdf?.[0] === 3 && pings === 0,
+      "PhiTeX's frame, which has no ping, keeps the request's own budget",
+      `${pings} pings`,
+    );
 
     // Generated files go ahead of the edit that names them, once.
     const posted = [];

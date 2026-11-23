@@ -20,7 +20,7 @@ import {
   type TexpressoProblem,
   type TexpressoTheme,
 } from "./protocol";
-import { waitUntil } from "./wait";
+import { waitUntil, whileAnswering } from "./wait";
 
 /** An edit or a project sync not acknowledged in this long starts the recovery. */
 const ACK_BUDGET_MS = 4000;
@@ -32,6 +32,23 @@ const WATCHDOG_TICK_MS = 1000;
  * first canvas, then 75 attempts of 4 s), so this never gives up before it.
  */
 const TYPESET_BUDGET_MS = 360_000;
+/** While an export waits, the frame is asked to answer this often. */
+const PING_EVERY_MS = 2000;
+/**
+ * A frame that answers nothing for this long while an export waits is
+ * blocked. The engine runs in a worker, so a live frame answers within
+ * milliseconds however long the typesetting takes. A 106-page book whose
+ * `\setmainfont` names a missing font blocked its frame's main thread for good
+ * 6 s into the export (measured 2026-11-23); the request's own budget only
+ * gave up after 360 s.
+ */
+const FROZEN_AFTER_MS = 30_000;
+
+/** What `TexpressoSession.exportPdf` returns besides null. */
+export type TexpressoExport =
+  | { pdf: Uint8Array; ms: number; failure: EngineFailure | null }
+  /** The frame answered nothing for `frozen` ms while the export waited. */
+  | { frozen: number };
 
 export interface TexpressoProjectKey {
   rootPath: string;
@@ -92,6 +109,8 @@ export class TexpressoSession {
   private queued: Array<() => void> = [];
   /** The latest export asked for; an older one still waiting gives way to it. */
   private exports = 0;
+  /** When the current frame last sent anything. */
+  private heardAt = 0;
   broken = false;
 
   constructor(
@@ -362,10 +381,16 @@ export class TexpressoSession {
    * a long document, and an engine that runs out of memory restarts once before
    * it gives up (a 592-page book under LuaLaTeX: 158 s), and that failure is
    * what this export must report.
+   *
+   * A frame that stops answering is another matter: it is pinged while the
+   * export waits, every `pingMs`, and `frozen` comes back after `frozenMs` of
+   * silence.
    */
   async exportPdf(
     ms = TYPESET_BUDGET_MS,
-  ): Promise<{ pdf: Uint8Array; ms: number; failure: EngineFailure | null } | null> {
+    frozenMs = FROZEN_AFTER_MS,
+    pingMs = PING_EVERY_MS,
+  ): Promise<TexpressoExport | null> {
     // The first build reaches here while the frame is still booting, and before
     // it has typeset a page: an export asked then finds nothing and nothing
     // asks again. Every render during a long first compile waits here too, so
@@ -373,13 +398,34 @@ export class TexpressoSession {
     const mine = ++this.exports;
     if (!(await this.whenReady())) return null;
     if (!(await this.whenTypeset(TYPESET_BUDGET_MS, () => mine !== this.exports))) return null;
-    const reply = await this.request({ type: "export" }, ms);
+    const pending = this.request({ type: "export" }, ms);
+    // PhiTeX's shell has no `ping`, so its export keeps the request's budget.
+    if (this.key.backend !== "texpresso") return this.exported(await pending);
+    // Silence before the export is an idle frame, not a blocked one.
+    const started = performance.now();
+    const outcome = await whileAnswering(
+      pending,
+      () => Math.max(this.heardAt, started),
+      () => this.post({ type: "ping" }),
+      frozenMs,
+      () => this.broken,
+      () => performance.now(),
+      (tick) => new Promise((resolve) => window.setTimeout(resolve, tick)),
+      pingMs,
+    );
+    if (!outcome) return null;
+    if ("silent" in outcome) return { frozen: outcome.silent };
+    return this.exported(outcome.value);
+  }
+
+  private exported(reply: FrameMessage | null): TexpressoExport | null {
     if (!reply || reply.type !== "pdf") return null;
     return { pdf: new Uint8Array(reply.pdf), ms: reply.ms, failure: reply.failure ?? null };
   }
 
   private receive(frame: TexpressoFrame, message: FrameMessage): void {
     if (frame !== this.frame || this.broken) return;
+    this.heardAt = performance.now();
     switch (message.type) {
       case "ack": {
         const sent = this.outstanding.get(message.seq);

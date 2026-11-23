@@ -1370,6 +1370,11 @@
         post({ type: "error", seq: message.seq, message: String(error?.message ?? error) });
       }
     },
+    // The host's liveness check while it waits for an export: an answer from
+    // this thread, whatever the engine's worker is doing.
+    ping(message) {
+      post({ type: "pong", seq: message.seq });
+    },
     dispose(message) {
       // The project held copies of the reader's files; the next start deletes
       // the database too (mdraft-boot.js), this removes them now.

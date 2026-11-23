@@ -21,7 +21,11 @@
 //      and the partial PDF is drawn with PDF.js; an edit then starts no build,
 //      because every build of that project would stop at the same place;
 //   4. Compile starts a new frame and reads "PDF ready" again, and edits build
-//      again.
+//      again;
+//   5. a frame whose main thread blocks during the export (forced there for
+//      120 s; the real case is a long document set in nullfont) ends the
+//      export within about 30 s: the status names it, Logs says what to do,
+//      the frame is released, edits wait, and Compile exports in a new frame.
 
 import { openPage, sleep } from "./cdp-page.mjs";
 
@@ -307,6 +311,105 @@ try {
     `/PDF ready/.test(document.querySelector(".compiled-toolbar")?.innerText ?? "")`,
     120_000,
     "the build of the restored text",
+  );
+
+  console.log("=== a frame that stops answering ===");
+  // A 106-page book whose \setmainfont names a missing font blocks the frame's
+  // main thread for good, 6 s into the export (measured 2026-11-23). This
+  // blocks it at the same point for 120 s, so the layer needs no long
+  // document. The frame is the one Compile started above.
+  frame.close?.();
+  frame = await openPage(port, { type: "iframe", match: /mdraft-tex\.localhost/ });
+  const blocking = await frameEval(`(() => {
+    const t = globalThis.texpresso;
+    t.exportPdf = function () {
+      setTimeout(() => {
+        const end = performance.now() + 120000;
+        while (performance.now() < end);
+      }, 0);
+      return new Promise(() => {});
+    };
+    return true;
+  })()`);
+  check(blocking, "the frame's export can be made to block its main thread");
+  const liveSession = await dataset("texpressoSession");
+  const askedAt = Date.now();
+  await compile();
+  const unresponsive = await waitFor(
+    `/could not be prepared/.test(document.querySelector(".compiled-toolbar")?.innerText ?? "")`,
+    60_000,
+    "the verdict on the blocked frame",
+  );
+  const verdictSeconds = (Date.now() - askedAt) / 1000;
+  const verdictText = await toolbar();
+  check(
+    unresponsive && verdictSeconds < 50 && /stopped responding/.test(verdictText),
+    "a frame that stops answering ends the export, within about 30 s, naming the cause",
+    `${verdictSeconds.toFixed(1)} s · ${verdictText}`,
+  );
+  check(
+    await waitFor(
+      `document.querySelectorAll("iframe.texpresso-frame").length === 0`,
+      10_000,
+      "the blocked frame's release",
+    ),
+    "the blocked frame is released",
+  );
+  const frozenRows = (await logRows()).filter((row) => /stopped responding/.test(row));
+  check(
+    frozenRows.some((row) => /Fix the errors, then select Compile/.test(row)),
+    "Logs says the preview stopped responding and what to do",
+    JSON.stringify(frozenRows.slice(0, 1)),
+  );
+  check(
+    !(await saveEnabled()) &&
+      !(await menuEnabled("export.pdf")) &&
+      !(await menuEnabled("file.print")),
+    "Save PDF, Export › PDF and Print are off without a PDF",
+  );
+  await editor(
+    `view.dispatch({ changes: { from: view.state.doc.length, insert: ${JSON.stringify(EDIT)} } });`,
+  );
+  edited = true;
+  // Longer than auto-compile's debounce.
+  await sleep(4000);
+  const heldFrozen = await evaluate(
+    `JSON.stringify({ toolbar: (document.querySelector(".compiled-toolbar")?.innerText ?? "").replace(/\\s+/g, " "), busy: Boolean(document.querySelector(".compiled-toolbar .compiled-compile.latex-cancel")), frames: document.querySelectorAll("iframe.texpresso-frame").length })`,
+  ).then(JSON.parse);
+  check(
+    !heldFrozen.busy &&
+      heldFrozen.frames === 0 &&
+      /Out of date/.test(heldFrozen.toolbar) &&
+      /stopped responding/.test(heldFrozen.toolbar),
+    "an edit after that verdict starts no frame, and the status says why",
+    JSON.stringify(heldFrozen),
+  );
+  await undoEdit();
+  await compile();
+  // The released frame's process outlives it by about 11 s, and a frame
+  // mounted meanwhile is placed in it, still blocked. This Compile comes
+  // about 8 s after the verdict, so it waits first.
+  check(
+    await waitFor(
+      `/Closing the preview that stopped responding/.test(document.querySelector(".compiled-toolbar")?.innerText ?? "") && document.querySelectorAll("iframe.texpresso-frame").length === 0`,
+      5_000,
+      "the wait for the blocked frame's process",
+    ),
+    "a Compile soon after the verdict waits for the blocked frame's process to end",
+    await toolbar(),
+  );
+  check(
+    await waitFor(
+      `/PDF ready/.test(document.querySelector(".compiled-toolbar")?.innerText ?? "")`,
+      120_000,
+      "a finished build after the blocked frame",
+    ),
+    "Compile starts a new frame that exports again",
+    await toolbar(),
+  );
+  check(
+    (await dataset("texpressoSession")) !== liveSession,
+    "the build after the blocked frame ran in a new frame",
   );
 } finally {
   if (edited) await undoEdit().catch(() => {});

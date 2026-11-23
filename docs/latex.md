@@ -146,6 +146,17 @@ every build would start again from page 1 and stop at the same place.
 an installed distribution is chosen, edits build again. An [installed TeX
 distribution](#installed-tex-distributions) has no such limit.
 
+The preview can also stop responding while it prepares the PDF. With XeLaTeX, a
+`\setmainfont` that names a font MDraft cannot find sets the text without a
+font; on a 106-page book the preview then blocked for good about 6 seconds into
+the export, using a full processor core. MDraft asks the preview every 2
+seconds whether it is still there. After 30 seconds without an answer it closes
+the preview, labels the result **PDF could not be prepared**, and lists the
+errors the preview reported, such as the missing font, in Logs; Save PDF, Export › PDF and Print stay off. Edits then wait
+for **Compile**, as after running out of memory. The preview's process outlives
+it by about 11 seconds, so a Compile in the first 15 seconds shows "Closing the
+preview that stopped responding…" before it starts a new preview.
+
 The preview shows whether its result is out of date and whether LaTeX is
 preparing, resolving packages, compiling, or rendering the PDF. **Compile**
 starts a build immediately; **Cancel** stops the active compiler. A package

@@ -60,6 +60,12 @@ export type HostMessage =
   | { type: "zoom"; factor: number }
   | { type: "theme"; theme: TexpressoTheme }
   | { type: "export" }
+  /**
+   * Answered with `pong` from the frame's main thread. The engine runs in a
+   * worker, so a frame that does not answer is blocked, not busy. A frame
+   * older than this message never answers.
+   */
+  | { type: "ping" }
   | { type: "dispose" };
 
 /**
@@ -145,6 +151,7 @@ export type FrameMessage =
   | { type: "pdf"; seq: number; pdf: ArrayBuffer; ms: number; failure?: EngineFailure }
   | { type: "error"; seq?: number; message: string }
   | { type: "disposed"; seq: number }
+  | { type: "pong"; seq: number }
   /** The engine loaded a local library file in place of TeX Live's `name`. */
   | { type: "library-override"; name: string }
   /** The engine fetched a project file the snapshot had not sent eagerly. */
@@ -304,6 +311,8 @@ export function parseFrameMessage(data: unknown): FrameMessage | null {
         : null;
     case "disposed":
       return int(m.seq) ? { type: "disposed", seq: m.seq } : null;
+    case "pong":
+      return int(m.seq) ? { type: "pong", seq: m.seq } : null;
     case "library-override":
       return str(m.name) && m.name.length > 0 && m.name.length <= 1024
         ? { type: "library-override", name: m.name }
