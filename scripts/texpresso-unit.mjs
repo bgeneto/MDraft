@@ -27,12 +27,14 @@ import ts from "typescript";
 
 import {
   BUNDLED_TEXLIVE_YEAR,
+  ENCODING_FALLBACK_PREFIX,
   encodingFallbackActionLabel,
   engineFailureHolds,
   engineFailureText,
   latexPreviewBackend,
   previewEngineFor,
   selectLatexPreviewBackend,
+  splitLinkedText,
   texpressoEngineFor,
   texpressoFallback,
   texpressoFallbackText,
@@ -180,6 +182,35 @@ const config = JSON.parse(read("src-tauri/texpresso.json"));
   check(
     encodingFallbackActionLabel(null, true) === null,
     "no encoding fallback action is offered without a named file",
+  );
+  const splitToolbar = splitLinkedText(
+    encodingSentence,
+    "chapters/one.tex",
+    ENCODING_FALLBACK_PREFIX.length,
+  );
+  check(
+    splitToolbar?.before === ENCODING_FALLBACK_PREFIX &&
+      splitToolbar.link === "chapters/one.tex" &&
+      splitToolbar.after.startsWith(" is not"),
+    "the encoding fallback splits cleanly around the linked filename for the toolbar",
+  );
+  const centerPrefix = "Preview unavailable: ";
+  const collidingSentence = texpressoFallbackText("encoding", { file: "the" });
+  const splitColliding = splitLinkedText(
+    `${centerPrefix}${collidingSentence}.`,
+    "the",
+    centerPrefix.length + ENCODING_FALLBACK_PREFIX.length,
+  );
+  check(
+    splitColliding?.before === `${centerPrefix}${ENCODING_FALLBACK_PREFIX}` &&
+      splitColliding.link === "the" &&
+      splitColliding.after.startsWith(" is not"),
+    "an explicit offset links the filename rather than an earlier matching word",
+  );
+  check(
+    splitLinkedText(encodingSentence, "missing.tex") === null &&
+      splitLinkedText(encodingSentence, "") === null,
+    "splitLinkedText returns null when the filename is empty or absent",
   );
 }
 

@@ -6033,6 +6033,36 @@ label.optional-tools-row:hover {
 .compiled-engine {
   font-variant-numeric: tabular-nums;
 }
+/* Inline filename link inside preview status and empty-pane messages. Overrides
+   `.compiled-toolbar button` so the toolbar link stays inline with its text,
+   and opts back into pointer events inside `.preview-pending`. */
+.preview-file-link,
+.compiled-toolbar .preview-file-link {
+  display: inline;
+  min-height: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: normal;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.preview-file-link:hover,
+.compiled-toolbar .preview-file-link:hover {
+  background: none;
+  opacity: 0.82;
+}
+.preview-file-link:focus-visible,
+.compiled-toolbar .preview-file-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
 .compiled-notice {
   margin-top: 6px;
 }

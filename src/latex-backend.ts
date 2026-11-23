@@ -138,6 +138,9 @@ export function texpressoFallback(input: TexpressoInputs): TexpressoFallback | n
   return null;
 }
 
+/** Prefix before the filename in the encoding fallback sentence. */
+export const ENCODING_FALLBACK_PREFIX = "the preview reads UTF-8 only; ";
+
 /** The reader's sentence for a build the incremental preview cannot draw. */
 export function texpressoFallbackText(
   reason: TexpressoFallback,
@@ -153,12 +156,34 @@ export function texpressoFallbackText(
     case "lua":
       return "the compatibility preview does not run LuaLaTeX; use an installed TeX distribution for this document";
     case "encoding":
-      return `the preview reads UTF-8 only; ${detail.file ?? "a project file"} is not — use File › Encoding and Line Endings… to convert it`;
+      return `${ENCODING_FALLBACK_PREFIX}${detail.file ?? "a project file"} is not — use File › Encoding and Line Endings… to convert it`;
     case "library":
       return `${detail.file ?? "a project file"} is inside .mdraft-texmf, the folder name MDraft reserves for local libraries; rename it`;
     case "failed":
       return "the preview stopped responding and its restart failed";
   }
+}
+
+/**
+ * Split a message around an inline linked filename. Prefers an explicit `index`
+ * when valid so a short filename cannot match an earlier word in the sentence.
+ */
+export function splitLinkedText(
+  text: string,
+  needle: string,
+  index?: number,
+): { before: string; link: string; after: string } | null {
+  if (!needle) return null;
+  const at =
+    index !== undefined && index >= 0 && text.startsWith(needle, index)
+      ? index
+      : text.indexOf(needle);
+  if (at < 0) return null;
+  return {
+    before: text.slice(0, at),
+    link: needle,
+    after: text.slice(at + needle.length),
+  };
 }
 
 /**

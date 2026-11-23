@@ -1,9 +1,48 @@
 //! Application chrome for both compiled formats. Rendered documents never own it.
+import { splitLinkedText } from "./latex-backend";
+
+export interface CompiledStatusLink {
+  /** Exact substring to render as an inline button link. */
+  text: string;
+  /** Optional starting offset when `text` could appear earlier in the sentence. */
+  index?: number;
+  title?: string;
+  run: () => void;
+}
+
 export interface CompiledStatus {
   label: string;
   severity: "neutral" | "success" | "warning" | "error";
   detail?: string;
+  detailLink?: CompiledStatusLink;
   engine?: string;
+}
+
+/**
+ * Render `text` into `target`, turning `link.text` into an inline button when
+ * present. Uses text nodes only so arbitrary filenames cannot inject markup.
+ */
+export function renderLinkedText(
+  target: HTMLElement,
+  text: string,
+  link?: CompiledStatusLink,
+): void {
+  const parts = link ? splitLinkedText(text, link.text, link.index) : null;
+  if (!parts || !link) {
+    target.textContent = text;
+    return;
+  }
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "preview-file-link";
+  button.textContent = parts.link;
+  if (link.title) button.title = link.title;
+  button.addEventListener("click", link.run);
+  target.replaceChildren(
+    document.createTextNode(parts.before),
+    button,
+    document.createTextNode(parts.after),
+  );
 }
 
 type Icon =
@@ -434,8 +473,9 @@ export class CompiledPreviewUi {
         this.icon(severity === "success" ? "ready" : severity === "neutral" ? "clock" : severity),
       );
     this.stateLabel.textContent = state?.label ?? label;
-    this.stateDetail.textContent = state?.detail ?? details.join(" · ");
-    this.stateDetail.hidden = !this.stateDetail.textContent;
+    const detailText = state?.detail ?? details.join(" · ");
+    renderLinkedText(this.stateDetail, detailText, state?.detailLink);
+    this.stateDetail.hidden = !detailText;
     this.engine.textContent = state?.engine ?? "";
     this.engine.hidden = !this.engine.textContent;
     this.busy = busy;

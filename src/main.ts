@@ -28,7 +28,12 @@ import { installEditorContextMenu, titleCase, type ReadingMenuState } from "./co
 import { createReadAloud, type ReadAloudHandle, type ReadingState } from "./read-aloud";
 import { createSystemSpeech, needsSystemSpeech } from "./system-speech";
 import { readClipboardData, writeClipboardText } from "./clipboard";
-import { CompiledPreviewUi, type CompiledStatus } from "./compiled-preview-ui";
+import {
+  CompiledPreviewUi,
+  renderLinkedText,
+  type CompiledStatus,
+  type CompiledStatusLink,
+} from "./compiled-preview-ui";
 import { createDocumentLifecycle } from "./document-lifecycle";
 import { showDocumentStatistics, type DocumentStatistics } from "./statistics-dialog";
 import { showEncodingDialog, type DeclarationEdit } from "./encoding-dialog";
@@ -241,6 +246,7 @@ import { projectLatexOutline, type ProjectHeading } from "./latex-outline";
 import { nativeSources, nativeToLatex } from "./latex-native";
 import {
   BUNDLED_TEXLIVE_YEAR,
+  ENCODING_FALLBACK_PREFIX,
   encodingFallbackActionLabel,
   engineFailureHolds,
   engineFailureText,
@@ -2422,7 +2428,11 @@ function clearPending(): void {
  * until the reader acts. `action` is the one control that helps, if any; the
  * surface otherwise lets pointer events through to the pane.
  */
-function showPendingIdle(message: string, action?: { label: string; run: () => void }): void {
+function showPendingIdle(
+  message: string,
+  action?: { label: string; run: () => void },
+  link?: CompiledStatusLink,
+): void {
   const entry = pending;
   if (!entry) return;
   if (!entry.node) showPending(entry);
@@ -2432,7 +2442,7 @@ function showPendingIdle(message: string, action?: { label: string; run: () => v
   entry.tick = 0;
   entry.node.dataset.state = "idle";
   const phase = entry.node.querySelector<HTMLElement>(".preview-pending-phase");
-  if (phase) phase.textContent = message;
+  if (phase) renderLinkedText(phase, message, link);
   const elapsed = entry.node.querySelector<HTMLElement>(".preview-pending-elapsed");
   if (elapsed) elapsed.textContent = "";
   entry.node.querySelector(".preview-pending-action")?.remove();
@@ -5210,6 +5220,21 @@ function texpressoFallbackAction(
   return undefined;
 }
 
+function texpressoFallbackFileLink(
+  reason: TexpressoFallback,
+  file: string | null,
+  directory: string | null,
+): CompiledStatusLink | undefined {
+  if (reason !== "encoding" || !file || !directory || !projectRelative(file)) return undefined;
+  const targetPath = joinDir(directory, file);
+  return {
+    text: file,
+    index: ENCODING_FALLBACK_PREFIX.length,
+    title: `Open ${file} in the editor`,
+    run: () => void openProjectFileInEditor(targetPath),
+  };
+}
+
 /**
  * Stop the frame and say why. There is no silent third engine: the pane keeps
  * the reader's document and the status line names the reason.
@@ -5224,6 +5249,7 @@ function texpressoFallbackTo(
   texpressoChip();
   latexInFlight = false;
   const why = texpressoFallbackText(reason, { file });
+  const fileLink = texpressoFallbackFileLink(reason, file, directory);
   // The reason must travel as `detail`: `status()` shows `state.label` and
   // `state.detail`, so putting the explanation only in the message produced a
   // bare "Preview" warning.
@@ -5231,16 +5257,22 @@ function texpressoFallbackTo(
     label: "Preview unavailable",
     severity: "warning",
     detail: why,
+    detailLink: fileLink,
   });
   // The frame was the pane's content; with it gone the pane is empty unless a
   // PDF or a note sits in `#preview`. The reason belongs in the middle of the
   // pane then, not only in the toolbar, and a broken frame or non-UTF-8 file
   // offers its fix.
   if (doc.language === "latex" && settings.viewMode !== "source" && paneBlank()) {
+    const prefix = "Preview unavailable: ";
     armPending({ immediate: true });
     showPendingIdle(
-      `Preview unavailable: ${why}.`,
+      `${prefix}${why}.`,
       texpressoFallbackAction(reason, file, directory),
+      fileLink && {
+        ...fileLink,
+        index: fileLink.index !== undefined ? prefix.length + fileLink.index : undefined,
+      },
     );
   }
   syncMenuState(false);
@@ -5380,6 +5412,13 @@ function texpressoSyncSnapshot(
     watched,
   );
   if (prepared.nonUtf8) {
+    // Remember the project's declared files so opening an included chapter from
+    // the fallback link keeps it attached to this main document.
+    setLatexProject({
+      rootId: build.root.id,
+      rootDirectory: directory,
+      files: new Set(snapshot.files.map((file) => file.path)),
+    });
     texpressoFallbackTo("encoding", prepared.nonUtf8, directory);
     return false;
   }
@@ -8385,6 +8424,16 @@ function openEncodingDialog(
       focusEditor: () => editor.focus(),
     },
   );
+}
+
+/** Open or activate `targetPath` in the editor and focus it. */
+async function openProjectFileInEditor(targetPath: string): Promise<void> {
+  if (doc.path && pathKey(doc.path) === pathKey(targetPath)) {
+    editor.focus();
+    return;
+  }
+  const opened = await openPath(targetPath, { rememberRecent: false });
+  if (opened && doc.id === opened.id) editor.focus();
 }
 
 let openingEncodingTarget = false;
