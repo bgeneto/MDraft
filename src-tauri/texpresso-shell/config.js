@@ -28,10 +28,10 @@ const config = {
             title: 'TeX Live 2026',
             files: data('files/'),
             list: data('tt2026/v4.lst'),
-            deps: data('tt2026/v3-36c268c2b4d8b963.deps'),
-            format: data('tt2026/v3-3f7cdba0ab1f1379.fmt'),
-            luatexFormat: data('tt2026/v4-ae556f6e119c85f7.luatex.fmt'),
-            luatexCache: data('tt2026/v3-33a89a90d6d9c9e4.luatex-cache.tar'),
+            deps: data('tt2026/v4-36c268c2b4d8b963.deps'),
+            format: data('tt2026/v4-3f7cdba0ab1f1379.fmt'),
+            luatexFormat: data('tt2026/v4-b42902fcd930a839.luatex.fmt'),
+            luatexCache: data('tt2026/v4-33a89a90d6d9c9e4.luatex-cache'),
         },
     },
     defaultBundle: 'tt2026',
@@ -66,7 +66,7 @@ const config = {
     // page left there brings the projects of its browser (import.html);
     // null for none
     movedFrom: null,
-    version: 'release-0.2-13-g6a91b6a',
+    version: 'log-based-completion-2-ga271257',
 };
 
 const resolve = url => new URL(url, import.meta.url).href;

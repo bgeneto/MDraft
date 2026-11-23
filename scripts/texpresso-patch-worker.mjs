@@ -38,30 +38,30 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const UPSTREAM = {
-  release: "release-0.2-13-g6a91b6a",
-  bytes: 234715,
-  sha256: "f30c189f6e88e951605eb2920b1a146e5aa02f83c0087df1a397140574c88630",
+  release: "log-based-completion-2-ga271257",
+  bytes: 235346,
+  sha256: "0e840408510145e0299343320492e12d2bfc0fe62b7002f3c19dc221fe362fc0",
 };
 
-// Names inside the host table builder `ak2(u2,l10,c11)`: `c11` the session (0
+// Names inside the host table builder `al2(u2,l10,c11)`: `c11` the session (0
 // for the export's xdvipdfmx), `l10` the bundle index (`l10[1]` its table),
-// `h10` the project probe, `d11` the pending bytes, `bs` the project table,
-// `M2` the bundle files already loaded, `hD` the names the hook already
-// missed; `cS`/`ah` table find, `ar` table member, `k` the `Some` tag, `bU` a
+// `h10` the project probe, `d11` the pending bytes, `bt` the project table,
+// `M2` the bundle files already loaded, `hF` the names the hook already
+// missed; `cU`/`aj` table find, `ar` table member, `k` the `Some` tag, `bV` a
 // hit by candidate index, `o`/`n` a JS string to and from an OCaml one. The
 // `md*` locals avoid every name the surrounding minified code uses.
 const EDITS = [
   {
     what: "the project hook: a name the manifest holds is always asked",
-    from: "var g10=bD(function(a13){return 1-ar(hD,a13)},e0(c12)),a11=qF(0);",
+    from: "var g10=bm(function(a13){return 1-ar(hF,a13)},e1(c12)),a11=qI(0);",
     to:
-      "var g10=bD(function(a13){var mdH=globalThis.__mdraftProjectHas;" +
-      "return 1-ar(hD,a13)||(mdH&&mdH(n(a13))?1:0)},e0(c12)),a11=qF(0);",
+      "var g10=bm(function(a13){var mdH=globalThis.__mdraftProjectHas;" +
+      "return 1-ar(hF,a13)||(mdH&&mdH(n(a13))?1:0)},e1(c12)),a11=qI(0);",
   },
   {
     what: "exact lookup: the libraries after the project and manifest, before the bundle",
-    from: "function e11(a13){for(a13=0;;){if(a13===f11)a13=0;else{var b12=ah(M2,",
-    to: "function e11(a13){var mdV=mdLib(c12,f11);if(mdV)return mdV;for(a13=0;;){if(a13===f11)a13=0;else{var b12=ah(M2,",
+    from: "function e11(a13){for(a13=0;;){if(a13===f11)a13=0;else{var b12=aj(M2,",
+    to: "function e11(a13){var mdV=mdLib(c12,f11);if(mdV)return mdV;for(a13=0;;){if(a13===f11)a13=0;else{var b12=aj(M2,",
   },
   {
     // `mdLib` answers a library file from the project table, where MDraft
@@ -72,42 +72,43 @@ const EDITS = [
     // exact match still wins, as it does for TeX. TeX's own lookups have a
     // session and are unchanged.
     what: "the export's lookup: the engine's case-insensitive fallback",
-    from: "return[481420544,function(a11,b11){d11[1]=0;var c12=ac2(a11,b11),f11=c12.length-1;",
+    from: "return[481420544,function(a11,b11){d11[1]=0;var c12=ad2(a11,b11),f11=c12.length-1;",
     to:
       "function mdLib(mdC,mdF){var mdG=globalThis.__mdraftTexmfLookup;if(!mdG)return 0;" +
       "for(var mdI=0;mdI<mdF;mdI++){var mdN=mdC[mdI+1],mdP=mdG(n(mdN));if(!mdP)continue;" +
-      "var mdH=cS(bs,o(mdP));if(!mdH)continue;" +
+      "var mdH=cU(bt,o(mdP));if(!mdH)continue;" +
       "if(l10&&ar(l10[1],mdN)&&globalThis.__mdraftTexmfOverride)globalThis.__mdraftTexmfOverride(n(mdN));" +
-      "d11[1]=[k,mdH[1]];return[bU,mdI]}return 0}" +
+      "d11[1]=[k,mdH[1]];return[bV,mdI]}return 0}" +
       "function mdQ(mdC){var mdQh=globalThis.__mdraftProjectHas,mdQt=globalThis.__mdraftTexmfLookup;" +
       "for(var mdI=1;mdI<mdC.length;mdI++){var mdN=mdC[mdI],mdS=n(mdN);" +
       "if(h10(mdN)||mdQh&&mdQh(mdS)||mdQt&&mdQt(mdS)||ah(M2,mdN)||l10&&ar(l10[1],mdN))return 0}return 1}" +
       "var mdNC;" +
       "return[481420544,function(a11,b11){" +
-      "if(!c11&&mdNC&&mdQ(ac2(a11,b11))){var mdS=mdNC(a11,b11);if(mdS){a11=mdS[1];b11=[0]}}" +
-      "d11[1]=0;var c12=ac2(a11,b11),f11=c12.length-1;",
+      "if(!c11&&mdNC&&mdQ(ad2(a11,b11))){var mdS=mdNC(a11,b11);if(mdS){a11=mdS[1];b11=[0]}}" +
+      "d11[1]=0;var c12=ad2(a11,b11),f11=c12.length-1;",
   },
   {
     what: "the case-insensitive lookup, named for the export's fallback",
-    from: "},function(a11,b11){a11=eZ(X2,ac2(a11,b11)),b11=ag(ad,16);",
-    to: "},mdNC=function(a11,b11){a11=eZ(X2,ac2(a11,b11)),b11=ag(ad,16);",
+    from: "},function(a11,b11){a11=e0(X2,ad2(a11,b11)),b11=ah(ae,16);",
+    to: "},mdNC=function(a11,b11){a11=e0(X2,ad2(a11,b11)),b11=ah(ae,16);",
   },
   {
     what: "case-insensitive lookup: project, then manifest, then libraries",
-    from: "if(c12)return[k,c12[1]];if(c12=af2[1],c12)",
+    from: "if(c12)return[k,c12[1]];if(c12=ag2[1],c12)",
     to:
       "if(!c12){var mdJ=globalThis.__mdraftProjectHasNocase;" +
       "if(mdJ)for(var mdI=1;mdI<a11.length;mdI++){var mdN=mdJ(n(a11[mdI]));if(mdN){c12=[k,o(mdN)];break}}}" +
       "if(!c12){var mdL=globalThis.__mdraftTexmfLookupNocase;" +
       "if(mdL)for(var mdI=1;mdI<a11.length;mdI++){var mdN=mdL(n(a11[mdI]));if(mdN){c12=[k,o(mdN)];break}}}" +
-      "if(c12)return[k,c12[1]];if(c12=af2[1],c12)",
+      "if(c12)return[k,c12[1]];if(c12=ag2[1],c12)",
   },
   {
     // Names inside the engine's failure handler: `B2` the queue of the
     // engine's last console lines (`[length, first cell]`, a cell is
     // `[0, line, next]`), `a22` the `^retcon_trail: (out of memory|the arena is
-    // full)` pattern, `O2` true on the run that is already the retry, `cR` the
-    // worker's log, `I2(1, …)` the restart from scratch.
+    // full)` pattern, `O2` true on the run that is already the retry, `cT` the
+    // worker's log, `I2(1, …)` the restart from scratch, `sa` the restart
+    // message.
     //
     // The trail arena is a fixed build setting, so the retry after it fills
     // stops at the same page (every run measured on infdesc, both engines).
@@ -118,17 +119,17 @@ const EDITS = [
     // still retries once.
     what: "no restart from scratch after the trail arena fills",
     from:
-      "for(p11=0,m11=B2[2];m11;){var q11=m11[2],m11=m11[1];p11||(p11=a8(a22,m11)),m11=q11}" +
-      'if(m11=1048576,m11=w3[0]&i?kW(w3[1],"heapLength",[0])/m11|0:w3[1].HEAPU8.length/m11|0,' +
-      "p11&&!O2)return cR(j(t(r8),m11)),I2(1,b11,c11,d11);",
+      "for(p11=0,m11=B2[2];m11;){var v4=m11[2],m11=m11[1];p11||(p11=a8(a22,m11)),m11=v4}" +
+      'if(m11=1048576,m11=w3[0]&i?kY(w3[1],"heapLength",[0])/m11|0:w3[1].HEAPU8.length/m11|0,' +
+      "p11&&!O2)return cT(j(t(sa),m11)),I2(1,b11,c11,d11);",
     to:
       "var mdArena=0;" +
-      "for(p11=0,m11=B2[2];m11;){var q11=m11[2],m11=m11[1];p11||(p11=a8(a22,m11))," +
-      "mdArena||(mdArena=/^retcon_trail: the arena is full/.test(m11)?1:0),m11=q11}" +
-      'if(m11=1048576,m11=w3[0]&i?kW(w3[1],"heapLength",[0])/m11|0:w3[1].HEAPU8.length/m11|0,' +
-      "p11&&!O2&&(!mdArena||(cR(" +
+      "for(p11=0,m11=B2[2];m11;){var v4=m11[2],m11=m11[1];p11||(p11=a8(a22,m11))," +
+      "mdArena||(mdArena=/^retcon_trail: the arena is full/.test(m11)?1:0),m11=v4}" +
+      'if(m11=1048576,m11=w3[0]&i?kY(w3[1],"heapLength",[0])/m11|0:w3[1].HEAPU8.length/m11|0,' +
+      "p11&&!O2&&(!mdArena||(cT(" +
       '"Worker: the trail arena is full; a restart from scratch would stop at the same page"' +
-      "),0)))return cR(j(t(r8),m11)),I2(1,b11,c11,d11);",
+      "),0)))return cT(j(t(sa),m11)),I2(1,b11,c11,d11);",
   },
 ];
 

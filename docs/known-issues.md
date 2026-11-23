@@ -49,11 +49,19 @@ themes.
 
 ## Long documents stop part-way in the bundled preview
 
-**Status:** Cause confirmed; limit belongs to the engine build
-**Reported:** 2026-11-17 · Windows 11, TeXpresso `release-0-133-g454f1bc`; remeasured on `release-0.2-13-g6a91b6a`
+**Status:** fixed in the pinned 2026-11-20 TeXpresso build; earlier builds still stop
+**Reported:** 2026-11-17 · Windows 11, TeXpresso `release-0-133-g454f1bc`; remeasured on `release-0.2-13-g6a91b6a`; fixed in `log-based-completion-2-ga271257`
 **Area:** Bundled LaTeX preview (TeXpresso), XeLaTeX and LuaLaTeX
 
-The preview engine keeps snapshots and a rollback record for fast edits inside
+The pinned 2026-11-20 build removes the stop: upstream reports the fix for
+long documents with many drawings or plots, and a 592-page `infdesc` project
+reached its final page (576 pages in the preview's counter) in about 90 s under
+XeLaTeX in the public editor. The 4 GiB heap cap is unchanged; the engine
+retains less memory and answers completion queries from logs. MDraft's release
+validates the same run through its own frame.
+
+The paragraphs below describe the earlier builds. The preview engine keeps
+snapshots and a rollback record for fast edits inside
 its WebAssembly memory, and both are bounded. A 592-page textbook stopped at
 page 218 (XeLaTeX) and 204 (LuaLaTeX) on the 2 GiB engines of
 `release-0-133-g454f1bc`, and at about page 452 and 428 on the 4 GiB engines of
