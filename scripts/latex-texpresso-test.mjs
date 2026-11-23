@@ -1398,6 +1398,18 @@ async function fullSuite() {
     "the dropdown lists Compile and Recompile from scratch",
     JSON.stringify(options),
   );
+  const modes = await evaluate(
+    `JSON.stringify([...document.querySelectorAll(".compiled-compile-menu [role=menuitemradio]")].map(n=>({label:n.querySelector(".editor-menu-label")?.textContent,checked:n.getAttribute("aria-checked")})))`,
+  ).then(JSON.parse);
+  check(
+    JSON.stringify(modes) ===
+      JSON.stringify([
+        { label: "Auto-compile", checked: "true" },
+        { label: "Manual compile", checked: "false" },
+      ]),
+    "the dropdown lists Auto-compile and Manual compile modes",
+    JSON.stringify(modes),
+  );
   check(
     (await evaluate(
       `document.querySelector(${JSON.stringify(more)}).getAttribute("aria-expanded")`,
@@ -1560,25 +1572,29 @@ async function fullSuite() {
         /\b3\b/.test(liveStrip.total),
       JSON.stringify(liveStrip),
     );
-    await evaluate(`document.querySelector('.compiled-pages [aria-label="Last page"]').click()`);
+    await evaluate(
+      `document.querySelector('.compiled-pages [aria-label="Next page"]').dispatchEvent(new MouseEvent('click',{bubbles:true,shiftKey:true}))`,
+    );
     await sleep(1500);
     const lastPage = {
       field: (await hostPageStrip())?.value,
       top: await frameEval(`document.getElementById("pages")?.scrollTop ?? 0`),
     };
     check(
-      "Last page moves the live frame and the page field",
+      "Shift+click Next page jumps to the last page",
       lastPage.top > 0 && lastPage.field === "3",
       JSON.stringify(lastPage),
     );
-    await evaluate(`document.querySelector('.compiled-pages [aria-label="First page"]').click()`);
+    await evaluate(
+      `document.querySelector('.compiled-pages [aria-label="Previous page"]').dispatchEvent(new MouseEvent('click',{bubbles:true,shiftKey:true}))`,
+    );
     await sleep(1500);
     const firstPage = {
       field: (await hostPageStrip())?.value,
       top: await frameEval(`document.getElementById("pages")?.scrollTop ?? 0`),
     };
     check(
-      "First page returns the live frame to the top",
+      "Shift+click Previous page returns the live frame to the top",
       firstPage.top < 2 && firstPage.field === "1",
       JSON.stringify(firstPage),
     );

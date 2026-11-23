@@ -3536,7 +3536,6 @@ function rebindLatexPreview(
   setLatexStatus(`Up to date · ${result.engine ?? "LaTeX"}${warnings}`, {
     label: "PDF ready",
     severity: result.warnings.length ? "warning" : "success",
-    detail: compiledUi.issueSummary,
     engine: `${result.engine ?? "LaTeX"} · ${seconds} s`,
   });
   syncMenuState(false);
@@ -3942,12 +3941,7 @@ async function latexFailure(
     {
       label: shownPartial ? "PDF with errors" : typstPdf ? "Build failed" : "No PDF produced",
       severity: "error",
-      detail: [
-        typstPdf && !shownPartial ? "Showing previous PDF" : "",
-        compiledUi.issueSummary || "See Logs",
-      ]
-        .filter(Boolean)
-        .join(" · "),
+      detail: typstPdf && !shownPartial ? "Showing previous PDF" : undefined,
       engine: build ? `${build.engine} · ${(build.elapsedMs / 1000).toFixed(1)} s` : undefined,
     },
   );
@@ -4545,7 +4539,6 @@ async function renderLatexPreview(
       {
         label: clean ? "Recompiled from scratch" : "PDF ready",
         severity: result.warnings.length ? "warning" : "success",
-        detail: compiledUi.issueSummary,
         engine: `${result.engine ?? "LaTeX"} · ${((result.elapsedMs ?? performance.now() - started) / 1000).toFixed(1)} s${result.passes ? ` · ${result.passes} pass${result.passes === 1 ? "" : "es"}` : ""}`,
       },
     );
@@ -5644,11 +5637,7 @@ async function texpressoFrozen(
   setLatexStatus("The PDF could not be prepared: the preview stopped responding.", {
     label: "PDF could not be prepared",
     severity: "error",
-    detail: [
-      "The preview stopped responding",
-      typstPdf ? "Showing previous PDF" : "",
-      compiledUi.issueSummary || "See Logs",
-    ]
+    detail: ["The preview stopped responding", typstPdf ? "Showing previous PDF" : ""]
       .filter(Boolean)
       .join(" · "),
     engine: `${engine} · ${(elapsedMs / 1000).toFixed(1)} s`,
@@ -5748,7 +5737,6 @@ function commitLatexShadow(
     {
       label: clean ? "Recompiled from scratch" : "PDF ready",
       severity: result.warnings.length ? "warning" : "success",
-      detail: compiledUi.issueSummary,
       engine: `${result.engine ?? "LaTeX"} · ${seconds} s`,
     },
   );
@@ -6099,6 +6087,9 @@ function texpressoEdit(changes: Array<[number, number, string]>, base: number, t
 function texpressoSyncSelection(): boolean {
   const session = texpresso;
   if (!session || !texpressoShowing()) return false;
+  // A selection restored from a preview gesture must not clear or overwrite the
+  // highlight that gesture just painted in the frame.
+  if (caretCameFromPreview) return true;
   const file = projectRelativePath(session.rootDirectory, doc.path, pathKey);
   if (file === null) return true;
   const info = editor.cursorInfo();
@@ -6195,16 +6186,25 @@ async function texpressoSourceGesture(
     suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
     editor.revealOffset(range.from);
   }
-  editor.focus();
-  // A caret placed from the preview must not move the preview.
+  // Focus and selection restoration belong to the preview gesture itself: they
+  // must neither move the preview nor clear the highlight it just painted.
   caretCameFromPreview = true;
   try {
+    editor.focus();
     editor.view.dispatch({
       selection:
         mark.caret === null ? { anchor: held.anchor, head: held.head } : { anchor: mark.caret },
     });
   } finally {
     caretCameFromPreview = false;
+  }
+  // A double-click can switch tabs (clearing the frame's selection during
+  // `displayDoc`) or race with the first press's caret lookup, and PhiTeX's
+  // double-click paints no mark of its own: assert the word mark in the frame.
+  if (mark.unit === "range" && detail >= 2) {
+    session.post({ type: "select", file, from: range.from, to: range.to, blink: false });
+  } else if (session.key.backend === "phitex" && mark.unit !== "range") {
+    session.post({ type: "clear" });
   }
 }
 
@@ -6444,9 +6444,7 @@ function showTypstFailure(error: unknown, wanted: string): void {
     {
       label: hadOutput ? "Build failed" : "No output produced",
       severity: "error",
-      detail: [hadOutput ? "Showing previous output" : "", compiledUi.issueSummary]
-        .filter(Boolean)
-        .join(" · "),
+      detail: hadOutput ? "Showing previous output" : undefined,
       engine: "Typst",
     },
   );
@@ -6714,7 +6712,6 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
       {
         label: "Document ready",
         severity: rendered.warnings.length ? "warning" : "success",
-        detail: compiledUi.issueSummary,
         engine: `Typst · ${((performance.now() - started) / 1000).toFixed(1)} s`,
       },
     );
@@ -6806,7 +6803,6 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     {
       label: "PDF ready",
       severity: rendered.warnings.length ? "warning" : "success",
-      detail: compiledUi.issueSummary,
       engine: `Typst · ${((performance.now() - started) / 1000).toFixed(1)} s`,
     },
   );
@@ -6938,7 +6934,6 @@ function showTypstChrome(rendered: api.RenderedTypst, seconds: string): void {
     {
       label: pages ? "PDF ready" : "Document ready",
       severity: rendered.warnings.length ? "warning" : "success",
-      detail: compiledUi.issueSummary,
       engine: `Typst · ${seconds} s`,
     },
   );

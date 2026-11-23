@@ -655,9 +655,15 @@ async function openFixtureAndConfigure(page, fixture, mode) {
   await page.evaluate(
     `(async () => {
       const invoke = window.__TAURI_INTERNALS__.invoke;
-      const auto = document.querySelector(".compiled-auto input");
-      if (auto && !auto.checked) {
-        auto.click();
+      const more = document.querySelector(".compiled-compile-more");
+      if (more && !more.disabled) {
+        more.click();
+        const auto = document.querySelector('.compiled-compile-menu [data-compile-mode="auto"]');
+        if (auto && auto.getAttribute("aria-checked") !== "true") {
+          auto.click();
+        } else {
+          more.click();
+        }
       }
       await invoke("plugin:event|emit", { event: "menu", payload: ${JSON.stringify(menuMode)} });
     })()`,
