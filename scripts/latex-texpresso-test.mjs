@@ -1333,7 +1333,9 @@ async function fullSuite() {
     "an independent project mounts and exports on its first open",
   );
   const parentSession = await sessionCount();
-  await openFile(bookPath);
+  // The chapter, not the main file: it has no `% !TeX root`, so it must find
+  // the book again although another project was built since.
+  await openFile("samples/latex-perf/book/chapters/ch06.tex");
   check(
     await waitFor(
       `${exportCurrent} && ${pageField}?.value === "${readingPage}" &&
@@ -1359,8 +1361,8 @@ async function fullSuite() {
     ),
     "the first edit starts one frame and preserves the reading page",
   );
+  // The sections below run against the chapter tab opened above.
   await attachFrame();
-  await openFile("samples/latex-perf/book/chapters/ch06.tex");
 
   console.log("=== recompile from scratch ===");
   const more = ".compiled-toolbar .compiled-compile-more";

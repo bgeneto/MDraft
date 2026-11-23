@@ -2287,7 +2287,7 @@ function restorePreview(): boolean {
     // The project this tab belongs to, as of its own last build. Another
     // project compiled meanwhile moved both; the tab's own root comes back.
     latexPreview = slot.latex;
-    latexProject = latexProjectOf(slot.latex);
+    setLatexProject(latexProjectOf(slot.latex));
     latexNavigationRoot = slot.latex.rootId;
   }
   previewOwner = slot.owner;
@@ -2786,6 +2786,39 @@ interface LatexProjectRecord {
   files: ReadonlySet<string>;
 }
 let latexProject: LatexProjectRecord | null = null;
+
+/**
+ * The projects built recently, newest last, one per main document. A chapter
+ * with no `% !TeX root` finds its main document here when the reader compiled
+ * another project since: `latexProject` holds only the latest one, and a
+ * return to such a chapter used to say "No main document for this file."
+ */
+const latexKnownProjects = new Map<string, LatexProjectRecord>();
+const LATEX_KNOWN_PROJECTS = 8;
+
+function setLatexProject(record: LatexProjectRecord): void {
+  latexProject = record;
+  latexKnownProjects.delete(record.rootId);
+  latexKnownProjects.set(record.rootId, record);
+  while (latexKnownProjects.size > LATEX_KNOWN_PROJECTS) {
+    latexKnownProjects.delete(latexKnownProjects.keys().next().value as string);
+  }
+}
+
+/** The newest remembered project whose last build read `path`, with its open root. */
+function knownLatexProjectOf(path: string): { record: LatexProjectRecord; root: Session } | null {
+  for (const record of [...latexKnownProjects.values()].reverse()) {
+    if (!latexProjectFile(record, path)) continue;
+    const root = sessions.byId(record.rootId);
+    // A closed main document cannot be compiled from its id; forget it.
+    if (!root?.path || !root.directory) {
+      latexKnownProjects.delete(record.rootId);
+      continue;
+    }
+    return { record, root };
+  }
+  return null;
+}
 
 function latexProjectOf(value: LatexPreview): LatexProjectRecord {
   return { rootId: value.rootId, rootDirectory: value.rootDirectory, files: value.result.files };
@@ -4411,7 +4444,7 @@ async function renderLatexPreview(
     latexPartial = null;
     delete preview.dataset.latexPartial;
     latexPreview = value;
-    latexProject = latexProjectOf(value);
+    setLatexProject(latexProjectOf(value));
     latexShownToken = token;
     const restorePage = !typstPdf && rememberedPage !== undefined;
     commitPdfHost(host, view, token);
@@ -4624,6 +4657,15 @@ async function resolveLatexBuild(
       ? sessions.findByPath(latexProblemRoot!.path)
       : undefined;
     root = pinned?.path ? pinned : undefined;
+  }
+  if (!root) {
+    // Another project was built since this chapter's: its own project is
+    // still remembered, and it becomes the pin again.
+    const known = knownLatexProjectOf(doc.path);
+    if (known) {
+      root = known.root;
+      latexProject = known.record;
+    }
   }
   // The main document (GAP-034): a `% !TeX root` comment wins, then a file with
   // its own \documentclass, then the pinned project; a lone chapter is told how
@@ -5275,7 +5317,7 @@ function texpressoSyncSnapshot(
   }
   session.sync(prepared, projectRelativePath(directory, doc.path, pathKey));
   const files = new Set([...snapshot.files.map((file) => file.path), ...session.projectFetched]);
-  latexProject = { rootId: build.root.id, rootDirectory: directory, files };
+  setLatexProject({ rootId: build.root.id, rootDirectory: directory, files });
   texpressoOwner = projectOwner(
     build.root,
     [...files].map((file) => pathKey(joinDir(directory, file))),
@@ -5458,7 +5500,7 @@ function commitLatexShadow(
   const result = value.result;
   const root = sessions.byId(value.rootId);
   latexPreview = value;
-  latexProject = latexProjectOf(value);
+  setLatexProject(latexProjectOf(value));
   latexShownToken = value.token;
   latexShadowKey = key;
   latexPartial = null;
@@ -5718,7 +5760,10 @@ function texpressoMessage(session: TexpressoSession, message: FrameMessage): voi
       };
       if (previewOwner === owner) previewOwner = texpressoOwner;
       if (latexProject?.rootId === owner.rootId) {
-        latexProject = { ...latexProject, files: new Set([...latexProject.files, message.name]) };
+        setLatexProject({
+          ...latexProject,
+          files: new Set([...latexProject.files, message.name]),
+        });
       }
       break;
     }
