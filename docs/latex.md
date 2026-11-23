@@ -376,10 +376,13 @@ library file.
 
 What a library may contain: classes, packages, `.def`/`.cfg`/`.fd` files and
 package data under `tex/`, Lua modules under `scripts/` or `tex/`, BibTeX styles
-and databases under `bibtex/`, and fonts under `fonts/` loaded **by file name**
+and databases under `bibtex/`, and OpenType/TrueType fonts under
+`fonts/opentype/` and `fonts/truetype/` loaded **by file name**
 (`\setmainfont{MyFont.otf}`). Not captured: `doc/`, `source/`, `web2c/`, `bin/`,
-hidden files, links and junctions, executables, `texmf.cnf`, format dumps and
-compiled Lua. Font *family* names of private fonts are not registered.
+legacy TeX font trees (`fonts/tfm/`, `fonts/vf/`, `fonts/type1/`, `fonts/enc/`,
+`fonts/map/`, `fonts/afm/`), hidden files, links and junctions, executables,
+`texmf.cnf`, format dumps and compiled Lua. Font *family* names of private fonts
+are not registered.
 
 How each engine sees them — you set no `TEXMFHOME` or `TEXINPUTS` yourself:
 
