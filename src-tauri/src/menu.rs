@@ -881,6 +881,29 @@ static LAST_MENU_STATE: Mutex<Option<MenuState>> = Mutex::new(None);
 /// The latest open-tab list, so a rebuild keeps Navigate › Open Tabs populated.
 static OPEN_TABS: Mutex<Vec<OpenTabItem>> = Mutex::new(Vec::new());
 
+/// Exit (Quit on Linux and macOS) is a frontend command, not muda's predefined
+/// Quit, because the predefined item never asks the window to close: on Windows
+/// it posts `WM_QUIT` and the event loop simply ends, on macOS it sends
+/// `terminate:`, and GTK cannot run it at all. Either way the unsaved-changes
+/// guard never saw it. The frontend closes the window instead, so Exit passes
+/// through the same guard as Close Window.
+const QUIT_ID: &str = "file.quit";
+#[cfg(windows)]
+const QUIT_LABEL: &str = "Exit";
+#[cfg(target_os = "macos")]
+const QUIT_LABEL: &str = "Quit MDraft";
+#[cfg(not(any(windows, target_os = "macos")))]
+const QUIT_LABEL: &str = "Quit";
+/// Windows has no Exit shortcut by convention; Alt+F4 belongs to Close Window.
+#[cfg(windows)]
+const QUIT_ACCELERATOR: Option<&str> = None;
+#[cfg(not(windows))]
+const QUIT_ACCELERATOR: Option<&str> = Some("CmdOrCtrl+Q");
+
+/// Close Window on Linux, where GTK draws the predefined item disabled.
+#[cfg(not(any(windows, target_os = "macos")))]
+const CLOSE_WINDOW_ID: &str = "file.closeWindow";
+
 pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result<Menu<R>> {
     // The menu is rebuilt whenever the export formats change, so the registry is
     // reset here; appending would accumulate duplicates.
@@ -1076,13 +1099,18 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
         .separator()
         .item(&item("file.close", "Close Tab", Some("CmdOrCtrl+W"))?)
         .item(&close_tabs)
-        .item(&item("file.closeFolder", "Close Folder", None)?)
-        // The predefined label is a bare "Close", which reads as a sibling of
-        // Close Tab; name the window so the three close scopes are distinct.
-        .item(&PredefinedMenuItem::close_window(
-            app,
-            Some("Close Window"),
-        )?);
+        .item(&item("file.closeFolder", "Close Folder", None)?);
+    // The predefined label is a bare "Close", which reads as a sibling of
+    // Close Tab; name the window so the three close scopes are distinct. GTK
+    // cannot run the predefined item and draws it disabled, so Linux gets the
+    // frontend command, which closes the window the same way.
+    #[cfg(any(windows, target_os = "macos"))]
+    let file = file.item(&PredefinedMenuItem::close_window(
+        app,
+        Some("Close Window"),
+    )?);
+    #[cfg(not(any(windows, target_os = "macos")))]
+    let file = file.item(&item(CLOSE_WINDOW_ID, "Close Window", None)?);
 
     // Preferences is a File-menu command on Windows and Linux; macOS keeps its
     // own application-menu item. The id and the CmdOrCtrl+, accelerator do not
@@ -1095,7 +1123,7 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
             "Preferences…",
             Some("CmdOrCtrl+,"),
         )?)
-        .item(&PredefinedMenuItem::quit(app, None)?);
+        .item(&item(QUIT_ID, QUIT_LABEL, QUIT_ACCELERATOR)?);
     let file = file.build()?;
 
     // ---- Edit -------------------------------------------------------------
@@ -1579,28 +1607,28 @@ pub fn build<R: Runtime>(app: &AppHandle<R>, state: &MenuState) -> tauri::Result
     // ---- Assemble ---------------------------------------------------------
     let mut items: Vec<&dyn IsMenuItem<R>> = Vec::with_capacity(9);
 
-    // macOS expects a leading application submenu.
+    // macOS expects a leading application submenu. It is bound at this level
+    // because `items` borrows it until the menu is built.
     #[cfg(target_os = "macos")]
-    let app_menu = {
-        let submenu = SubmenuBuilder::new(app, "MDraft")
-            .item(&PredefinedMenuItem::about(app, None, None)?)
-            .separator()
-            .item(&item(
-                "file.preferences",
-                "Preferences…",
-                Some("CmdOrCtrl+,"),
-            )?)
-            .separator()
-            .item(&PredefinedMenuItem::services(app, None)?)
-            .separator()
-            .item(&PredefinedMenuItem::hide(app, None)?)
-            .item(&PredefinedMenuItem::hide_others(app, None)?)
-            .item(&PredefinedMenuItem::show_all(app, None)?)
-            .separator()
-            .item(&PredefinedMenuItem::quit(app, None)?)
-            .build()?;
-        items.push(&submenu);
-    };
+    let app_menu = SubmenuBuilder::new(app, "MDraft")
+        .item(&PredefinedMenuItem::about(app, None, None)?)
+        .separator()
+        .item(&item(
+            "file.preferences",
+            "Preferences…",
+            Some("CmdOrCtrl+,"),
+        )?)
+        .separator()
+        .item(&PredefinedMenuItem::services(app, None)?)
+        .separator()
+        .item(&PredefinedMenuItem::hide(app, None)?)
+        .item(&PredefinedMenuItem::hide_others(app, None)?)
+        .item(&PredefinedMenuItem::show_all(app, None)?)
+        .separator()
+        .item(&item(QUIT_ID, QUIT_LABEL, QUIT_ACCELERATOR)?)
+        .build()?;
+    #[cfg(target_os = "macos")]
+    items.push(&app_menu);
 
     items.push(&file);
     items.push(&edit);

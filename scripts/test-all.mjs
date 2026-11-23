@@ -968,7 +968,8 @@ const SUITES = [
     id: "menu",
     // The approved information architecture, its context-sensitive labels and
     // enabled states, the Preferences deep links, Paste without Formatting, the
-    // zoom-only reset and both Close All Tabs routes. It opens other document
+    // zoom-only reset, both Close All Tabs routes and Exit's unsaved-changes
+    // guard. It opens other document
     // types and writes temporary files, so it owns its instance.
     title: "Menu structure and availability",
     kind: "cdp",
