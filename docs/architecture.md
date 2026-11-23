@@ -62,18 +62,24 @@ explicitly selected native distributions: TeXpresso where JSPI exists, and the
 single-threaded PhiTeX compatibility engine on Linux WebKitGTK without it. Both
 run in a separate frame served by Rust from the application origin; downloaded
 engine bytes are pinned by SHA-256, and PhiTeX's frame keeps `connect-src
-'self'` while Rust fetches its package packs. The TeXpresso frame's bounded
-project manifest lets the engine fetch a file it actually opens through a
-per-frame capability on the same origin, without predicting every package's file
-names; PhiTeX receives the bounded project snapshot directly. The live LaTeX frame paints pages independently of the complete PDF used for
+'self'` while Rust fetches its package packs. The TeXpresso frame holds
+listings of the folders builds looked in and fetches a file it actually opens
+through a per-frame capability on the same origin, without predicting every
+package's file names and without listing the project; PhiTeX receives the
+bounded project snapshot directly. Nothing in the compile path lists a folder
+recursively: a build depends on the files it read and the folders it looked in,
+which the next snapshot checks file by file. The live LaTeX frame paints pages independently of the complete PDF used for
 export and print. A tab return validates the project identity and snapshot
 before mounting a frame. An exact cache hit restores the PDF at the reading
 page, or keeps the already current live frame for the same project. A different
-or edited project starts a frame when it has work. Native builds copy
-that manifest into a session workspace, reuse its auxiliary files and caches,
-and decide another pass or a bibliography tool from the generated file state. Project files are copied, never
-hard-linked. Shell escape and project executables remain disabled. Native tools
-are external programs running with the user's permissions.
+or edited project starts a frame when it has work. Native builds run TeX in
+the document's folder and write every output to a session workspace
+(`-output-directory`); unsaved buffers go to an overlay searched first, and the
+engine's recorder file is the build's dependency list. They reuse the
+workspace's auxiliary files and caches, and decide another pass or a
+bibliography tool from the generated file state. Nothing is written into the
+project folder. Shell escape and project executables remain disabled. Native
+tools are external programs running with the user's permissions.
 
 ## Preferences and external work
 
