@@ -321,6 +321,43 @@ try {
       "the main-document line",
     ),
   );
+  const mainRow = await evaluate(`(() => {
+    const item = document.querySelector("#sidebar-body .explorer-item.main-document");
+    return JSON.stringify(
+      item
+        ? {
+            name: item.querySelector(".name")?.textContent,
+            hasIcon: !!item.querySelector(".icon .explorer-main-icon"),
+            title: item.title,
+            ariaLabel: item.getAttribute("aria-label"),
+          }
+        : null,
+    );
+  })()`).then(JSON.parse);
+  check(
+    "the main document row replaces its bullet with the main icon and announces itself",
+    mainRow?.name === "main.tex" &&
+      mainRow.hasIcon === true &&
+      /\(Main document\)$/.test(mainRow.title ?? "") &&
+      mainRow.ariaLabel === "main.tex (Main document)",
+    JSON.stringify(mainRow),
+  );
+  await evaluate(`(() => {
+    const item = document.querySelector("#sidebar-body .explorer-item.main-document");
+    item.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 40, clientY: 80 }));
+  })()`);
+  const mainMenuItems = await evaluate(
+    `JSON.stringify([...document.querySelectorAll(".explorer-menu .favorite-menu-item")].map((b) => b.textContent))`,
+  ).then(JSON.parse);
+  check(
+    "the main document row menu toggles to Clear Main Document",
+    mainMenuItems.includes("Clear Main Document") &&
+      !mainMenuItems.includes("Set as Main Document"),
+    JSON.stringify(mainMenuItems),
+  );
+  await evaluate(
+    `document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }))`,
+  );
   const chosen = await evaluate(
     `window.__TAURI_INTERNALS__.invoke("get_settings").then(JSON.stringify)`,
   ).then(JSON.parse);
@@ -333,9 +370,9 @@ try {
   check(
     "Clear forgets the main document",
     await waitFor(
-      `!document.querySelector("#sidebar-body .explorer-main")`,
+      `!document.querySelector("#sidebar-body .explorer-main") && !document.querySelector("#sidebar-body .explorer-item.main-document")`,
       5000,
-      "the line to go",
+      "the line and row marker to go",
     ),
   );
 

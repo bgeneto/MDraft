@@ -196,6 +196,34 @@ function element<K extends keyof HTMLElementTagNameMap>(
   return node;
 }
 
+/**
+ * Monochrome concentric-dot mark for the folder's main LaTeX document.
+ * Replaces the regular `•` bullet so the compilation root stands out without
+ * colliding with the Favorites star or implying top-of-list pinning.
+ */
+function mainDocumentIcon(): SVGSVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  svg.classList.add("explorer-main-icon");
+  const ring = document.createElementNS(ns, "circle");
+  ring.setAttribute("cx", "8");
+  ring.setAttribute("cy", "8");
+  ring.setAttribute("r", "5.25");
+  ring.setAttribute("fill", "none");
+  ring.setAttribute("stroke", "currentColor");
+  ring.setAttribute("stroke-width", "1.6");
+  const core = document.createElementNS(ns, "circle");
+  core.setAttribute("cx", "8");
+  core.setAttribute("cy", "8");
+  core.setAttribute("r", "2.2");
+  core.setAttribute("fill", "currentColor");
+  svg.append(ring, core);
+  return svg;
+}
+
 /** `name` as text nodes with the characters at `marks` wrapped in `<mark>`. */
 function highlighted(name: string, marks: number[] | undefined): Node[] {
   if (!marks?.length) return [document.createTextNode(name)];
@@ -340,6 +368,7 @@ export async function renderExplorer(
   // Reveal the active document: expand the folders above it.
   const rootKey = options.pathKey(root) + "/";
   const activeKey = options.activePath ? options.pathKey(options.activePath) : null;
+  const mainKey = options.mainDocument ? options.pathKey(options.mainDocument) : null;
   if (activeKey?.startsWith(rootKey)) {
     const parts = activeKey.slice(rootKey.length).split("/");
     let walk = "";
@@ -411,15 +440,22 @@ export async function renderExplorer(
   const headerBlock = element("div", "explorer-head");
   headerBlock.append(header);
   if (options.mainDocument) {
+    const mainPath = options.mainDocument;
+    const mainName = mainPath.split(/[\\/]/).pop() ?? mainPath;
     const main = element("div", "explorer-main");
-    main.append(`Main document: ${options.mainDocument.split(/[\\/]/).pop()} `);
+    const label = element("span", "explorer-main-label", "Main document: ");
+    const openMain = Object.assign(element("button", "explorer-main-file", mainName), {
+      type: "button",
+      title: `Open ${mainPath}`,
+      onclick: () => handlers.openFile(mainPath),
+    });
     const clear = Object.assign(element("button", "explorer-link", "Clear"), {
       type: "button",
       title: "Forget the main document chosen for this folder",
       onclick: () => handlers.setMainDocument(null),
     });
-    main.append(clear);
-    main.title = options.mainDocument;
+    main.append(mainDocumentIcon(), label, openMain, " ", clear);
+    main.title = mainPath;
     headerBlock.append(main);
   }
 
@@ -486,17 +522,37 @@ export async function renderExplorer(
     const isDir = row.kind === "dir";
     const open = row.open;
     if (isDir) item.setAttribute("aria-expanded", String(open));
+    const full = absolute(root, row.relative);
+    const isMain = !isDir && !row.symlink && mainKey !== null && options.pathKey(full) === mainKey;
     const icon = element(
       "span",
       "icon",
-      isDir ? (open ? "▾" : "▸") : row.symlink ? "↪" : row.kind === "document" ? "•" : "·",
+      isMain
+        ? undefined
+        : isDir
+          ? open
+            ? "▾"
+            : "▸"
+          : row.symlink
+            ? "↪"
+            : row.kind === "document"
+              ? "•"
+              : "·",
     );
+    if (isMain) icon.append(mainDocumentIcon());
     icon.setAttribute("aria-hidden", "true");
     const name = element("span", "name");
     name.append(...highlighted(row.name, row.marks));
     item.append(icon, name);
-    const full = absolute(root, row.relative);
-    item.title = row.symlink ? `${full} (symbolic link, not followed)` : full;
+    item.title = row.symlink
+      ? `${full} (symbolic link, not followed)`
+      : isMain
+        ? `${full} (Main document)`
+        : full;
+    if (isMain) {
+      item.classList.add("main-document");
+      item.setAttribute("aria-label", `${row.name} (Main document)`);
+    }
     if (activeKey && options.pathKey(full) === activeKey) {
       item.classList.add("active");
       item.setAttribute("aria-selected", "true");
@@ -526,8 +582,11 @@ export async function renderExplorer(
       const entries: Array<[string, () => void]> = [];
       if (row.symlink) return [["Show in Folder", () => handlers.reveal(full)]];
       if (!isDir) entries.push(["Open", activate]);
-      if (/\.tex$/i.test(row.name))
+      if (isMain) {
+        entries.push(["Clear Main Document", () => handlers.setMainDocument(null)]);
+      } else if (/\.tex$/i.test(row.name)) {
         entries.push(["Set as Main Document", () => handlers.setMainDocument(full)]);
+      }
       entries.push(["Show in Folder", () => handlers.reveal(full)]);
       return entries;
     };

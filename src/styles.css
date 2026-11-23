@@ -6416,6 +6416,65 @@ label.optional-tools-row:hover {
   text-decoration: underline;
 }
 
+.explorer-main {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px 6px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.explorer-main-icon {
+  display: block;
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+}
+
+.explorer-main .explorer-main-icon {
+  color: var(--accent);
+}
+
+.explorer-main-label {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.explorer-main-file {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: none;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 500;
+  padding: 0;
+}
+
+.explorer-main-file:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.explorer-main-file:focus-visible {
+  color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.explorer-main .explorer-link {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: 11px;
+}
+
 .explorer-item {
   display: flex;
   align-items: center;
@@ -6435,10 +6494,20 @@ label.optional-tools-row:hover {
 }
 
 .explorer-item .icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
   width: 12px;
+  height: 12px;
+  line-height: 1;
   text-align: center;
   opacity: 0.7;
+}
+
+.explorer-item.main-document .icon {
+  color: var(--accent);
+  opacity: 1;
 }
 
 .explorer-item:hover {
