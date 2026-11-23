@@ -4,8 +4,8 @@
 //! This suite owns what the other UI layers do not: the shape of the native
 //! menu (`menu_items`), its context-sensitive labels and enabled states, the
 //! Preferences deep links, the document statistics dialog, Paste without
-//! Formatting, the zoom-only reset, the block-equation normalisation and both
-//! Close All Tabs routes.
+//! Formatting, the zoom-only reset, the block-equation normalisation, both
+//! Close All Tabs routes and Exit's unsaved-changes guard.
 //!
 //!   node scripts/menu-test.mjs [port]
 //!
@@ -224,6 +224,7 @@ try {
     ["view.syntax.nord", "Code Themes"],
     ["navigate.openTarget", "Navigate"],
     ["file.preferences", "File"],
+    ["file.quit", "File"],
     ["tools.spellcheck", "Tools"],
     ["tools.statistics", "Tools"],
     ["tools.encoding", "File"],
@@ -257,6 +258,7 @@ try {
     ["export.pdf", "PDF…"],
     ["export.pdf.browser", "PDF (opens browser)…"],
     ["file.preferences", "Preferences…"],
+    ["file.quit", process.platform === "win32" ? "Exit" : "Quit"],
     ["tools.spellcheck", "Check Spelling While Typing"],
     ["tools.spellLanguage", "Spelling Language…"],
     ["tools.statistics", "Document Statistics…"],
@@ -976,6 +978,45 @@ try {
   check(
     (await evaluate(`document.title`)) === "Untitled — MDraft",
     "the window stays open on the new empty document",
+  );
+
+  // -------------------------------------------------------------------------
+  // Exit asks about unsaved work
+  // -------------------------------------------------------------------------
+  console.log("\n=== Exit ===");
+  // The platform's predefined Quit ends the event loop without a close request,
+  // so the unsaved-changes guard never runs. Exit must be the app's own command.
+  const predefinedQuit = (await menuItems()).filter(
+    (item) => item.kind === "predefined" && /^&?(exit|quit)\b/i.test(item.text),
+  );
+  check(
+    predefinedQuit.length === 0,
+    "no predefined Quit item bypasses the close guard",
+    predefinedQuit.map((item) => item.text).join(", "),
+  );
+  await evaluate(`document.querySelector(".cm-content").focus()`);
+  await send("Input.insertText", { text: "UNSAVED-EXIT" });
+  await sleep(400);
+  await emitMenu("file.quit");
+  check(
+    await waitFor(`Boolean(document.querySelector(".unsaved-dialog[open]"))`, 5000),
+    "Exit with a dirty document asks before closing",
+  );
+  await evaluate(`document.querySelector('.unsaved-dialog [data-decision="cancel"]')?.click()`);
+  await sleep(900);
+  check((await evaluate(`document.title`)).endsWith("— MDraft"), "Cancel keeps the window open");
+  check(
+    (await bufferText()).includes("UNSAVED-EXIT"),
+    "Cancel preserves the dirty buffer",
+    JSON.stringify((await bufferText()).slice(0, 40)),
+  );
+  await evaluate(`document.querySelector(".cm-content").focus()`);
+  for (let index = 0; index < 3; index += 1) {
+    await key("z", "KeyZ", 2);
+  }
+  check(
+    (await evaluate(`document.querySelectorAll(".doc-tab.is-dirty").length`)) === 0,
+    "undo leaves the blank tab clean for the checks below",
   );
 
   // -------------------------------------------------------------------------

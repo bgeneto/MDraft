@@ -10130,6 +10130,11 @@ const handlers: Record<string, () => void | Promise<void>> = {
   "file.closeLeft": () => closeRelative("left"),
   "file.closeRight": () => closeRelative("right"),
   "file.closeUnchanged": () => closeRelative("unchanged"),
+  // A close request, like Alt+F4, so the unsaved-changes guard in
+  // installCloseGuard decides. The platform's own Quit ends the app without one.
+  "file.quit": () => getCurrentWindow().close(),
+  // Linux only: GTK draws the predefined Close Window disabled.
+  "file.closeWindow": () => getCurrentWindow().close(),
   "file.nextTab": () => void activateSession(sessions.next().id),
   "file.prevTab": () => void activateSession(sessions.previous().id),
   "file.autoSave": () => {
