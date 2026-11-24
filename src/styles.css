@@ -5698,6 +5698,7 @@ label.optional-tools-row:hover {
      lighter in the dark one, so the button stays the most saturated control. */
   --compiled-accent-hover: light-dark(#225da9, #a6c9ff);
   --compiled-selected: light-dark(#eaf2ff, #303f56);
+  --compiled-success: light-dark(#1f7a4c, #6fcf97);
   --compiled-error: light-dark(#b32949, #ff9ab1);
   --compiled-warning: light-dark(#886014, #efc46f);
 }
@@ -5771,8 +5772,15 @@ label.optional-tools-row:hover {
   white-space: nowrap;
   cursor: pointer;
 }
-.compiled-toolbar button:hover:not(:disabled),
-.compiler-tabs button:hover:not(:disabled) {
+.compiled-toolbar
+  button:hover:not(
+    :disabled,
+    .compiled-compile,
+    .compiled-compile-more,
+    .preview-file-link,
+    [aria-pressed="true"]
+  ),
+.compiler-tabs button:hover:not(:disabled, [aria-selected="true"]) {
   background: var(--compiled-soft);
 }
 .compiled-toolbar button:disabled {
@@ -5787,14 +5795,14 @@ label.optional-tools-row:hover {
   border-color: var(--compiled-accent);
   color: light-dark(#ffffff, #152338);
 }
-/* The generic toolbar hover above is more specific than `.compiled-compile`
-   (two class-level selectors and a pseudo-class against two), so without a
-   hover fill of its own the accent button turns into the neutral soft surface
-   and its label loses all contrast — near-black on near-black in the dark
-   theme, white on near-white in the light one. Keep the accent instead. */
-.compiled-toolbar .compiled-compile:hover {
+/* Exclude accent/stateful buttons from the generic neutral hover above AND
+   give the Compile/Cancel hover higher specificity than any `.compiled-toolbar
+   button:hover:not(:disabled)` rule so hovering never paints it `--compiled-soft`
+   over white/dark-navy text. */
+.compiled-toolbar button.compiled-compile:hover:not(:disabled) {
   background: var(--compiled-accent-hover);
   border-color: var(--compiled-accent-hover);
+  color: light-dark(#ffffff, #152338);
 }
 /* Compile is a split button for both LaTeX and Typst: the main half compiles
    (or cancels), and the chevron opens actions plus Auto-compile / Manual mode.
@@ -6089,6 +6097,9 @@ label.optional-tools-row:hover {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.compiled-condition[data-severity="success"] > .compiled-icon {
+  color: var(--compiled-success);
 }
 .compiled-condition[data-severity="error"] {
   color: var(--compiled-error);

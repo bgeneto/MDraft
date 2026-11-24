@@ -479,7 +479,7 @@ export class CompiledPreviewUi {
         this.icon(severity === "success" ? "ready" : severity === "neutral" ? "clock" : severity),
       );
     this.stateLabel.textContent = state?.label ?? label;
-    const detailText = state?.detail ?? details.join(" · ");
+    const detailText = state ? (state.detail ?? "") : details.join(" · ");
     renderLinkedText(this.stateDetail, detailText, state?.detailLink);
     this.stateDetail.hidden = !detailText;
     this.engine.textContent = state?.engine ?? "";
