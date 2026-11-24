@@ -3573,7 +3573,7 @@ function latexProblemPanel(
       const actionable = Boolean(
         root &&
         problem.line > 0 &&
-        problem.lineText &&
+        problem.code !== "library" &&
         projectRelative(problem.file) &&
         files.includes(problem.file),
       );
@@ -3677,12 +3677,9 @@ function clearStaleLatexMark(
 }
 
 function latexProblemMatchesLine(problem: LatexDiagnostic): boolean {
-  return Boolean(
-    problem.lineText &&
-    problem.line > 0 &&
-    problem.line <= editor.view.state.doc.lines &&
-    lineTextOf(editor.view.state.doc.line(problem.line).text) === problem.lineText,
-  );
+  if (problem.line <= 0 || problem.line > editor.view.state.doc.lines) return false;
+  if (!problem.lineText) return true;
+  return lineTextOf(editor.view.state.doc.line(problem.line).text) === problem.lineText;
 }
 
 /** Reveal the source location chosen in Logs. */
@@ -3690,7 +3687,8 @@ async function revealLatexProblem(
   problem: LatexDiagnostic,
   root: { path: string; directory: string } | null,
 ): Promise<void> {
-  if (!root || !problem.file || !projectRelative(problem.file)) return;
+  if (!root || !problem.file || problem.code === "library" || !projectRelative(problem.file))
+    return;
   const path = joinDir(root.directory, problem.file);
   const key = pathKey(path);
   const belongsToFailure = latexProblemFiles.has(key);
@@ -5793,12 +5791,17 @@ function texpressoLibraryNotes(session: TexpressoSession): LatexDiagnostic[] {
 
 /** The frame's problem list in the shape the editor and the panel use. */
 function texpressoDiagnostics(session: TexpressoSession, directory: string): LatexDiagnostic[] {
+  // Some warnings (e.g. undefined references) carry a line number without a
+  // filename. When the project has only one `.tex` file, the source is unambiguous.
+  const texFiles = [...(latexProject?.files ?? [])].filter((file) => /\.tex$/i.test(file));
+  const soleTexFile = texFiles.length === 1 ? texFiles[0] : "";
   const problems = session.problems.map((problem): LatexDiagnostic => {
-    const text = texpressoLiveText(directory, problem.file);
+    const file = problem.file || (problem.line > 0 ? soleTexFile : "");
+    const text = file ? texpressoLiveText(directory, file) : null;
     const lineText =
       text !== null && problem.line > 0 ? (text.split("\n")[problem.line - 1] ?? "") : "";
     return {
-      file: problem.file,
+      file,
       line: problem.line,
       column: problem.column,
       endColumn: 0,
