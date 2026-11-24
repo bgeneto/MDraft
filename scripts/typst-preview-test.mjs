@@ -371,7 +371,8 @@ const warningUi = await evaluate(`(() => {
   document.querySelector('#compiler-output-tab').click();
   const result={separate:!document.querySelector('#preview').textContent.includes('warning probe'),raw:document.querySelector('#compiler-output').textContent.includes('Full diagnostic context'),open:document.querySelector('.compiled-logs-toggle').getAttribute('aria-pressed')==='true'};
   document.querySelector('.compiled-logs-toggle').click();
-  document.querySelector('.compiled-auto input').click();
+  document.querySelector('.compiled-compile-more').click();
+  document.querySelector('.compiled-compile-menu [data-compile-mode="manual"]').click();
   const view=document.querySelector('.cm-content').cmTile.root.view;
   view.dispatch({changes:{from:view.state.doc.length,insert:'\\n// manual compile UI probe\\n'}});
   return result;
@@ -396,8 +397,8 @@ check(
 );
 await send("Fetch.disable");
 await evaluate(`(() => {
-
-  document.querySelector('.compiled-auto input').click();
+  document.querySelector('.compiled-compile-more').click();
+  document.querySelector('.compiled-compile-menu [data-compile-mode="auto"]').click();
   const view=document.querySelector('.cm-content').cmTile.root.view;
   const marker='\\n// manual compile UI probe\\n',at=view.state.doc.toString().indexOf(marker);
   if(at>=0)view.dispatch({changes:{from:at,to:at+marker.length}});
@@ -679,8 +680,8 @@ const pageStrip = () =>
       hidden: group.hidden,
       value: field.value,
       total: total.textContent,
-      first: group.querySelector('[aria-label="First page"]')?.disabled,
-      last: group.querySelector('[aria-label="Last page"]')?.disabled,
+      previous: group.querySelector('[aria-label="Previous page"]')?.disabled,
+      next: group.querySelector('[aria-label="Next page"]')?.disabled,
     };
   })()`);
 const initialStrip = await pageStrip();
@@ -702,14 +703,16 @@ check(
   endStrip?.value === "2",
   JSON.stringify(endStrip),
 );
-await evaluate(`document.querySelector('.compiled-pages [aria-label="First page"]').click()`);
+await evaluate(
+  `document.querySelector('.compiled-pages [aria-label="Previous page"]').dispatchEvent(new MouseEvent('click',{bubbles:true,shiftKey:true}))`,
+);
 await sleep(350);
 const firstPage = await evaluate(`(() => {
   const pane=document.getElementById('preview-pane');
   return { top:pane.scrollTop, value:document.querySelector('.compiled-page-field')?.value };
 })()`);
 check(
-  "First page returns to the top and page 1",
+  "Shift+click Previous page returns to the top and page 1",
   firstPage.top < 2 && firstPage.value === "1",
   JSON.stringify(firstPage),
 );
@@ -783,7 +786,9 @@ check(
   clampedPage.top > 0 && clampedPage.value === "2",
   JSON.stringify(clampedPage),
 );
-await evaluate(`document.querySelector('.compiled-pages [aria-label="First page"]').click()`);
+await evaluate(
+  `document.querySelector('.compiled-pages [aria-label="Previous page"]').dispatchEvent(new MouseEvent('click',{bubbles:true,shiftKey:true}))`,
+);
 await sleep(350);
 
 const logsToggleProbe = await evaluate(`(() => {

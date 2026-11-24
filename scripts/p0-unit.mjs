@@ -1966,6 +1966,83 @@ for (const autoCompile of [false, true]) {
   diagnostics = [problems[1]];
   h.fns.texpressoProblems(frame);
   check(marks.length === 0, "the mark clears when its diagnostic disappears");
+
+  // Warnings on a blank line (such as TeX's `Overfull \hbox ... at lines 1--3`
+  // reported on the paragraph-ending blank line) have empty `lineText`, yet
+  // must still jump to that line.
+  const withBlank = "paragraph line\n\nnext line\n";
+  describeFile(h.context.doc, root.path, withBlank);
+  h.editor.setDoc(withBlank);
+  h.editor.view.state = EditorState.create({ doc: withBlank });
+  const blankWarning = {
+    file: "main.tex",
+    line: 2,
+    column: 0,
+    endColumn: 0,
+    severity: "warning",
+    code: "typeset",
+    message: "Overfull \\hbox (10pt too wide) in paragraph at lines 1--2",
+    text: "",
+    lineText: "",
+    searched: [],
+  };
+  await h.fns.revealLatexProblem(blankWarning, root);
+  check(
+    marks.length === 1 &&
+      marks[0].ranges[0].lineFrom === withBlank.indexOf("\n") + 1 &&
+      marks[0].ranges[0].from === marks[0].ranges[0].to,
+    "a warning on a blank line (empty lineText) still jumps to and highlights that line",
+  );
+  marks.length = 0;
+
+  // Library diagnostics must never navigate even though they have no lineText.
+  await h.fns.revealLatexProblem({ ...blankWarning, code: "library" }, root);
+  check(marks.length === 0, "a local-library diagnostic never navigates into project sources");
+
+  // Fileless warnings with a line number resolve to the sole `.tex` file in a
+  // single-file project, and stay unattributed in a multi-file project.
+  const diagHarness = (files) =>
+    shellHarness(["texpressoDiagnostics"], {
+      lineTextOf,
+      latexProject: { files: new Set(files) },
+      texpressoLiveText: (_dir, file) => (file === "main.tex" ? withBlank : null),
+      texpressoLibraryNotes: () => [],
+    });
+  const single = diagHarness(["main.tex", "fig.png"]).fns.texpressoDiagnostics(
+    {
+      problems: [
+        { file: "", line: 1, column: 0, severity: "warning", message: "Reference `x' undefined" },
+        {
+          file: "",
+          line: 0,
+          column: 0,
+          severity: "warning",
+          message: "There were undefined references.",
+        },
+      ],
+    },
+    root.directory,
+  );
+  check(
+    single[0].file === "main.tex" && single[0].lineText === "paragraph line",
+    "a fileless warning with a line number resolves to the sole .tex file",
+  );
+  check(
+    single[1].file === "" && single[1].line === 0,
+    "a fileless warning without a line number stays unattributed",
+  );
+  const multi = diagHarness(["main.tex", "chapter.tex"]).fns.texpressoDiagnostics(
+    {
+      problems: [
+        { file: "", line: 1, column: 0, severity: "warning", message: "Reference `x' undefined" },
+      ],
+    },
+    root.directory,
+  );
+  check(
+    multi[0].file === "",
+    "a fileless warning stays unattributed when the project has multiple .tex files",
+  );
 }
 
 // ---------------------------------------------------------------------------

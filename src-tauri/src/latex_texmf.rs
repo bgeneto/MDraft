@@ -193,12 +193,14 @@ fn excluded_name(name: &str) -> bool {
     .any(|suffix| lower.ends_with(suffix))
 }
 
-const FONT_DIRS: &[&str] = &[
-    "opentype", "truetype", "type1", "tfm", "vf", "enc", "map", "afm",
-];
+/// Only OpenType and TrueType fonts are captured for filename-based loading
+/// (`\setmainfont{MyFont.otf}`). Legacy TeX font trees (`tfm`, `vf`, `type1`,
+/// `enc`, `map`, `afm`) can hold thousands of metric/encoding files per family
+/// and are intentionally skipped.
+const FONT_DIRS: &[&str] = &["opentype", "truetype"];
 
 /// The TDS path a file of a TDS root is captured under, or `None` when it is
-/// outside the runtime portions (doc, source, web2c, bin, …).
+/// outside the runtime portions (doc, source, web2c, bin, legacy font trees, …).
 fn tds_runtime(relative: &str) -> Option<String> {
     let mut parts = relative.split('/');
     let top = parts.next()?;
@@ -213,8 +215,9 @@ fn tds_runtime(relative: &str) -> Option<String> {
 }
 
 /// The synthetic TDS path for a file of a packages folder, keeping its relative
-/// directory so package-relative resources still resolve.
-fn packages_tds(relative: &str) -> String {
+/// directory so package-relative resources still resolve. Returns `None` for
+/// legacy TeX font files that are not captured in either layout.
+fn packages_tds(relative: &str) -> Option<String> {
     let lower = relative.to_ascii_lowercase();
     let extension = lower.rsplit_once('.').map(|(_, ext)| ext).unwrap_or("");
     let dir = match extension {
@@ -222,14 +225,10 @@ fn packages_tds(relative: &str) -> String {
         "bib" => "bibtex/bib",
         "otf" => "fonts/opentype",
         "ttf" | "ttc" => "fonts/truetype",
-        "pfb" | "pfa" => "fonts/type1",
-        "tfm" => "fonts/tfm",
-        "vf" => "fonts/vf",
-        "enc" => "fonts/enc",
-        "map" => "fonts/map",
+        "pfb" | "pfa" | "tfm" | "vf" | "afm" | "enc" | "map" => return None,
         _ => "tex/latex",
     };
-    format!("{dir}/{relative}")
+    Some(format!("{dir}/{relative}"))
 }
 
 /// The lookup domain of a captured path, for ambiguity checks. Only names an
@@ -239,7 +238,7 @@ fn lookup_domain(tds: &str) -> Option<String> {
     let extension = lower.rsplit_once('.').map(|(_, ext)| ext)?;
     let searchable = [
         "sty", "cls", "def", "cfg", "fd", "clo", "ldf", "tex", "lua", "bst", "bib", "otf", "ttf",
-        "ttc", "pfb", "tfm", "vf", "enc", "map",
+        "ttc",
     ];
     if !searchable.contains(&extension) {
         return None;
@@ -258,6 +257,56 @@ fn lookup_domain(tds: &str) -> Option<String> {
 
 fn basename(path: &str) -> &str {
     path.rsplit('/').next().unwrap_or(path)
+}
+
+fn category_label(top: &str, layout: Layout) -> &'static str {
+    match (top, layout) {
+        ("tex", Layout::Tds) => "in tex/",
+        ("fonts", Layout::Tds) => "in fonts/",
+        ("bibtex", Layout::Tds) => "in bibtex/",
+        ("scripts", Layout::Tds) => "in scripts/",
+        ("tex", Layout::Packages) => "TeX",
+        ("fonts", Layout::Packages) => "fonts",
+        ("bibtex", Layout::Packages) => "BibTeX",
+        ("scripts", Layout::Packages) => "scripts",
+        _ => "other",
+    }
+}
+
+/// Per-category suffix for oversized errors when files outside `tex/`
+/// contribute, so the reader can see why the library exceeded its budget.
+fn breakdown(entries: &[Entry], layout: Layout, by_bytes: bool) -> String {
+    const TOPS: [&str; 4] = ["tex", "fonts", "bibtex", "scripts"];
+    const MIB: u64 = 1024 * 1024;
+    let mut totals = [0u64; 4];
+    for entry in entries {
+        let top = entry.tds.split('/').next().unwrap_or("");
+        if let Some(index) = TOPS.iter().position(|candidate| *candidate == top) {
+            totals[index] += if by_bytes { entry.len } else { 1 };
+        }
+    }
+    if totals[1] == 0 && totals[2] == 0 && totals[3] == 0 {
+        return String::new();
+    }
+    let parts: Vec<String> = TOPS
+        .iter()
+        .zip(totals)
+        .filter(|(_, total)| *total > 0)
+        .map(|(top, total)| {
+            let label = category_label(top, layout);
+            if by_bytes {
+                let mib = (total + MIB / 2) / MIB;
+                if mib == 0 {
+                    format!("<1 MiB {label}")
+                } else {
+                    format!("{mib} MiB {label}")
+                }
+            } else {
+                format!("{total} {label}")
+            }
+        })
+        .collect();
+    format!(" ({})", parts.join(", "))
 }
 
 // ---------------------------------------------------------------------------
@@ -389,11 +438,19 @@ fn index_root(dir: &Path, layout: Layout) -> Result<Index, IndexError> {
                         entry.path().display()
                     )));
                 }
-                if layout == Layout::Tds
-                    && depth == 0
-                    && !matches!(name.as_str(), "tex" | "scripts" | "bibtex" | "fonts")
-                {
-                    continue; // doc/, source/, web2c/, bin/ …
+                if layout == Layout::Tds {
+                    if depth == 0
+                        && !matches!(name.as_str(), "tex" | "scripts" | "bibtex" | "fonts")
+                    {
+                        continue; // doc/, source/, web2c/, bin/ …
+                    }
+                    if depth == 1
+                        && ((relative == "fonts" && !FONT_DIRS.contains(&name.as_str()))
+                            || (relative == "bibtex"
+                                && !matches!(name.as_str(), "bst" | "bib" | "csf")))
+                    {
+                        continue; // fonts/tfm/, fonts/vf/, fonts/type1/, fonts/afm/, …
+                    }
                 }
                 stack.push((entry.path(), child_relative, depth + 1));
                 continue;
@@ -406,7 +463,10 @@ fn index_root(dir: &Path, layout: Layout) -> Result<Index, IndexError> {
                     Some(path) => path,
                     None => continue,
                 },
-                Layout::Packages => packages_tds(&child_relative),
+                Layout::Packages => match packages_tds(&child_relative) {
+                    Some(path) => path,
+                    None => continue,
+                },
             };
             let len = meta.len();
             if len > MAX_FILE {
@@ -416,21 +476,24 @@ fn index_root(dir: &Path, layout: Layout) -> Result<Index, IndexError> {
                 )));
             }
             index.bytes += len;
-            if index.bytes > MAX_BYTES {
-                return Err(IndexError::Oversized(format!(
-                    "{} holds more than 64 MiB of package files. Register a smaller folder that holds only your packages.",
-                    dir.display()
-                )));
-            }
             index.entries.push(Entry {
                 tds,
                 source: entry.path(),
                 origin: child_relative,
                 len,
             });
-            if index.entries.len() > MAX_FILES {
+            if index.bytes > MAX_BYTES {
+                let detail = breakdown(&index.entries, layout, true);
                 return Err(IndexError::Oversized(format!(
-                    "{} holds more than {MAX_FILES} package files. Register a smaller folder that holds only your packages.",
+                    "{} holds more than {} MiB of library files{detail}. Register a smaller folder that holds only your packages.",
+                    dir.display(),
+                    MAX_BYTES / 1024 / 1024
+                )));
+            }
+            if index.entries.len() > MAX_FILES {
+                let detail = breakdown(&index.entries, layout, false);
+                return Err(IndexError::Oversized(format!(
+                    "{} holds more than {MAX_FILES} library files{detail}. Register a smaller folder that holds only your packages.",
                     dir.display()
                 )));
             }
@@ -1219,6 +1282,13 @@ mod tests {
         write(&root.join("scripts/mine/mine.lua"), "return {}");
         write(&root.join("bibtex/bst/mine/mine.bst"), "x");
         write(&root.join("fonts/opentype/mine/Mine.otf"), "x");
+        write(&root.join("fonts/truetype/mine/Mine.ttf"), "x");
+        write(&root.join("fonts/tfm/mine/mine.tfm"), "x");
+        write(&root.join("fonts/vf/mine/mine.vf"), "x");
+        write(&root.join("fonts/type1/mine/mine.pfb"), "x");
+        write(&root.join("fonts/enc/mine/mine.enc"), "x");
+        write(&root.join("fonts/map/mine/mine.map"), "x");
+        write(&root.join("fonts/afm/mine/mine.afm"), "x");
         write(&root.join("doc/latex/mine/mine.pdf"), "x");
         write(&root.join("source/latex/mine/mine.dtx"), "x");
         write(&root.join("web2c/texmf.cnf"), "x");
@@ -1233,6 +1303,7 @@ mod tests {
             [
                 "bibtex/bst/mine/mine.bst",
                 "fonts/opentype/mine/Mine.otf",
+                "fonts/truetype/mine/Mine.ttf",
                 "scripts/mine/mine.lua",
                 "tex/latex/mine/mine-helper.def",
                 "tex/latex/mine/mine.sty",
@@ -1251,6 +1322,8 @@ mod tests {
         write(&root.join("sub/logo.png"), "x");
         write(&root.join("refs/house.bst"), "x");
         write(&root.join("fonts/Brand.ttf"), "x");
+        write(&root.join("fonts/legacy.tfm"), "x");
+        write(&root.join("fonts/legacy.pfb"), "x");
         assert_eq!(detect_layout(&root), Layout::Packages);
         let index = index_root(&root, Layout::Packages).unwrap();
         let paths: Vec<&str> = index.entries.iter().map(|e| e.tds.as_str()).collect();
@@ -1259,6 +1332,53 @@ mod tests {
         assert!(paths.contains(&"tex/latex/sub/logo.png"));
         assert!(paths.contains(&"bibtex/bst/refs/house.bst"));
         assert!(paths.contains(&"fonts/truetype/fonts/Brand.ttf"));
+        assert!(
+            !paths
+                .iter()
+                .any(|path| path.ends_with(".tfm") || path.ends_with(".pfb"))
+        );
+    }
+
+    #[test]
+    fn legacy_font_subtrees_are_not_walked_and_oversized_reports_categories() {
+        let root = temp("legacy-fonts-deep");
+        write(&root.join("tex/latex/mine/mine.sty"), "x");
+        // Deeply nested legacy font tree would trip MAX_DEPTH if descended into.
+        let mut deep = root.join("fonts/tfm");
+        for level in 0..MAX_DEPTH + 2 {
+            deep = deep.join(format!("d{level}"));
+        }
+        write(&deep.join("legacy.tfm"), "x");
+        let index = index_root(&root, Layout::Tds).unwrap();
+        assert_eq!(index.entries.len(), 1);
+
+        let mixed = vec![
+            Entry {
+                tds: "tex/latex/a/a.sty".into(),
+                source: PathBuf::new(),
+                origin: String::new(),
+                len: 1024,
+            },
+            Entry {
+                tds: "fonts/opentype/f/F.otf".into(),
+                source: PathBuf::new(),
+                origin: String::new(),
+                len: 64 * 1024 * 1024,
+            },
+        ];
+        assert_eq!(
+            breakdown(&mixed, Layout::Tds, false),
+            " (1 in tex/, 1 in fonts/)"
+        );
+        assert_eq!(
+            breakdown(&mixed, Layout::Tds, true),
+            " (<1 MiB in tex/, 64 MiB in fonts/)"
+        );
+        assert_eq!(
+            breakdown(&mixed, Layout::Packages, false),
+            " (1 TeX, 1 fonts)"
+        );
+        assert_eq!(breakdown(&mixed[..1], Layout::Tds, false), "");
     }
 
     #[test]

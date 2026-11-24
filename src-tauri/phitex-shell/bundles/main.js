@@ -11823,7 +11823,8 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
   .win.docked #stage { background: var(--mdraft-pane, #e9edf2); overflow-anchor: none; }
   .viewer { display: flow-root; }
   .slot { margin: 16px auto; }
-  .slot .mark.sel { background: var(--mdraft-sync, rgba(255, 193, 7, 0.3)); box-shadow: none; }
+  .slot .mark.sel,
+  .slot .mark.seltext { background: var(--mdraft-sync, rgba(255, 193, 7, 0.3)); box-shadow: none; border-radius: 2px; }
   #viewer[data-blink] .mark.sel { animation: mdraft-pulse 500ms ease-in-out 4; }
   @keyframes mdraft-pulse { 50% { background: var(--mdraft-sync-peak, rgba(255, 167, 0, 0.55)); } }
   @media (prefers-reduced-motion: reduce) {
@@ -12126,6 +12127,7 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
       disposed = true;
       window.clearTimeout(batchTimer);
       window.clearTimeout(idleTimer);
+      window.clearTimeout(blinkTimer);
       window.cancelAnimationFrame(viewportFrame);
       window.cancelAnimationFrame(revealFrame);
       session.stop();
@@ -12154,17 +12156,40 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
     scheduleViewport();
   }
   var marked = false;
-  function selectSource(file, from2, to, blink) {
-    if (!texts.has(file)) return;
-    marked = true;
-    viewer.toggleAttribute("data-blink", blink);
-    void session.selectSource(file, from2, to);
+  var markStamp = 0;
+  var blinkTimer = 0;
+  function clearPageSelection() {
+    const root2 = panelHost.shadowRoot;
+    const selection = root2?.getSelection?.() ?? window.getSelection();
+    if (selection && !selection.isCollapsed) selection.removeAllRanges();
+    for (const mark of viewer.querySelectorAll(".mark.seltext")) mark.remove();
   }
-  function clearMarks() {
+  function clearSourceMarks() {
+    window.clearTimeout(blinkTimer);
+    blinkTimer = 0;
+    markStamp += 1;
     if (!marked) return;
     marked = false;
     viewer.removeAttribute("data-blink");
     void session.selectBytes("", 0, 0);
+  }
+  function selectSource(file, from2, to, blink) {
+    if (!texts.has(file)) return;
+    window.clearTimeout(blinkTimer);
+    blinkTimer = 0;
+    clearPageSelection();
+    const stamp = ++markStamp;
+    marked = true;
+    viewer.toggleAttribute("data-blink", blink);
+    void session.selectSource(file, from2, to).then(() => {
+      if (blink && stamp === markStamp && !disposed) {
+        blinkTimer = window.setTimeout(clearSourceMarks, 620);
+      }
+    });
+  }
+  function clearMarks() {
+    clearPageSelection();
+    clearSourceMarks();
   }
   var lineIndexes = /* @__PURE__ */ new Map();
   function lineIndex(file) {
@@ -12465,6 +12490,7 @@ ${c}.off .scr > * { animation: phx-crt-white .5s forwards; }
   stage.addEventListener("pointerdown", (event) => {
     pressed = { x: event.clientX, y: event.clientY };
     pointerDragged = false;
+    clearSourceMarks();
     readerInput();
   });
   window.addEventListener(

@@ -4,6 +4,7 @@
   "environmentTemplates": [],
   "rootFiles": [
     ".git-blame-ignore-revs",
+    ".gitattributes",
     ".gitignore",
     ".gitleaks.toml",
     ".npmrc",

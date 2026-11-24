@@ -1,7 +1,7 @@
 {
   "name": "mdraft",
   "private": true,
-  "version": "0.9.9",
+  "version": "0.9.10",
   "type": "module",
   "description": "A native Markdown, AsciiDoc, Typst, LaTeX and HTML editor with live preview and an optional AI assistant",
   "license": "AGPL-3.0-only",

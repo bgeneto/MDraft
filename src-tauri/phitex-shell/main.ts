@@ -179,7 +179,8 @@ panelStyle.textContent = `
   .win.docked #stage { background: var(--mdraft-pane, #e9edf2); overflow-anchor: none; }
   .viewer { display: flow-root; }
   .slot { margin: 16px auto; }
-  .slot .mark.sel { background: var(--mdraft-sync, rgba(255, 193, 7, 0.3)); box-shadow: none; }
+  .slot .mark.sel,
+  .slot .mark.seltext { background: var(--mdraft-sync, rgba(255, 193, 7, 0.3)); box-shadow: none; border-radius: 2px; }
   #viewer[data-blink] .mark.sel { animation: mdraft-pulse 500ms ease-in-out 4; }
   @keyframes mdraft-pulse { 50% { background: var(--mdraft-sync-peak, rgba(255, 167, 0, 0.55)); } }
   @media (prefers-reduced-motion: reduce) {
@@ -513,6 +514,7 @@ async function dispose(seq: number): Promise<void> {
     disposed = true;
     window.clearTimeout(batchTimer);
     window.clearTimeout(idleTimer);
+    window.clearTimeout(blinkTimer);
     window.cancelAnimationFrame(viewportFrame);
     window.cancelAnimationFrame(revealFrame);
     session.stop();
@@ -544,18 +546,44 @@ function applyZoom(factor: number): void {
 }
 
 let marked = false;
-function selectSource(file: string, from: number, to: number, blink: boolean): void {
-  if (!texts.has(file)) return;
-  marked = true;
-  viewer.toggleAttribute("data-blink", blink);
-  void session.selectSource(file, from, to);
+let markStamp = 0;
+let blinkTimer = 0;
+
+function clearPageSelection(): void {
+  const root = panelHost.shadowRoot as (ShadowRoot & { getSelection?: () => Selection | null }) | null;
+  const selection = root?.getSelection?.() ?? window.getSelection();
+  if (selection && !selection.isCollapsed) selection.removeAllRanges();
+  for (const mark of viewer.querySelectorAll(".mark.seltext")) mark.remove();
 }
 
-function clearMarks(): void {
+function clearSourceMarks(): void {
+  window.clearTimeout(blinkTimer);
+  blinkTimer = 0;
+  markStamp += 1;
   if (!marked) return;
   marked = false;
   viewer.removeAttribute("data-blink");
   void session.selectBytes("", 0, 0);
+}
+
+function selectSource(file: string, from: number, to: number, blink: boolean): void {
+  if (!texts.has(file)) return;
+  window.clearTimeout(blinkTimer);
+  blinkTimer = 0;
+  clearPageSelection();
+  const stamp = ++markStamp;
+  marked = true;
+  viewer.toggleAttribute("data-blink", blink);
+  void session.selectSource(file, from, to).then(() => {
+    if (blink && stamp === markStamp && !disposed) {
+      blinkTimer = window.setTimeout(clearSourceMarks, 620);
+    }
+  });
+}
+
+function clearMarks(): void {
+  clearPageSelection();
+  clearSourceMarks();
 }
 
 interface LineIndex {
@@ -932,6 +960,7 @@ async function selectPage(selection: Parameters<PreviewSession["sourceOf"]>[0]):
 stage.addEventListener("pointerdown", (event) => {
   pressed = { x: event.clientX, y: event.clientY };
   pointerDragged = false;
+  clearSourceMarks();
   readerInput();
 });
 window.addEventListener(

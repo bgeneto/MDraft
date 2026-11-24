@@ -5698,6 +5698,7 @@ label.optional-tools-row:hover {
      lighter in the dark one, so the button stays the most saturated control. */
   --compiled-accent-hover: light-dark(#225da9, #a6c9ff);
   --compiled-selected: light-dark(#eaf2ff, #303f56);
+  --compiled-success: light-dark(#1f7a4c, #6fcf97);
   --compiled-error: light-dark(#b32949, #ff9ab1);
   --compiled-warning: light-dark(#886014, #efc46f);
 }
@@ -5742,62 +5743,74 @@ label.optional-tools-row:hover {
 }
 .compiled-toolbar {
   flex: none;
-  padding: 8px 12px;
+  padding: 6px 10px;
   color: var(--compiled-fg);
   background: var(--compiled-bg);
   border-bottom: 1px solid var(--compiled-line);
-  font: 13px/1.45 var(--font-ui);
+  font: 12.5px/1.35 var(--font-ui);
 }
 .compiled-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 8px 12px;
+  gap: 8px;
+  min-height: 28px;
 }
 .compiled-toolbar button,
 .compiler-tabs button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-height: 32px;
+  gap: 5px;
+  min-height: 28px;
   font: inherit;
-  padding: 5px 10px;
+  padding: 0 9px;
   border: 1px solid var(--compiled-line);
-  border-radius: 5px;
+  border-radius: 6px;
   background: var(--compiled-bg);
   color: var(--compiled-fg);
   white-space: nowrap;
   cursor: pointer;
 }
-.compiled-toolbar button:hover,
-.compiler-tabs button:hover {
+.compiled-toolbar
+  button:hover:not(
+    :disabled,
+    .compiled-compile,
+    .compiled-compile-more,
+    .preview-file-link,
+    [aria-pressed="true"]
+  ),
+.compiler-tabs button:hover:not(:disabled, [aria-selected="true"]) {
   background: var(--compiled-soft);
 }
 .compiled-toolbar button:disabled {
-  opacity: 0.45;
+  opacity: 0.42;
   cursor: default;
 }
 .compiled-toolbar .compiled-compile {
-  min-width: 92px;
+  min-width: 82px;
+  padding: 0 9px;
+  font-weight: 500;
   background: var(--compiled-accent);
   border-color: var(--compiled-accent);
   color: light-dark(#ffffff, #152338);
 }
-/* The generic toolbar hover above is more specific than `.compiled-compile`
-   (two class-level selectors and a pseudo-class against two), so without a
-   hover fill of its own the accent button turns into the neutral soft surface
-   and its label loses all contrast — near-black on near-black in the dark
-   theme, white on near-white in the light one. Keep the accent instead. */
-.compiled-toolbar .compiled-compile:hover {
+/* Exclude accent/stateful buttons from the generic neutral hover above AND
+   give the Compile/Cancel hover higher specificity than any `.compiled-toolbar
+   button:hover:not(:disabled)` rule so hovering never paints it `--compiled-soft`
+   over white/dark-navy text. */
+.compiled-toolbar button.compiled-compile:hover:not(:disabled) {
   background: var(--compiled-accent-hover);
   border-color: var(--compiled-accent-hover);
+  color: light-dark(#ffffff, #152338);
 }
-/* LaTeX's Compile is a split button: the main half compiles, the chevron opens
-   Compile / Recompile from scratch. Both halves keep the accent fill and read
-   as one control, parted by a hairline in the label colour. */
+/* Compile is a split button for both LaTeX and Typst: the main half compiles
+   (or cancels), and the chevron opens actions plus Auto-compile / Manual mode.
+   Both halves keep the accent fill and read as one control, parted by a
+   hairline in the label colour. */
 .compiled-split {
   display: inline-flex;
+  flex: none;
   align-items: stretch;
 }
 .compiled-split-joined .compiled-compile {
@@ -5805,11 +5818,11 @@ label.optional-tools-row:hover {
   border-bottom-right-radius: 0;
 }
 .compiled-toolbar .compiled-compile-more {
-  min-width: 28px;
-  padding: 5px 6px;
+  min-width: 24px;
+  padding: 0 5px;
   margin-left: 0;
   border-color: var(--compiled-accent);
-  border-left-color: color-mix(in srgb, light-dark(#ffffff, #152338) 45%, transparent);
+  border-left-color: color-mix(in srgb, light-dark(#ffffff, #152338) 40%, transparent);
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
   background: var(--compiled-accent);
@@ -5819,7 +5832,7 @@ label.optional-tools-row:hover {
 .compiled-toolbar .compiled-compile-more[aria-expanded="true"] {
   background: var(--compiled-accent-hover);
   border-color: var(--compiled-accent-hover);
-  border-left-color: color-mix(in srgb, light-dark(#ffffff, #152338) 45%, transparent);
+  border-left-color: color-mix(in srgb, light-dark(#ffffff, #152338) 40%, transparent);
 }
 /* A running build turns the main half into Cancel and disables the chevron.
    The generic `button:disabled` opacity would fade only that half, so the split
@@ -5834,7 +5847,7 @@ label.optional-tools-row:hover {
   opacity: 1;
   background: var(--compiled-accent);
   border-color: var(--compiled-accent);
-  border-left-color: color-mix(in srgb, light-dark(#ffffff, #152338) 45%, transparent);
+  border-left-color: color-mix(in srgb, light-dark(#ffffff, #152338) 40%, transparent);
 }
 .compiled-toolbar .compiled-compile-more:disabled .compiled-icon {
   opacity: 0.5;
@@ -5852,16 +5865,27 @@ label.optional-tools-row:hover {
   display: none;
 }
 .compiled-compile-menu {
-  min-width: 280px;
+  min-width: 268px;
+}
+.compiled-menu-heading {
+  padding: 4px 10px 3px;
+  color: var(--muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 .compiled-compile-menu .compiled-compile-option {
   justify-content: flex-start;
   gap: 10px;
-  padding: 7px 10px;
+  padding: 6px 10px;
   text-align: left;
 }
 .compiled-compile-option .compiled-icon {
   color: var(--accent);
+}
+.compiled-compile-option[role="menuitemradio"][aria-checked="false"] .compiled-icon {
+  opacity: 0;
 }
 .compiled-option-body {
   display: flex;
@@ -5881,78 +5905,92 @@ label.optional-tools-row:hover {
 }
 .compiled-icon {
   flex: 0 0 auto;
-  width: 15px;
-  height: 15px;
-}
-.compiled-auto {
-  display: inline-flex;
-  gap: 5px;
-  align-items: center;
-  white-space: nowrap;
-  cursor: pointer;
-}
-.compiled-auto input {
-  margin: 0;
   width: 14px;
   height: 14px;
-  accent-color: var(--compiled-accent);
 }
 .compiled-modes {
-  display: flex;
-  gap: 2px;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  height: 28px;
+  padding: 2px;
+  gap: 1px;
+  box-sizing: border-box;
+  border: 1px solid var(--compiled-line);
+  border-radius: 6px;
+  background: var(--compiled-soft);
 }
 .compiled-toolbar .compiled-mode {
-  border-color: transparent;
-  padding: 6px 8px;
+  min-height: 22px;
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--compiled-muted);
+  font-size: 12px;
+}
+.compiled-toolbar .compiled-mode:hover:not([aria-pressed="true"]) {
+  background: transparent;
+  color: var(--compiled-fg);
 }
 /* Page navigation belongs to a paged surface, never to the compile actions
    alone: it appears in LaTeX and Typst Pages, and hides while a non-paged
-   preview is on screen. */
+   preview is on screen. Grouped as one compact capsule to avoid sparse air. */
 .compiled-pages {
-  display: flex;
+  display: inline-flex;
+  flex: none;
   flex-wrap: nowrap;
   align-items: center;
-  gap: 2px;
+  height: 28px;
+  padding: 1px;
+  gap: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--compiled-line);
+  border-radius: 6px;
+  background: var(--compiled-bg);
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+.compiled-pages:focus-within {
+  border-color: var(--compiled-accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--compiled-accent) 22%, transparent);
 }
 .compiled-toolbar .compiled-page-step {
-  min-width: 30px;
-  padding: 5px 6px;
-  border-color: transparent;
+  min-width: 24px;
+  width: 24px;
+  min-height: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
   background: transparent;
+  color: var(--compiled-muted);
 }
 .compiled-toolbar .compiled-page-step:hover:not(:disabled) {
   background: var(--compiled-soft);
+  color: var(--compiled-fg);
 }
 .compiled-page-step .compiled-button-label {
   display: none;
 }
 .compiled-page-step .compiled-icon {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
 }
 .compiled-page-box {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  box-sizing: border-box;
-  min-height: 32px;
-  padding: 0 7px;
-  border: 1px solid var(--compiled-line);
-  border-radius: 5px;
-  background: var(--compiled-bg);
+  gap: 3px;
+  height: 100%;
+  padding: 0 5px;
   color: var(--compiled-fg);
-  transition:
-    border-color 120ms ease,
-    box-shadow 120ms ease;
-}
-.compiled-page-box:focus-within {
-  border-color: var(--compiled-accent);
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--compiled-accent) 22%, transparent);
 }
 .compiled-page-field {
   box-sizing: border-box;
-  width: calc(var(--page-digits, 2) * 1ch + 0.6ch);
-  min-width: 2ch;
+  width: calc(var(--page-digits, 1) * 1ch + 2px);
+  min-width: 1.4ch;
   padding: 0;
   border: 0;
   outline: 0;
@@ -5963,7 +6001,6 @@ label.optional-tools-row:hover {
   text-align: right;
 }
 .compiled-page-total {
-  min-width: 2.4em;
   color: var(--compiled-muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -5972,32 +6009,63 @@ label.optional-tools-row:hover {
   opacity: 0.45;
 }
 @media (prefers-reduced-motion: reduce) {
-  .compiled-page-box {
+  .compiled-pages {
     transition: none;
   }
 }
-.compiled-toolbar .compiled-logs-toggle {
+.compiled-divider {
+  flex: none;
+  width: 1px;
+  height: 16px;
+  background: var(--compiled-line);
+}
+.compiled-end {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+.compiled-toolbar .compiled-logs-toggle,
+.compiled-toolbar .compiled-save-pdf {
   border-color: transparent;
   background: transparent;
-  padding: 6px 9px;
+  padding: 0 8px;
 }
 .compiled-toolbar .compiled-logs-toggle[aria-pressed="true"] {
   background: var(--compiled-selected);
-  border-color: var(--compiled-accent);
+  border-color: color-mix(in srgb, var(--compiled-accent) 45%, transparent);
   color: var(--compiled-accent);
 }
 .compiled-toolbar .compiled-mode[aria-pressed="true"] {
-  background: var(--compiled-soft);
-  color: var(--compiled-accent);
+  background: var(--compiled-bg);
+  color: var(--compiled-fg);
+  font-weight: 500;
+  box-shadow: 0 1px 2px light-dark(rgb(0 0 0 / 8%), rgb(0 0 0 / 28%));
+}
+.compiled-issue-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 1px;
 }
 .compiled-issue-count {
-  padding: 0 4px;
-  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 4px;
   font-size: 11px;
   font-weight: 600;
+  line-height: 1;
   font-variant-numeric: tabular-nums;
   color: var(--compiled-warning);
   background: light-dark(#fbf0d7, #493b22);
+}
+.compiled-issue-count .compiled-icon {
+  width: 11px;
+  height: 11px;
+  stroke-width: 2.1;
 }
 .compiled-issue-count[data-severity="error"] {
   color: var(--compiled-error);
@@ -6005,23 +6073,33 @@ label.optional-tools-row:hover {
 }
 .compiled-message {
   display: flex;
-  flex-wrap: wrap;
+  flex: 1 1 auto;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 3px 9px;
-  /* Pushes the status, Logs and Save to the right edge of the action row. It
-     can shrink (and wrap its own words) only when it is alone on a line. */
-  margin-left: auto;
+  justify-content: flex-end;
+  gap: 6px;
   min-width: 0;
+  overflow: hidden;
   color: var(--compiled-muted);
   font-size: 12px;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
 }
 .compiled-condition {
   display: inline-flex;
+  flex: 0 1 auto;
   align-items: center;
   gap: 5px;
   min-width: 0;
+  overflow: hidden;
   color: var(--compiled-fg);
+}
+.compiled-state-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.compiled-condition[data-severity="success"] > .compiled-icon {
+  color: var(--compiled-success);
 }
 .compiled-condition[data-severity="error"] {
   color: var(--compiled-error);
@@ -6029,9 +6107,54 @@ label.optional-tools-row:hover {
 .compiled-condition[data-severity="warning"] {
   color: var(--compiled-warning);
 }
-.compiled-state-detail,
-.compiled-engine {
+.compiled-state-detail {
+  flex: 0 2 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+.compiled-engine {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.compiled-state-detail::before,
+.compiled-engine::before {
+  content: "·";
+  margin-right: 6px;
+  opacity: 0.55;
+}
+/* Inline filename link inside preview status and empty-pane messages. Overrides
+   `.compiled-toolbar button` so the toolbar link stays inline with its text,
+   and opts back into pointer events inside `.preview-pending`. */
+.preview-file-link,
+.compiled-toolbar .preview-file-link {
+  display: inline;
+  min-height: 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: normal;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.preview-file-link:hover,
+.compiled-toolbar .preview-file-link:hover {
+  background: none;
+  opacity: 0.82;
+}
+.preview-file-link:focus-visible,
+.compiled-toolbar .preview-file-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 .compiled-notice {
   margin-top: 6px;
@@ -6206,26 +6329,47 @@ label.optional-tools-row:hover {
   font: 12px/1.5 var(--font-mono);
 }
 
-/* The pane can be narrow inside a wide window, so use its own width. */
-@container compiled-workspace (max-width: 480px) {
-  .compiled-toolbar {
-    padding: 8px;
+/* The pane can be narrow inside a wide window, so compact progressively by its
+   own inline size while keeping the toolbar strictly single-row. */
+@container compiled-workspace (max-width: 620px) {
+  .compiled-engine {
+    display: none;
   }
-  .compiled-actions {
-    gap: 7px 9px;
+  .compiled-save-pdf .compiled-button-label {
+    display: none;
   }
   .compiled-toolbar .compiled-save-pdf {
-    margin-left: auto;
+    width: 28px;
+    min-width: 28px;
+    padding: 0;
   }
-  /* Too narrow to share a line with the buttons: take the last row, full width,
-     read from the left, as the status did before it joined the action row. */
-  .compiled-message {
-    order: 1;
-    flex: 1 0 100%;
-    margin-left: 0;
+}
+@container compiled-workspace (max-width: 500px) {
+  .compiled-toolbar {
+    padding: 6px 8px;
+  }
+  .compiled-actions {
+    gap: 6px;
+  }
+  .compiled-logs-toggle[data-has-issues="true"] {
+    padding: 0 6px;
+  }
+  .compiled-logs-toggle[data-has-issues="true"] .compiled-button-label {
+    display: none;
   }
   .compiler-logs {
     padding: 13px;
+  }
+}
+@container compiled-workspace (max-width: 420px) {
+  .compiled-state-label,
+  .compiled-state-detail,
+  .compiled-divider {
+    display: none;
+  }
+  .compiled-toolbar .compiled-compile {
+    min-width: 0;
+    padding: 0 8px;
   }
 }
 
@@ -6283,6 +6427,65 @@ label.optional-tools-row:hover {
   text-decoration: underline;
 }
 
+.explorer-main {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px 6px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.explorer-main-icon {
+  display: block;
+  width: 11px;
+  height: 11px;
+  flex: 0 0 auto;
+}
+
+.explorer-main .explorer-main-icon {
+  color: var(--accent);
+}
+
+.explorer-main-label {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.explorer-main-file {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: none;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--fg);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 500;
+  padding: 0;
+}
+
+.explorer-main-file:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.explorer-main-file:focus-visible {
+  color: var(--accent);
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.explorer-main .explorer-link {
+  flex: 0 0 auto;
+  margin-left: auto;
+  font-size: 11px;
+}
+
 .explorer-item {
   display: flex;
   align-items: center;
@@ -6302,10 +6505,20 @@ label.optional-tools-row:hover {
 }
 
 .explorer-item .icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   flex: 0 0 auto;
   width: 12px;
+  height: 12px;
+  line-height: 1;
   text-align: center;
   opacity: 0.7;
+}
+
+.explorer-item.main-document .icon {
+  color: var(--accent);
+  opacity: 1;
 }
 
 .explorer-item:hover {

@@ -64,14 +64,17 @@ export function nativeDiagnostics(
   result: LatexNativeResult,
   snapshot: LatexProjectSnapshot,
 ): { diagnostics: LatexDiagnostic[]; warnings: LatexDiagnostic[] } {
-  const sourceMap = new Map(nativeSources(snapshot).map((file) => [file.path, file.source]));
+  const sources = nativeSources(snapshot);
+  const sourceMap = new Map(sources.map((file) => [file.path, file.source]));
+  const soleTexFile = sources.length === 1 ? sources[0].path : "";
   const diagnostics = result.diagnostics.map((entry) => {
     // A message from a staged library names the reader's own file, never the
-    // job path. It has no line text, so it is shown but cannot navigate: a
-    // library file is not a project source.
+    // job path. It has `code: "library"` and no line text, so it is shown but
+    // cannot navigate: a library file is not a project source.
     const origin = libraryOrigin(snapshot.texmf, entry.file);
+    const file = origin ?? (entry.file || (entry.line > 0 ? soleTexFile : ""));
     return {
-      file: origin ?? entry.file,
+      file,
       line: entry.line,
       column: 0,
       endColumn: 0,
@@ -79,7 +82,7 @@ export function nativeDiagnostics(
       code: origin ? "library" : entry.code,
       message: origin ? `${entry.message} (local library: ${origin})` : entry.message,
       text: "",
-      lineText: origin ? "" : lineText(sourceMap, entry.file, entry.line),
+      lineText: origin ? "" : lineText(sourceMap, file, entry.line),
       searched: [],
     };
   });

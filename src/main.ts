@@ -28,7 +28,12 @@ import { installEditorContextMenu, titleCase, type ReadingMenuState } from "./co
 import { createReadAloud, type ReadAloudHandle, type ReadingState } from "./read-aloud";
 import { createSystemSpeech, needsSystemSpeech } from "./system-speech";
 import { readClipboardData, writeClipboardText } from "./clipboard";
-import { CompiledPreviewUi, type CompiledStatus } from "./compiled-preview-ui";
+import {
+  CompiledPreviewUi,
+  renderLinkedText,
+  type CompiledStatus,
+  type CompiledStatusLink,
+} from "./compiled-preview-ui";
 import { createDocumentLifecycle } from "./document-lifecycle";
 import { showDocumentStatistics, type DocumentStatistics } from "./statistics-dialog";
 import { showEncodingDialog, type DeclarationEdit } from "./encoding-dialog";
@@ -241,6 +246,8 @@ import { projectLatexOutline, type ProjectHeading } from "./latex-outline";
 import { nativeSources, nativeToLatex } from "./latex-native";
 import {
   BUNDLED_TEXLIVE_YEAR,
+  ENCODING_FALLBACK_PREFIX,
+  encodingFallbackActionLabel,
   engineFailureHolds,
   engineFailureText,
   UNRESPONSIVE_PREVIEW,
@@ -1642,7 +1649,7 @@ function applySettingsPatch(
     else if (!patch.latexAutoCompile) {
       window.clearTimeout(renderTimer);
       if (latexInFlight) cancelLatexBuild();
-      else if (previewStale) setLatexStatus("Out of date · Select Compile to update the preview.");
+      else if (previewStale) setLatexStatus("Out of date");
     }
   }
 
@@ -1652,7 +1659,7 @@ function applySettingsPatch(
     else {
       window.clearTimeout(renderTimer);
       if (typstInFlight !== null) cancelTypstBuild();
-      else setTypstStatus("Out of date · Select Compile to update the preview.");
+      else setTypstStatus("Out of date");
     }
     preferences?.refresh();
   }
@@ -2421,7 +2428,11 @@ function clearPending(): void {
  * until the reader acts. `action` is the one control that helps, if any; the
  * surface otherwise lets pointer events through to the pane.
  */
-function showPendingIdle(message: string, action?: { label: string; run: () => void }): void {
+function showPendingIdle(
+  message: string,
+  action?: { label: string; run: () => void },
+  link?: CompiledStatusLink,
+): void {
   const entry = pending;
   if (!entry) return;
   if (!entry.node) showPending(entry);
@@ -2431,7 +2442,7 @@ function showPendingIdle(message: string, action?: { label: string; run: () => v
   entry.tick = 0;
   entry.node.dataset.state = "idle";
   const phase = entry.node.querySelector<HTMLElement>(".preview-pending-phase");
-  if (phase) phase.textContent = message;
+  if (phase) renderLinkedText(phase, message, link);
   const elapsed = entry.node.querySelector<HTMLElement>(".preview-pending-elapsed");
   if (elapsed) elapsed.textContent = "";
   entry.node.querySelector(".preview-pending-action")?.remove();
@@ -2508,7 +2519,7 @@ function scheduleRender(immediate = false): void {
   window.clearTimeout(renderTimer);
   if (immediate || !phiTeXShowing()) configureCompiledUi();
   if (doc.language === "typst" && settings.typstAutoCompile === false) {
-    if (previewStale) setTypstStatus("Out of date · Select Compile to update the preview.");
+    if (previewStale) setTypstStatus("Out of date");
     armPending({ immediate: true });
     // Manual mode never compiles on its own, but output already built from
     // exactly this text is current, not stale: show it.
@@ -2526,7 +2537,7 @@ function scheduleRender(immediate = false): void {
           ? texpressoHold?.reason === "unresponsive"
             ? "Out of date · The preview stopped responding on this document; fix the errors in Logs, then select Compile."
             : "Out of date · The preview engine ran out of memory on this document; select Compile to try again."
-          : "Out of date · Select Compile to update the preview.",
+          : "Out of date",
       );
     // Nothing will render here until the reader presses Compile. If the pane
     // has no content for this file, say so at once instead of leaving an empty
@@ -3061,7 +3072,7 @@ function cancelTypstBuild(): void {
   renderToken += 1;
   discardStagedPdf();
   previewStale = true;
-  setTypstStatus("Compilation cancelled · Select Compile to update the preview.");
+  setTypstStatus("Compilation cancelled");
   if (previewOwner === null) showPendingIdle("Compilation cancelled.");
 }
 
@@ -3180,7 +3191,7 @@ function cancelLatexBuild(): void {
   discardStagedPdf();
   latexInFlight = false;
   previewStale = true;
-  setLatexStatus("Out of date · Compilation cancelled; an outstanding package request may finish.");
+  setLatexStatus("Compilation cancelled");
   // With no committed content the pane has only the wait to show. Leaving the
   // spinner turning after Cancel would say work is still happening.
   if (previewOwner === null) showPendingIdle("Compilation cancelled.");
@@ -3519,13 +3530,9 @@ function rebindLatexPreview(
   clearStaleLatexMark(result.warnings, rootRef);
   showLatexWarnings(result, rootRef);
   const seconds = ((result.elapsedMs ?? 0) / 1000).toFixed(1);
-  const warnings = result.warnings.length
-    ? ` · ${result.warnings.length}${result.warningsTruncated ? "+" : ""} warning${result.warnings.length === 1 && !result.warningsTruncated ? "" : "s"}`
-    : "";
-  setLatexStatus(`Up to date · ${result.engine ?? "LaTeX"}${warnings}`, {
+  setLatexStatus(`PDF ready · ${result.engine ?? "LaTeX"}`, {
     label: "PDF ready",
-    severity: result.warnings.length ? "warning" : "success",
-    detail: compiledUi.issueSummary,
+    severity: "success",
     engine: `${result.engine ?? "LaTeX"} · ${seconds} s`,
   });
   syncMenuState(false);
@@ -3566,7 +3573,7 @@ function latexProblemPanel(
       const actionable = Boolean(
         root &&
         problem.line > 0 &&
-        problem.lineText &&
+        problem.code !== "library" &&
         projectRelative(problem.file) &&
         files.includes(problem.file),
       );
@@ -3643,7 +3650,7 @@ function projectRelative(file: string): boolean {
     !/^[A-Za-z]:/.test(file) &&
     !file.startsWith("/") &&
     !file.startsWith("\\") &&
-    !file.split("/").includes("..")
+    !file.split(/[\\/]/).includes("..")
   );
 }
 
@@ -3670,12 +3677,9 @@ function clearStaleLatexMark(
 }
 
 function latexProblemMatchesLine(problem: LatexDiagnostic): boolean {
-  return Boolean(
-    problem.lineText &&
-    problem.line > 0 &&
-    problem.line <= editor.view.state.doc.lines &&
-    lineTextOf(editor.view.state.doc.line(problem.line).text) === problem.lineText,
-  );
+  if (problem.line <= 0 || problem.line > editor.view.state.doc.lines) return false;
+  if (!problem.lineText) return true;
+  return lineTextOf(editor.view.state.doc.line(problem.line).text) === problem.lineText;
 }
 
 /** Reveal the source location chosen in Logs. */
@@ -3683,7 +3687,8 @@ async function revealLatexProblem(
   problem: LatexDiagnostic,
   root: { path: string; directory: string } | null,
 ): Promise<void> {
-  if (!root || !problem.file || !projectRelative(problem.file)) return;
+  if (!root || !problem.file || problem.code === "library" || !projectRelative(problem.file))
+    return;
   const path = joinDir(root.directory, problem.file);
   const key = pathKey(path);
   const belongsToFailure = latexProblemFiles.has(key);
@@ -3931,12 +3936,7 @@ async function latexFailure(
     {
       label: shownPartial ? "PDF with errors" : typstPdf ? "Build failed" : "No PDF produced",
       severity: "error",
-      detail: [
-        typstPdf && !shownPartial ? "Showing previous PDF" : "",
-        compiledUi.issueSummary || "See Logs",
-      ]
-        .filter(Boolean)
-        .join(" · "),
+      detail: typstPdf && !shownPartial ? "Showing previous PDF" : undefined,
       engine: build ? `${build.engine} · ${(build.elapsedMs / 1000).toFixed(1)} s` : undefined,
     },
   );
@@ -4524,20 +4524,13 @@ async function renderLatexPreview(
     if (outlineScope === "project" && settings.sidebarTab === "outline") refreshOutline();
     const clean = latexCleanBuildToken === token;
     if (clean) latexCleanBuildToken = null;
-    const label = clean
-      ? "Recompiled from scratch"
-      : stored
-        ? "Up to date"
-        : `Compiled in ${((result.elapsedMs ?? performance.now() - started) / 1000).toFixed(1)} s`;
-    setLatexStatus(
-      `${label} · ${result.engine ?? "LaTeX"}${result.warnings.length ? ` · ${result.warnings.length}${result.warningsTruncated ? "+" : ""} warning${result.warnings.length === 1 && !result.warningsTruncated ? "" : "s"}` : ""}`,
-      {
-        label: clean ? "Recompiled from scratch" : "PDF ready",
-        severity: result.warnings.length ? "warning" : "success",
-        detail: compiledUi.issueSummary,
-        engine: `${result.engine ?? "LaTeX"} · ${((result.elapsedMs ?? performance.now() - started) / 1000).toFixed(1)} s${result.passes ? ` · ${result.passes} pass${result.passes === 1 ? "" : "es"}` : ""}`,
-      },
-    );
+    const seconds = ((result.elapsedMs ?? performance.now() - started) / 1000).toFixed(1);
+    const label = clean ? "Recompiled from scratch" : "PDF ready";
+    setLatexStatus(`${label} · ${result.engine ?? "LaTeX"}`, {
+      label,
+      severity: "success",
+      engine: `${result.engine ?? "LaTeX"} · ${seconds} s${result.passes ? ` · ${result.passes} pass${result.passes === 1 ? "" : "es"}` : ""}`,
+    });
     // Export › PDF and Print are enabled by this commit and name its engine.
     // Nothing else re-sends the menu state here, so without this the rows kept
     // "available after the preview compiles" until the next caret move.
@@ -4888,7 +4881,7 @@ let texpressoExporting = 0;
 let texpressoSessionCount = 0;
 const TEXPRESSO_FETCH_TICK_MS = 750;
 /** The export's own step: the frame has typeset and `xdvipdfmx` converts. */
-const TEXPRESSO_EXPORT_WAIT = "Preparing the PDF for export…";
+const TEXPRESSO_EXPORT_WAIT = "Preparing PDF…";
 
 function texpressoLogText(): string {
   return texpressoLog.join("\n");
@@ -5190,16 +5183,55 @@ function texpressoResetPages(): void {
   updatePageChrome();
 }
 
+function texpressoFallbackAction(
+  reason: TexpressoFallback,
+  file: string | null,
+  directory: string | null,
+): { label: string; run: () => void } | undefined {
+  if (reason === "failed") {
+    return { label: "Recompile from scratch", run: compileCurrentLatexClean };
+  }
+  if (reason === "encoding" && file && directory && projectRelative(file)) {
+    const targetPath = joinDir(directory, file);
+    const isActive = Boolean(doc.path && pathKey(targetPath) === pathKey(doc.path));
+    const label = encodingFallbackActionLabel(file, isActive);
+    if (label) {
+      return { label, run: () => void openEncodingDialogForPath(targetPath) };
+    }
+  }
+  return undefined;
+}
+
+function texpressoFallbackFileLink(
+  reason: TexpressoFallback,
+  file: string | null,
+  directory: string | null,
+): CompiledStatusLink | undefined {
+  if (reason !== "encoding" || !file || !directory || !projectRelative(file)) return undefined;
+  const targetPath = joinDir(directory, file);
+  return {
+    text: file,
+    index: ENCODING_FALLBACK_PREFIX.length,
+    title: `Open ${file} in the editor`,
+    run: () => void openProjectFileInEditor(targetPath),
+  };
+}
+
 /**
  * Stop the frame and say why. There is no silent third engine: the pane keeps
  * the reader's document and the status line names the reason.
  */
-function texpressoFallbackTo(reason: TexpressoFallback, file: string | null = null): void {
+function texpressoFallbackTo(
+  reason: TexpressoFallback,
+  file: string | null = null,
+  directory: string | null = null,
+): void {
   texpressoRelease();
   texpressoFallbackReason = { reason, file };
   texpressoChip();
   latexInFlight = false;
   const why = texpressoFallbackText(reason, { file });
+  const fileLink = texpressoFallbackFileLink(reason, file, directory);
   // The reason must travel as `detail`: `status()` shows `state.label` and
   // `state.detail`, so putting the explanation only in the message produced a
   // bare "Preview" warning.
@@ -5207,17 +5239,22 @@ function texpressoFallbackTo(reason: TexpressoFallback, file: string | null = nu
     label: "Preview unavailable",
     severity: "warning",
     detail: why,
+    detailLink: fileLink,
   });
   // The frame was the pane's content; with it gone the pane is empty unless a
   // PDF or a note sits in `#preview`. The reason belongs in the middle of the
-  // pane then, not only in the toolbar, and a broken frame offers its fix.
+  // pane then, not only in the toolbar, and a broken frame or non-UTF-8 file
+  // offers its fix.
   if (doc.language === "latex" && settings.viewMode !== "source" && paneBlank()) {
+    const prefix = "Preview unavailable: ";
     armPending({ immediate: true });
     showPendingIdle(
-      `Preview unavailable: ${why}.`,
-      reason === "failed"
-        ? { label: "Recompile from scratch", run: compileCurrentLatexClean }
-        : undefined,
+      `${prefix}${why}.`,
+      texpressoFallbackAction(reason, file, directory),
+      fileLink && {
+        ...fileLink,
+        index: fileLink.index !== undefined ? prefix.length + fileLink.index : undefined,
+      },
     );
   }
   syncMenuState(false);
@@ -5357,7 +5394,14 @@ function texpressoSyncSnapshot(
     watched,
   );
   if (prepared.nonUtf8) {
-    texpressoFallbackTo("encoding", prepared.nonUtf8);
+    // Remember the project's declared files so opening an included chapter from
+    // the fallback link keeps it attached to this main document.
+    setLatexProject({
+      rootId: build.root.id,
+      rootDirectory: directory,
+      files: new Set(snapshot.files.map((file) => file.path)),
+    });
+    texpressoFallbackTo("encoding", prepared.nonUtf8, directory);
     return false;
   }
   if (prepared.libraryConflict) {
@@ -5427,7 +5471,7 @@ async function texpressoExportPdf(
   );
   if (!reply) {
     latexInFlight = false;
-    setLatexStatus("The PDF for export could not be produced.");
+    setLatexStatus("PDF could not be produced.");
     toast("The preview could not produce a PDF. Compile again to retry.", 6200);
     syncMenuState(false);
     texpressoSettleWait(session);
@@ -5582,11 +5626,7 @@ async function texpressoFrozen(
   setLatexStatus("The PDF could not be prepared: the preview stopped responding.", {
     label: "PDF could not be prepared",
     severity: "error",
-    detail: [
-      "The preview stopped responding",
-      typstPdf ? "Showing previous PDF" : "",
-      compiledUi.issueSummary || "See Logs",
-    ]
+    detail: ["The preview stopped responding", typstPdf ? "Showing previous PDF" : ""]
       .filter(Boolean)
       .join(" · "),
     engine: `${engine} · ${(elapsedMs / 1000).toFixed(1)} s`,
@@ -5664,11 +5704,7 @@ function commitLatexShadow(
   if (rootRef) showLatexWarnings(result, rootRef);
   if (!authoritative) {
     previewStale = true;
-    setLatexStatus(
-      latexBusy() || renderToken !== value.token
-        ? "PDF for export: updating…"
-        : "PDF for export: waiting for a pause in typing",
-    );
+    setLatexStatus(latexBusy() || renderToken !== value.token ? "Updating PDF…" : "Out of date");
     syncMenuState(false);
     return;
   }
@@ -5676,20 +5712,14 @@ function commitLatexShadow(
   latexInFlight = false;
   if (outlineScope === "project" && settings.sidebarTab === "outline") refreshOutline();
   const seconds = ((result.elapsedMs ?? performance.now() - build.started) / 1000).toFixed(1);
-  const warnings = result.warnings.length
-    ? ` · ${result.warnings.length}${result.warningsTruncated ? "+" : ""} warning${result.warnings.length === 1 && !result.warningsTruncated ? "" : "s"}`
-    : "";
   const clean = latexCleanBuildToken === value.token;
   if (clean) latexCleanBuildToken = null;
-  setLatexStatus(
-    `${clean ? "Recompiled from scratch" : "PDF for export up to date"} · ${result.engine ?? "LaTeX"}${warnings}`,
-    {
-      label: clean ? "Recompiled from scratch" : "PDF ready",
-      severity: result.warnings.length ? "warning" : "success",
-      detail: compiledUi.issueSummary,
-      engine: `${result.engine ?? "LaTeX"} · ${seconds} s`,
-    },
-  );
+  const label = clean ? "Recompiled from scratch" : "PDF ready";
+  setLatexStatus(`${label} · ${result.engine ?? "LaTeX"}`, {
+    label,
+    severity: "success",
+    engine: `${result.engine ?? "LaTeX"} · ${seconds} s`,
+  });
   syncMenuState(false);
 }
 
@@ -5698,9 +5728,8 @@ function texpressoLiveStatus(): string {
   const session = texpresso;
   if (!session) return "";
   if (!session.ready) return "Preview starting…";
-  const errors = session.problems.filter((p) => p.severity === "error").length;
   const fetch = texpressoFetch;
-  const state = texpressoDownloadsStopped
+  return texpressoDownloadsStopped
     ? "TeX file downloads stopped"
     : fetch && fetch.files > 0
       ? `Downloading TeX files… · ${fetch.files} file${fetch.files === 1 ? "" : "s"}, ${megabytes(fetch.bytes)}`
@@ -5709,7 +5738,6 @@ function texpressoLiveStatus(): string {
         : session.busy
           ? "Typesetting…"
           : "Preview live";
-  return errors ? `${state} · ${errors} error${errors === 1 ? "" : "s"}` : state;
 }
 
 /** The frame is starting, typesetting or fetching bundle files. */
@@ -5763,12 +5791,17 @@ function texpressoLibraryNotes(session: TexpressoSession): LatexDiagnostic[] {
 
 /** The frame's problem list in the shape the editor and the panel use. */
 function texpressoDiagnostics(session: TexpressoSession, directory: string): LatexDiagnostic[] {
+  // Some warnings (e.g. undefined references) carry a line number without a
+  // filename. When the project has only one `.tex` file, the source is unambiguous.
+  const texFiles = [...(latexProject?.files ?? [])].filter((file) => /\.tex$/i.test(file));
+  const soleTexFile = texFiles.length === 1 ? texFiles[0] : "";
   const problems = session.problems.map((problem): LatexDiagnostic => {
-    const text = texpressoLiveText(directory, problem.file);
+    const file = problem.file || (problem.line > 0 ? soleTexFile : "");
+    const text = file ? texpressoLiveText(directory, file) : null;
     const lineText =
       text !== null && problem.line > 0 ? (text.split("\n")[problem.line - 1] ?? "") : "";
     return {
-      file: problem.file,
+      file,
       line: problem.line,
       column: problem.column,
       endColumn: 0,
@@ -6037,6 +6070,9 @@ function texpressoEdit(changes: Array<[number, number, string]>, base: number, t
 function texpressoSyncSelection(): boolean {
   const session = texpresso;
   if (!session || !texpressoShowing()) return false;
+  // A selection restored from a preview gesture must not clear or overwrite the
+  // highlight that gesture just painted in the frame.
+  if (caretCameFromPreview) return true;
   const file = projectRelativePath(session.rootDirectory, doc.path, pathKey);
   if (file === null) return true;
   const info = editor.cursorInfo();
@@ -6133,16 +6169,25 @@ async function texpressoSourceGesture(
     suppressEditorScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
     editor.revealOffset(range.from);
   }
-  editor.focus();
-  // A caret placed from the preview must not move the preview.
+  // Focus and selection restoration belong to the preview gesture itself: they
+  // must neither move the preview nor clear the highlight it just painted.
   caretCameFromPreview = true;
   try {
+    editor.focus();
     editor.view.dispatch({
       selection:
         mark.caret === null ? { anchor: held.anchor, head: held.head } : { anchor: mark.caret },
     });
   } finally {
     caretCameFromPreview = false;
+  }
+  // A double-click can switch tabs (clearing the frame's selection during
+  // `displayDoc`) or race with the first press's caret lookup, and PhiTeX's
+  // double-click paints no mark of its own: assert the word mark in the frame.
+  if (mark.unit === "range" && detail >= 2) {
+    session.post({ type: "select", file, from: range.from, to: range.to, blink: false });
+  } else if (session.key.backend === "phitex" && mark.unit !== "range") {
+    session.post({ type: "clear" });
   }
 }
 
@@ -6382,9 +6427,7 @@ function showTypstFailure(error: unknown, wanted: string): void {
     {
       label: hadOutput ? "Build failed" : "No output produced",
       severity: "error",
-      detail: [hadOutput ? "Showing previous output" : "", compiledUi.issueSummary]
-        .filter(Boolean)
-        .join(" · "),
+      detail: hadOutput ? "Showing previous output" : undefined,
       engine: "Typst",
     },
   );
@@ -6646,16 +6689,11 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
       seconds: ((performance.now() - started) / 1000).toFixed(1),
       blocks: mapped.blocks,
     };
-    setTypstStatus(
-      `Compiled with Typst${rendered.warnings.length ? ` · ${rendered.warnings.length} warnings` : ""}`,
-      false,
-      {
-        label: "Document ready",
-        severity: rendered.warnings.length ? "warning" : "success",
-        detail: compiledUi.issueSummary,
-        engine: `Typst · ${((performance.now() - started) / 1000).toFixed(1)} s`,
-      },
-    );
+    setTypstStatus("Document ready · Typst", false, {
+      label: "Document ready",
+      severity: "success",
+      engine: `Typst · ${((performance.now() - started) / 1000).toFixed(1)} s`,
+    });
     return;
   }
 
@@ -6738,16 +6776,11 @@ async function renderTypstPreview(source: string, token: number): Promise<void> 
     rendered,
     seconds: ((performance.now() - started) / 1000).toFixed(1),
   };
-  setTypstStatus(
-    `Compiled with Typst${rendered.warnings.length ? ` · ${rendered.warnings.length} warnings` : ""}`,
-    true,
-    {
-      label: "PDF ready",
-      severity: rendered.warnings.length ? "warning" : "success",
-      detail: compiledUi.issueSummary,
-      engine: `Typst · ${((performance.now() - started) / 1000).toFixed(1)} s`,
-    },
-  );
+  setTypstStatus("PDF ready · Typst", true, {
+    label: "PDF ready",
+    severity: "success",
+    engine: `Typst · ${((performance.now() - started) / 1000).toFixed(1)} s`,
+  });
 }
 
 /**
@@ -6870,16 +6903,12 @@ function showTypstChrome(rendered: api.RenderedTypst, seconds: string): void {
   configureCompiledUi();
   showTypstIssues(rendered);
   const pages = rendered.kind === "pages";
-  setTypstStatus(
-    `Compiled with Typst${rendered.warnings.length ? ` · ${rendered.warnings.length} warnings` : ""}`,
-    pages,
-    {
-      label: pages ? "PDF ready" : "Document ready",
-      severity: rendered.warnings.length ? "warning" : "success",
-      detail: compiledUi.issueSummary,
-      engine: `Typst · ${seconds} s`,
-    },
-  );
+  const label = pages ? "PDF ready" : "Document ready";
+  setTypstStatus(`${label} · Typst`, pages, {
+    label,
+    severity: "success",
+    engine: `Typst · ${seconds} s`,
+  });
 }
 
 function typstDroppedNote(rendered: api.RenderedTypst): HTMLElement | null {
@@ -8364,6 +8393,39 @@ function openEncodingDialog(
   );
 }
 
+/** Open or activate `targetPath` in the editor and focus it. */
+async function openProjectFileInEditor(targetPath: string): Promise<void> {
+  if (doc.path && pathKey(doc.path) === pathKey(targetPath)) {
+    editor.focus();
+    return;
+  }
+  const opened = await openPath(targetPath, { rememberRecent: false });
+  if (opened && doc.id === opened.id) editor.focus();
+}
+
+let openingEncodingTarget = false;
+
+/**
+ * Open File › Encoding and Line Endings on the Convert tab for `targetPath`,
+ * activating or opening its tab first when it is another project file.
+ */
+async function openEncodingDialogForPath(targetPath: string): Promise<void> {
+  if (openingEncodingTarget || document.querySelector(".encoding-dialog[open]")) return;
+  if (doc.path && pathKey(doc.path) === pathKey(targetPath)) {
+    openEncodingDialog({ tab: "convert" });
+    return;
+  }
+  openingEncodingTarget = true;
+  try {
+    const opened = await openPath(targetPath, { rememberRecent: false });
+    if (opened && doc.id === opened.id && !document.querySelector(".encoding-dialog[open]")) {
+      openEncodingDialog({ tab: "convert" });
+    }
+  } finally {
+    openingEncodingTarget = false;
+  }
+}
+
 function formatLabel(format: SaveFormat): string {
   const bom = format.hadBom && format.encoding === "UTF-8" ? " with BOM" : "";
   return `${displayEncoding(format.encoding)}${bom} · ${format.lineEnding === "\r\n" ? "CRLF" : "LF"}`;
@@ -8386,13 +8448,35 @@ async function convertDocument(
   edits: DeclarationEdit[],
   snapshot: string,
 ): Promise<void> {
+  const previousEncoding = session.encoding;
   applyDeclarationEdits(session, edits, snapshot);
+  let saved = false;
   try {
-    if (await lifecycle.convert(session, format, copy)) toast(`Saved as ${formatLabel(format)}`);
+    saved = await lifecycle.convert(session, format, copy);
+    if (saved) toast(`Saved as ${formatLabel(format)}`);
   } catch (error) {
     await message(String(error), { title: "Could not convert", kind: "error" });
   }
-  if (session === doc) refreshStatus();
+  if (session === doc) {
+    refreshStatus();
+    // An in-place conversion keeps the same path, so `lifecycle.changed` does
+    // not rebuild the preview. Re-render compiled documents when the encoding
+    // changed so a UTF-8-only preview recovers straight away.
+    if (
+      saved &&
+      !copy &&
+      previousEncoding !== session.encoding &&
+      (session.language === "latex" || session.language === "typst")
+    ) {
+      if (texpressoFallbackReason?.reason === "encoding") {
+        texpressoFallbackReason = null;
+        texpressoChip();
+        clearPending();
+      }
+      previewStale = true;
+      scheduleRender(true);
+    }
+  }
 }
 
 /** Reinterpret: replace the buffer with a strict decode in a chosen encoding. */
@@ -14914,7 +14998,7 @@ async function boot(): Promise<void> {
       latexInFlight = false;
       setLatexStatus(
         settings.latexAutoCompile === false
-          ? "Out of date · Select Compile to update the preview."
+          ? "Out of date"
           : phiTeXShowing()
             ? PHITEX_TYPESETTING
             : "Out of date · Waiting to compile…",
@@ -14952,9 +15036,7 @@ async function boot(): Promise<void> {
     previewSyncReady = false;
     if (doc.language === "typst")
       setTypstStatus(
-        settings.typstAutoCompile === false
-          ? "Out of date · Select Compile to update the preview."
-          : "Out of date · Waiting to compile…",
+        settings.typstAutoCompile === false ? "Out of date" : "Out of date · Waiting to compile…",
       );
     syncedSource = null;
     window.clearTimeout(selectionTimer);

@@ -1,9 +1,48 @@
 //! Application chrome for both compiled formats. Rendered documents never own it.
+import { splitLinkedText } from "./latex-backend";
+
+export interface CompiledStatusLink {
+  /** Exact substring to render as an inline button link. */
+  text: string;
+  /** Optional starting offset when `text` could appear earlier in the sentence. */
+  index?: number;
+  title?: string;
+  run: () => void;
+}
+
 export interface CompiledStatus {
   label: string;
   severity: "neutral" | "success" | "warning" | "error";
   detail?: string;
+  detailLink?: CompiledStatusLink;
   engine?: string;
+}
+
+/**
+ * Render `text` into `target`, turning `link.text` into an inline button when
+ * present. Uses text nodes only so arbitrary filenames cannot inject markup.
+ */
+export function renderLinkedText(
+  target: HTMLElement,
+  text: string,
+  link?: CompiledStatusLink,
+): void {
+  const parts = link ? splitLinkedText(text, link.text, link.index) : null;
+  if (!parts || !link) {
+    target.textContent = text;
+    return;
+  }
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "preview-file-link";
+  button.textContent = parts.link;
+  if (link.title) button.title = link.title;
+  button.addEventListener("click", link.run);
+  target.replaceChildren(
+    document.createTextNode(parts.before),
+    button,
+    document.createTextNode(parts.after),
+  );
 }
 
 type Icon =
@@ -20,36 +59,34 @@ type Icon =
   | "chevron"
   | "restart"
   | "close"
-  | "first"
+  | "check"
   | "previous"
-  | "next"
-  | "last";
+  | "next";
 
 const IS_MAC = /Mac|iPhone|iPad/.test(navigator.userAgent);
 
 export class CompiledPreviewUi {
   private compile = this.button("Compile", "compiled-compile", "play");
-  // LaTeX only: the other half of a split button, listing Compile and
-  // Recompile from scratch. Typst compiles from source every time, so it has
-  // no stale build state for a second entry to clear.
+  // Split button for both LaTeX and Typst: the main half compiles (or cancels),
+  // and the chevron opens compile actions plus Auto-compile / Manual mode.
   private more = this.button("", "compiled-compile-more", "chevron");
   private split = document.createElement("div");
   private menu: HTMLElement | null = null;
   private closeMenuListeners: (() => void) | null = null;
   private compileClean: () => void;
-  private auto = document.createElement("input");
+  private readonly setAuto: (on: boolean) => void;
+  private format: "latex" | "typst" = "latex";
+  private autoCompile = true;
   private toggle = this.button("Logs", "compiled-logs-toggle", "logs");
-  // The visible label is short to leave the status beside it room; the
-  // accessible name (set in the constructor) stays the full "Save PDF".
+  // The visible label is short to leave the status beside it room, and hides
+  // below the compact breakpoint; the accessible name stays "Save PDF".
   private save = this.button("PDF", "compiled-save-pdf", "download");
   private modes = document.createElement("div");
   private pages = document.createElement("div");
-  private pageFirst = this.button("", "compiled-page-step", "first");
   private pagePrevious = this.button("", "compiled-page-step", "previous");
   private pageField = document.createElement("input");
   private pageTotal = document.createElement("span");
   private pageNext = this.button("", "compiled-page-step", "next");
-  private pageLast = this.button("", "compiled-page-step", "last");
   private pageAllowed = false;
   private pageTotalCount = 0;
   private currentPage = 1;
@@ -67,7 +104,7 @@ export class CompiledPreviewUi {
   private notice = document.createElement("div");
   private problems = document.createElement("div");
   private raw = document.createElement("pre");
-  private count = document.createElement("span");
+  private badges = document.createElement("span");
   private explicitLogs = false;
   private busy = false;
   private log = "";
@@ -91,15 +128,11 @@ export class CompiledPreviewUi {
     },
   ) {
     this.goToPage = actions.goToPage;
+    this.setAuto = actions.auto;
     const header = shell.querySelector<HTMLElement>("#compiled-controls")!;
     header.className = "compiled-toolbar";
     const row = document.createElement("div");
     row.className = "compiled-actions";
-    this.auto.type = "checkbox";
-    this.auto.setAttribute("role", "switch");
-    const label = document.createElement("label");
-    label.className = "compiled-auto latex-auto";
-    label.append(this.auto, document.createTextNode("Auto-compile"));
     this.modes.className = "compiled-modes";
     this.modes.setAttribute("role", "group");
     this.modes.setAttribute("aria-label", "Typst preview mode");
@@ -113,16 +146,10 @@ export class CompiledPreviewUi {
     this.pages.setAttribute("role", "group");
     this.pages.setAttribute("aria-label", "Page navigation");
     this.pages.hidden = true;
-    const pageSteps: Array<[HTMLButtonElement, string]> = [
-      [this.pageFirst, "First page"],
-      [this.pagePrevious, "Previous page"],
-      [this.pageNext, "Next page"],
-      [this.pageLast, "Last page"],
-    ];
-    for (const [button, label] of pageSteps) {
-      button.setAttribute("aria-label", label);
-      button.title = label;
-    }
+    this.pagePrevious.setAttribute("aria-label", "Previous page");
+    this.pagePrevious.title = "Previous page (Shift+click for first page)";
+    this.pageNext.setAttribute("aria-label", "Next page");
+    this.pageNext.title = "Next page (Shift+click for last page)";
     const pageBox = document.createElement("div");
     pageBox.className = "compiled-page-box";
     this.pageField.type = "text";
@@ -133,11 +160,13 @@ export class CompiledPreviewUi {
     this.pageField.setAttribute("aria-label", "Page number");
     this.pageTotal.className = "compiled-page-total";
     pageBox.append(this.pageField, this.pageTotal);
-    this.pages.append(this.pageFirst, this.pagePrevious, pageBox, this.pageNext, this.pageLast);
-    this.pageFirst.addEventListener("click", () => this.requestPage(1));
-    this.pagePrevious.addEventListener("click", () => this.requestPage(this.pageBase() - 1));
-    this.pageNext.addEventListener("click", () => this.requestPage(this.pageBase() + 1));
-    this.pageLast.addEventListener("click", () => this.requestPage(this.pageTotalCount));
+    this.pages.append(this.pagePrevious, pageBox, this.pageNext);
+    this.pagePrevious.addEventListener("click", (event) =>
+      this.requestPage(event.shiftKey ? 1 : this.pageBase() - 1),
+    );
+    this.pageNext.addEventListener("click", (event) =>
+      this.requestPage(event.shiftKey ? this.pageTotalCount : this.pageBase() + 1),
+    );
     this.pageField.addEventListener("focus", () => {
       this.pageEditing = false;
       this.pageField.select();
@@ -167,8 +196,10 @@ export class CompiledPreviewUi {
     });
     this.toggle.setAttribute("aria-controls", logs.id);
     this.toggle.setAttribute("aria-pressed", "false");
-    this.count.className = "compiled-issue-count";
-    this.toggle.append(this.count);
+    this.toggle.dataset.hasIssues = "false";
+    this.badges.className = "compiled-issue-badges";
+    this.badges.hidden = true;
+    this.toggle.append(this.badges);
     this.message.className = "compiled-message latex-build-message";
     this.message.setAttribute("role", "status");
     this.condition.className = "compiled-condition";
@@ -176,15 +207,12 @@ export class CompiledPreviewUi {
     this.stateDetail.className = "compiled-state-detail";
     this.engine.className = "compiled-engine";
     this.condition.append(this.icon("clock"), this.stateLabel);
-    this.message.append(this.condition, " ", this.stateDetail, " ", this.engine);
+    this.message.append(this.condition, this.stateDetail, this.engine);
     this.notice.className = "compiled-notice";
     this.notice.hidden = true;
     this.save.setAttribute("aria-label", "Save PDF");
-    // The status shares the action row, right-aligned beside Logs and Save, so
-    // the preview does not pay a whole extra line of height for it. It wraps to
-    // a row of its own only when the pane is too narrow to hold both.
     this.compileClean = actions.compileClean;
-    this.split.className = "compiled-split";
+    this.split.className = "compiled-split compiled-split-joined";
     this.split.setAttribute("role", "group");
     this.split.setAttribute("aria-label", "Compile");
     this.more.setAttribute("aria-label", "More compile options");
@@ -198,12 +226,17 @@ export class CompiledPreviewUi {
       this.openMenu();
     });
     this.split.append(this.compile, this.more);
-    row.append(this.split, label, this.modes, this.pages, this.message, this.toggle, this.save);
+    const divider = document.createElement("span");
+    divider.className = "compiled-divider";
+    divider.setAttribute("aria-hidden", "true");
+    const end = document.createElement("div");
+    end.className = "compiled-end";
+    end.append(this.toggle, this.save);
+    row.append(this.split, this.modes, this.pages, this.message, divider, end);
     header.append(row, this.notice);
     this.compile.addEventListener("click", () =>
       this.busy ? actions.cancel() : actions.compile(),
     );
-    this.auto.addEventListener("change", () => actions.auto(this.auto.checked));
     this.toggle.addEventListener("click", () => this.showLogs(!this.logsOpen));
     this.save.addEventListener("click", actions.save);
     this.caption.className = "compiler-log-caption";
@@ -307,10 +340,8 @@ export class CompiledPreviewUi {
   private updatePageButtons(): void {
     const atStart = this.currentPage <= 1;
     const atEnd = this.currentPage >= this.pageTotalCount;
-    this.pageFirst.disabled = atStart;
     this.pagePrevious.disabled = atStart;
     this.pageNext.disabled = atEnd;
-    this.pageLast.disabled = atEnd;
   }
 
   /** The page a step button should move from, including a typed page. */
@@ -361,10 +392,9 @@ export class CompiledPreviewUi {
       chevron: '<path d="m6 9 6 6 6-6"/>',
       restart: '<path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/>',
       close: '<path d="M18 6 6 18M6 6l12 12"/>',
-      first: '<path d="M5 5v14"/><path d="m19 5-10 7 10 7V5Z"/>',
-      previous: '<path d="m15 5-7 7 7 7"/>',
-      next: '<path d="m9 5 7 7-7 7"/>',
-      last: '<path d="M19 5v14"/><path d="M5 5l10 7-10 7V5Z"/>',
+      check: '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+      previous: '<path d="m15 6-6 6 6 6"/>',
+      next: '<path d="m9 6 6 6-6 6"/>',
     };
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 24 24");
@@ -399,23 +429,38 @@ export class CompiledPreviewUi {
   get phase(): string {
     return this.phaseText;
   }
-  get issueSummary(): string {
-    return this.issueText;
+
+  private syncCompileTitle(): void {
+    this.compile.title = this.busy
+      ? "Cancel compilation"
+      : this.autoCompile
+        ? "Compile (Auto-compile on)"
+        : "Compile (Manual mode)";
+  }
+
+  private updateStatusTooltip(): void {
+    const parts = [
+      this.stateLabel.textContent?.trim(),
+      this.stateDetail.hidden ? "" : this.stateDetail.textContent?.trim(),
+      this.issueText,
+      this.engine.hidden ? "" : this.engine.textContent?.trim(),
+    ].filter(Boolean);
+    this.message.title = parts.join(" · ");
   }
 
   configure(format: "latex" | "typst", auto: boolean, mode = "pages", fileName = ""): void {
+    if (this.format !== format) this.closeMenu();
+    this.format = format;
+    this.autoCompile = auto;
+    this.syncCompileTitle();
     this.shell.classList.add("compiled-preview");
     this.shell.dataset.compiler = format;
     this.shell.querySelector<HTMLElement>("#compiled-controls")!.hidden = false;
-    this.auto.checked = auto;
     this.title.textContent = format === "latex" ? "LaTeX logs" : "Typst logs";
     this.caption.textContent = fileName ? `${fileName} · Latest compilation` : "Latest compilation";
     this.save.classList.toggle("latex-save-pdf", format === "latex");
     this.modes.hidden = format !== "typst";
     this.pageAllowed = format === "latex" || mode === "pages";
-    this.more.hidden = format !== "latex";
-    this.split.classList.toggle("compiled-split-joined", format === "latex");
-    if (format !== "latex") this.closeMenu();
     this.save.hidden = format === "typst" && mode !== "pages";
     for (const button of this.modes.querySelectorAll("button")) {
       button.setAttribute("aria-pressed", String(button.dataset.mode === mode));
@@ -434,14 +479,17 @@ export class CompiledPreviewUi {
         this.icon(severity === "success" ? "ready" : severity === "neutral" ? "clock" : severity),
       );
     this.stateLabel.textContent = state?.label ?? label;
-    this.stateDetail.textContent = state?.detail ?? details.join(" · ");
-    this.stateDetail.hidden = !this.stateDetail.textContent;
+    const detailText = state ? (state.detail ?? "") : details.join(" · ");
+    renderLinkedText(this.stateDetail, detailText, state?.detailLink);
+    this.stateDetail.hidden = !detailText;
     this.engine.textContent = state?.engine ?? "";
     this.engine.hidden = !this.engine.textContent;
     this.busy = busy;
     this.compile.querySelector(".compiled-button-label")!.textContent = busy ? "Cancel" : "Compile";
     this.compile.querySelector("svg")!.replaceWith(this.icon(busy ? "stop" : "play"));
     this.compile.classList.toggle("latex-cancel", busy);
+    this.syncCompileTitle();
+    this.updateStatusTooltip();
     // While a build runs the main half is Cancel; a second compile from the
     // menu would only race it, so the menu waits for the build to end.
     this.more.disabled = busy;
@@ -486,13 +534,24 @@ export class CompiledPreviewUi {
     this.problems.replaceChildren(panel);
     this.raw.textContent = output || "The compiler reported no messages.";
     this.raw.className = failure ? "compiler-output typst-error" : "compiler-output";
-    this.count.textContent = String(count);
-    this.count.hidden = count === 0;
-    this.count.dataset.severity = failure ? "error" : "warning";
-    this.toggle.setAttribute(
-      "aria-label",
-      count ? `Logs, ${count} problem${count === 1 ? "" : "s"}` : "Logs",
-    );
+    const chip = (severity: "error" | "warning", value: number): HTMLSpanElement => {
+      const node = document.createElement("span");
+      node.className = "compiled-issue-count";
+      node.dataset.severity = severity;
+      node.append(
+        this.icon(severity === "error" ? "problem" : "warning"),
+        document.createTextNode(String(value)),
+      );
+      return node;
+    };
+    const chips: HTMLSpanElement[] = [];
+    if (errors > 0) chips.push(chip("error", errors));
+    if (warnings > 0) chips.push(chip("warning", warnings));
+    this.badges.replaceChildren(...chips);
+    this.badges.hidden = chips.length === 0;
+    this.toggle.dataset.hasIssues = chips.length > 0 ? "true" : "false";
+    this.toggle.setAttribute("aria-label", this.issueText ? `Logs, ${this.issueText}` : "Logs");
+    this.updateStatusTooltip();
   }
 
   /** Forget the previous build's problems and output, for a build from scratch. */
@@ -513,11 +572,16 @@ export class CompiledPreviewUi {
       hint: string,
       shortcut: string,
       run: () => void,
+      radio?: { mode: "auto" | "manual"; checked: boolean },
     ): HTMLButtonElement => {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "editor-menu-item compiled-compile-option";
-      button.setAttribute("role", "menuitem");
+      button.setAttribute("role", radio ? "menuitemradio" : "menuitem");
+      if (radio) {
+        button.dataset.compileMode = radio.mode;
+        button.setAttribute("aria-checked", String(radio.checked));
+      }
       const body = document.createElement("span");
       body.className = "compiled-option-body";
       const label = document.createElement("span");
@@ -540,6 +604,12 @@ export class CompiledPreviewUi {
       });
       return button;
     };
+    const chooseAuto = (on: boolean): void => {
+      if (this.autoCompile === on) return;
+      this.autoCompile = on;
+      this.syncCompileTitle();
+      this.setAuto(on);
+    };
     host.append(
       entry(
         "play",
@@ -548,12 +618,43 @@ export class CompiledPreviewUi {
         IS_MAC ? "\u21e7\u2318\u21a9" : "Ctrl+Shift+Enter",
         () => this.compile.click(),
       ),
+    );
+    if (this.format === "latex") {
+      host.append(
+        entry(
+          "restart",
+          "Recompile from scratch",
+          "Discard cached build state and logs, then compile",
+          "",
+          () => this.compileClean(),
+        ),
+      );
+    }
+    const sep = document.createElement("div");
+    sep.className = "editor-menu-sep";
+    sep.setAttribute("role", "separator");
+    const heading = document.createElement("div");
+    heading.className = "compiled-menu-heading";
+    heading.setAttribute("role", "presentation");
+    heading.textContent = "Compile mode";
+    host.append(
+      sep,
+      heading,
       entry(
-        "restart",
-        "Recompile from scratch",
-        "Discard cached build state and logs, then compile",
+        "check",
+        "Auto-compile",
+        "Rebuild automatically as you edit",
         "",
-        () => this.compileClean(),
+        () => chooseAuto(true),
+        { mode: "auto", checked: this.autoCompile },
+      ),
+      entry(
+        "check",
+        "Manual compile",
+        "Build only when you click Compile",
+        "",
+        () => chooseAuto(false),
+        { mode: "manual", checked: !this.autoCompile },
       ),
     );
     document.body.append(host);
