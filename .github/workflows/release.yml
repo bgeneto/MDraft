@@ -288,6 +288,14 @@ jobs:
   # The package is signed. Importing the public key that travelled in the
   # artefact must be enough for dnf and zypper, with no bypass flag; this is
   # the only check that the signature is usable on the distributions.
+  #
+  # openSUSE Tumbleweed mirrors are continuously rebuilt and can briefly serve
+  # metadata for files they do not have yet. zypper treats the whole repository
+  # as invalid in that case and the install fails on libraries that exist
+  # upstream, which blocked a release from publishing. The openSUSE leg retries
+  # the refresh and skips its install check with a warning only when the
+  # repositories themselves are broken; a real dependency failure still fails
+  # the job. Fedora keeps the check unconditional.
   # ---------------------------------------------------------------------------
   rpm-install:
     name: RPM install on ${{ matrix.label }}
@@ -300,9 +308,11 @@ jobs:
           - label: Fedora
             image: fedora:latest
             install: dnf -y install
+            skip_on_repository_error: "false"
           - label: openSUSE Tumbleweed
             image: opensuse/tumbleweed:latest
             install: zypper --non-interactive install
+            skip_on_repository_error: "true"
     container:
       image: ${{ matrix.image }}
     steps:
@@ -341,7 +351,52 @@ jobs:
               ;;
           esac
 
-          ${{ matrix.install }} "./${rpms[0]}"
+          skip_check() {
+            echo "::warning::$1"
+            {
+              echo "### openSUSE install check skipped"
+              echo
+              echo "$1"
+              echo
+              echo "The RPM signature was verified. A package or dependency problem after a clean repository refresh still fails this job."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+
+          # Tumbleweed is rebuilt continuously, and a mirror can briefly serve
+          # repository metadata that names files it does not have yet. zypper
+          # then discards the repository, and the install fails with "nothing
+          # provides" for libraries that are present upstream. That is an
+          # infrastructure problem rather than a defect in the package, so retry
+          # the refresh and skip only this distribution's install check when the
+          # repositories stay invalid. A real dependency or packaging failure
+          # after a clean refresh still fails the job.
+          if [ "${{ matrix.skip_on_repository_error }}" = "true" ]; then
+            refresh_log="$RUNNER_TEMP/zypper-refresh.log"
+            refreshed=false
+            for attempt in 1 2 3; do
+              if zypper --non-interactive refresh --force 2>&1 | tee "$refresh_log"; then
+                if ! grep -qE "is invalid|Failed to retrieve|not been refreshed because of an error" "$refresh_log"; then
+                  refreshed=true
+                  break
+                fi
+              fi
+              echo "::warning::openSUSE repository refresh failed (attempt $attempt/3)."
+              sleep 5
+            done
+            if [ "$refreshed" != "true" ]; then
+              skip_check "The openSUSE Tumbleweed repositories are invalid upstream."
+            fi
+          fi
+
+          install_log="$RUNNER_TEMP/install.log"
+          if ! ${{ matrix.install }} "./${rpms[0]}" 2>&1 | tee "$install_log"; then
+            if [ "${{ matrix.skip_on_repository_error }}" = "true" ] &&
+               grep -qE "is invalid|Failed to retrieve|not been refreshed because of an error|not found on medium" "$install_log"; then
+              skip_check "The openSUSE Tumbleweed repositories failed during the install."
+            fi
+            exit 1
+          fi
           rpm -qi mdraft
           echo "Requires:"
           rpm -qR mdraft

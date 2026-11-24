@@ -20,9 +20,12 @@ on:
       - "src-tauri/icons/**"
       - "package.json"
       - ".github/workflows/pages.yml"
-  release:
-    types: [published]
-  # A release published with GITHUB_TOKEN cannot trigger `release: published`.
+  # A release published with GITHUB_TOKEN cannot trigger `release: published`,
+  # and the github-pages environment only allows branch deployments, so a tag
+  # ref is rejected before any step runs. Tagged releases therefore deploy
+  # through the Release completion trigger below. A release published manually
+  # has no Release run to follow: dispatch this workflow from `master` after
+  # publishing it (see docs/releasing.md).
   workflow_run:
     workflows: [Release]
     types: [completed]
@@ -40,6 +43,7 @@ jobs:
     name: Build and deploy
     permissions:
       contents: read
+      actions: read
       pages: write
       id-token: write
     if: >-
@@ -109,6 +113,31 @@ jobs:
           path: ${{ runner.temp }}/artifact.tar
           retention-days: 1
           if-no-files-found: error
+
+      # deploy-pages looks the artifact up through the Actions API immediately
+      # after the upload step returns. That metadata can lag by a few seconds,
+      # which surfaces as "No artifacts named github-pages were found" even
+      # though the upload succeeded. Wait until the artifact is readable so the
+      # deployment does not depend on that race.
+      - name: Wait for the Pages artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 30); do
+            visible=$(gh api "repos/$GH_REPO/actions/runs/${{ github.run_id }}/artifacts" \
+              --jq '[.artifacts[] | select(.name == "github-pages" and .expired == false)] | length' \
+              2>/dev/null || echo 0)
+            if [ "$visible" -ge 1 ]; then
+              echo "The github-pages artifact is visible."
+              exit 0
+            fi
+            echo "The github-pages artifact is not visible yet (attempt $attempt/30)."
+            sleep 2
+          done
+          echo "::error::The github-pages artifact never became visible to the Actions API."
+          exit 1
 
       - name: Deploy
         id: deployment

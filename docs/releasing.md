@@ -124,8 +124,10 @@ Verify the files and platform checksums on the
 [release page](https://github.com/bgeneto/MDraft/releases). Workflow artifacts
 are also available from the run page. Do not commit generated build output.
 The [Pages workflow](../.github/workflows/pages.yml) refreshes the site after a
-successful tagged Release run, using the current default-branch site source
-and latest stable release version.
+successful tagged Release run, using the current default-branch site source and
+latest stable release version. The `github-pages` environment only permits
+deployments from branches, so a release published manually does not trigger the
+site by itself; dispatch Pages from `master` after publishing it (see below).
 
 ## Failed builds and corrections
 
@@ -139,6 +141,17 @@ gh workflow run release.yml --repo bgeneto/MDraft --ref v0.9.2
 Dispatching against a branch builds inspection artifacts but skips the release
 publish job; select the tag when retrying publication. A successful job on one
 platform alone does not publish the combined release.
+
+If a release had to be published manually (for example, from a run's artefacts
+after an infrastructure failure), deploy the site separately. A manual release
+does not trigger Pages, and the environment rejects tag refs:
+
+```powershell
+gh workflow run pages.yml --repo bgeneto/MDraft --ref master
+```
+
+The workflow checks out `master`, resolves the latest published release as the
+site version, and deploys. Verify the version on the site afterwards.
 
 If a fix requires source changes, merge a new PR with a new version and publish
 a new tag. Do not move/delete the previous tag or replace already published
