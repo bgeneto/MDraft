@@ -338,6 +338,17 @@ for (const [label, newline] of [
   );
 }
 
+{
+  // The preview removes every input except a checkbox after sanitising.
+  const source = 'one\n\n<input type="text">\n\n<input type="Checkbox">\n\ntwo';
+  const mapped = renderChunks(source, { map: true });
+  check(
+    "a removed form control has no element line, a checkbox keeps one",
+    JSON.stringify(mapped.elementLines) === JSON.stringify([1, 5, 7]),
+    JSON.stringify(mapped.elementLines),
+  );
+}
+
 check(
   "a document without raw HTML has no element-line fallback",
   renderChunks("one\n\ntwo", { map: true }).elementLines === undefined,

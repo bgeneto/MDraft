@@ -1095,7 +1095,7 @@ export function elementLinesFor(
       const element = node as ParsedElement;
       // Text and comment nodes render nothing in `host.children`.
       if (!element.tagName) continue;
-      const fate = sanitizedFate(element.tagName);
+      const fate = sanitizedFate(element.tagName, element.attrs);
       if (fate === "drop") continue;
       if (fate === "unwrap") {
         if (!visit(element.childNodes ?? [])) return false;
@@ -1127,6 +1127,7 @@ export function elementLinesFor(
 
 type ParsedElement = {
   tagName?: string;
+  attrs?: { name: string; value: string }[];
   childNodes?: unknown[];
   sourceCodeLocation?: {
     startOffset?: number;
@@ -1177,8 +1178,14 @@ const CONTENT_DROPPED = new Set([
   "title", "video", "xmp",
 ]); // prettier-ignore
 
-function sanitizedFate(tagName: string): "keep" | "unwrap" | "drop" {
+function sanitizedFate(tagName: string, attrs: ParsedElement["attrs"]): "keep" | "unwrap" | "drop" {
   const tag = tagName.toLowerCase();
+  // `normalizeInputs` in `markdown.ts` removes every input but a checkbox after
+  // sanitising, so such an input never reaches `host.children`.
+  if (tag === "input") {
+    const type = attrs?.find((attr) => attr.name === "type")?.value ?? "";
+    return type.toLowerCase() === "checkbox" ? "keep" : "drop";
+  }
   const allowed =
     !PREVIEW_FORBID_TAG_SET.has(tag) &&
     (parse5Html.getTagID(tag) === parse5Html.TAG_ID.UNKNOWN

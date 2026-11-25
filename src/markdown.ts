@@ -629,7 +629,10 @@ function decorateAlerts(host: HTMLElement): void {
   }
 }
 
-/** Keep only disabled task-list checkboxes; drop every other form control. */
+/**
+ * Keep only disabled task-list checkboxes; drop every other form control.
+ * `elementLinesFor` in `preview-render.ts` predicts this removal.
+ */
 function normalizeInputs(host: HTMLElement): void {
   for (const input of Array.from(host.querySelectorAll("input"))) {
     const type = (input.getAttribute("type") ?? "").toLowerCase();
