@@ -125,8 +125,8 @@ function assetUrl(raw: string, baseDir: string | null): string {
 export interface PreviewDescription {
   /**
    * True when every top-level block carries an exact `data-line` anchor. When
-   * false the panes cannot be aligned positionally and callers should fall back
-   * to proportional scrolling.
+   * false the panes cannot be aligned by block; pane sync then follows the word
+   * map alone, and without one the panes scroll independently.
    */
   linesMapped: boolean;
   /** Number of anchored blocks. */

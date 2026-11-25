@@ -1365,6 +1365,45 @@ await resetView();
   );
 }
 
+// A block zip that cannot be proved drops every `data-line`. Pane sync must then
+// follow the word map alone instead of leaving the panes independent.
+{
+  await resetView();
+  await sleep(250);
+  await evaluate(`window.__mdraftDebug.dropBlockAnchors()`);
+  const state = await evaluate(`({
+    anchors: document.querySelectorAll("#preview [data-line]").length,
+    anchored: window.__mdraftDebug.syncState().anchored,
+  })`);
+  check(
+    "the preview has no block anchors left",
+    state?.anchors === 0 && state?.anchored === false,
+    JSON.stringify(state),
+  );
+
+  await resetView();
+  await sleep(250);
+  await evaluate(`document.querySelector(".cm-scroller").scrollTop = 400`);
+  await sleep(400);
+  const sourceScrolled = await scrollState();
+  check(
+    "without block anchors, scrolling the source follows the word map",
+    typeof sourceScrolled.preview === "number" && sourceScrolled.preview > 40,
+    JSON.stringify(sourceScrolled),
+  );
+
+  await resetView();
+  await sleep(250);
+  await evaluate(`document.getElementById("preview-pane").scrollTop = 400`);
+  await sleep(400);
+  const previewScrolled = await scrollState();
+  check(
+    "without block anchors, scrolling the preview follows the word map",
+    typeof previewScrolled.source === "number" && previewScrolled.source > 40,
+    JSON.stringify(previewScrolled),
+  );
+}
+
 ws.close();
 await new Promise((resolve) => setTimeout(resolve, 200));
 console.log(`\n${passed}/${passed + failed} checks passed`);

@@ -7187,7 +7187,7 @@ async function doRender(force = false): Promise<void> {
     lastMappedState = result.linesMapped;
     if (!result.linesMapped) {
       console.info(
-        "[sync] positional pane sync is unavailable for this document; scrolling stays independent",
+        "[sync] block anchors are unavailable for this document; pane sync follows the word map alone",
       );
     }
   }
@@ -10807,6 +10807,8 @@ function alignPreviewToLine(line: number): void {
  */
 function alignPreviewToScroll(): void {
   if (alignDomTextScroll("source")) return;
+  // Unproved block anchors are never interpolated; the word map alone leads.
+  if (!previewLinesMapped) return;
   const reference = scrollReference("source");
   const measured = blockCorrection(
     domBlockTops("source", reference),
@@ -10832,6 +10834,7 @@ function alignPreviewToScroll(): void {
  */
 function alignEditorToScroll(): void {
   if (alignDomTextScroll("preview")) return;
+  if (!previewLinesMapped) return;
   const reference = scrollReference("preview");
   const measured = blockCorrection(
     domBlockTops("preview", reference),
@@ -11050,6 +11053,8 @@ interface ProseDebugWindow {
     wordMapDoneAt?: number | null;
     /** The sync line and the last gesture, for the CDP suites. */
     syncState?: () => Record<string, unknown>;
+    /** Drop the block anchors as an unproved zip does, for the CDP suites. */
+    dropBlockAnchors?: () => void;
   };
 }
 
@@ -11149,6 +11154,16 @@ function wordSyncAvailable(): boolean {
     wordMap !== null &&
     wordMap.source === editor.getDoc()
   );
+}
+
+/**
+ * A flowing preview has an exact pairing for pane sync: its block anchors, or,
+ * when those could not be proved, the word map of this exact source. Without
+ * either the panes scroll independently; a scroll ratio drifts, so it is no
+ * fallback.
+ */
+function flowingSyncPairs(): boolean {
+  return previewLinesMapped || (wordMap !== null && wordMap.source === editor.getDoc());
 }
 
 /** The source range the current preview selection points at. */
@@ -12004,7 +12019,7 @@ function gestureSyncAvailable(): boolean {
 /** Markdown, AsciiDoc and Typst Document: rendered text in this document. */
 function flowingPreviewShowing(): boolean {
   return (
-    previewLinesMapped &&
+    flowingSyncPairs() &&
     doc.language !== "html" &&
     doc.language !== "latex" &&
     !(doc.language === "typst" && settings.typstView === "pages")
@@ -12121,6 +12136,7 @@ function solveDomGesture(point: GesturePoint): number | null {
       if (solved) return solved.delta;
     }
   }
+  if (!previewLinesMapped) return null;
   return blockCorrection(domBlockTops(point.pane, point.y), point.y);
 }
 
@@ -12558,7 +12574,7 @@ function queuePaneScroll(direction: SyncPane): void {
         const layout = htmlPreview.layout();
         if (layout) syncHtmlToEditor(layout);
       }
-    } else if (previewLinesMapped && domScrollSource === editor.getDoc()) {
+    } else if (flowingSyncPairs() && domScrollSource === editor.getDoc()) {
       if (direction === "source") alignPreviewToScroll();
       else alignEditorToScroll();
     }
@@ -12704,7 +12720,7 @@ function installPaneSync(): void {
       if (performance.now() >= suppressEditorScrollUntil) queuePaneScroll("source");
       return;
     }
-    if (!settings.syncScroll || settings.viewMode !== "split" || !previewLinesMapped) return;
+    if (!settings.syncScroll || settings.viewMode !== "split" || !flowingSyncPairs()) return;
     if (performance.now() < suppressEditorScrollUntil) return;
     queuePaneScroll("source");
   });
@@ -12760,7 +12776,16 @@ function installPaneSync(): void {
     dragging: syncDragging,
     suppressEditor: Math.round(suppressEditorScrollUntil - performance.now()),
     suppressPreview: Math.round(suppressPreviewScrollUntil - performance.now()),
+    anchored: previewLinesMapped,
   });
+  // Tests: leave the preview as a block zip that could not be proved leaves it,
+  // so the word-map fallback can be checked without an unmappable document.
+  debugWindow.__mdraftDebug.dropBlockAnchors = () => {
+    for (const el of Array.from(preview.querySelectorAll<HTMLElement>("[data-line]")))
+      el.removeAttribute("data-line");
+    previewLinesMapped = false;
+    rebuildAnchors();
+  };
   // An image that decodes or a diagram that draws after the gesture changes the
   // preview's height without any input from the reader.
   new ResizeObserver(resolvePinnedGesture).observe(preview);
