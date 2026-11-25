@@ -2502,6 +2502,13 @@ let htmlRestoreLine: number | null = null;
 /** Last scroll offset reported by the HTML guest. The preview pane does not scroll. */
 let htmlScrollTop = 0;
 /**
+ * Suppresses unsolicited guest scroll events (async CDN CSS/fonts, MathJax or
+ * Mermaid layout growth, `overflow-anchor`, `<input autofocus>`) after an edit
+ * rebuild while focus stays in the editor, until the reader interacts with the
+ * preview.
+ */
+let htmlEditHold = false;
+/**
  * Scroll to restore after the next preview rebuild. Null means the render may
  * align the preview to the caret, which is what a keystroke wants and a tab
  * switch must not do.
@@ -7762,6 +7769,7 @@ async function assistantFileName(
 /** Drop the guest when the editor leaves HTML; start a fresh nonce when it enters. */
 function syncGuest(next: api.DocumentLanguage): void {
   if (!htmlPreview) return;
+  htmlEditHold = false;
   // A reset guest is blank, whatever key the last build left behind.
   if (next === "html") committedKey = null;
   if (next === "html") htmlPreview.reset();
@@ -11573,9 +11581,17 @@ function revealHtmlCursor(line: number): void {
   const index = htmlIndexForLine(layout.anchors, line);
   if (index < 0) return;
   const top = layout.anchors[index].top;
+  let bottom = layout.height;
+  for (let i = index + 1; i < layout.anchors.length; i += 1) {
+    if (layout.anchors[i].top > top + 1) {
+      bottom = layout.anchors[i].top;
+      break;
+    }
+  }
   const viewTop = layout.top;
   const viewBottom = layout.top + layout.client;
-  if (top >= viewTop && top <= viewBottom - 40) return;
+  if ((top >= viewTop && top <= viewBottom - 40) || (top < viewTop && bottom >= viewTop + 40))
+    return;
   // Level with the caret where its row can be measured; otherwise, and with
   // Sync off, the block goes to the top of the guest.
   const point = gestureSyncAvailable() ? sourceGesturePoint() : null;
@@ -11916,12 +11932,18 @@ function htmlBlockTops(layout: HtmlLayout, direction: SyncPane, reference: numbe
   if (!frame) return [];
   const scale = layout.scale > 0 ? layout.scale : 1;
   const frameTop = frame.getBoundingClientRect().top;
+  // `layout.anchors` is ordered by source line; CSS grid/flex/`order` layouts
+  // can place a later line higher on screen, which breaks binary search on Y.
+  const anchors =
+    direction === "preview"
+      ? [...layout.anchors].sort((a, b) => a.top - b.top || a.line - b.line)
+      : layout.anchors;
   return blockTopsAround(
     direction,
     reference,
-    layout.anchors.length,
-    (index) => layout.anchors[index].line,
-    (index) => frameTop + (layout.anchors[index].top - layout.top) * scale,
+    anchors.length,
+    (index) => anchors[index].line,
+    (index) => frameTop + (anchors[index].top - layout.top) * scale,
     () => scrollCommonTop() + SYNC_MARGIN + (layout.height - layout.client - layout.top) * scale,
   );
 }
@@ -13608,8 +13630,10 @@ function handleHtmlAction(id: string): void {
   runMenuAction(id, "key");
 }
 
-function handleHtmlReady(layout: HtmlLayout): void {
+function handleHtmlReady(layout: HtmlLayout, restored = false): void {
   if (doc.language !== "html") return;
+  htmlScrollTop = layout.top;
+  htmlEditHold = restored && !layout.paged && editor.view.hasFocus;
   // A new guest starts at the default probe height.
   if (syncReference.preview !== SYNC_MARGIN) publishSyncReference();
   resolvePinnedGesture();
@@ -13618,12 +13642,20 @@ function handleHtmlReady(layout: HtmlLayout): void {
   syncPreviewFromSource();
   if (pendingPreviewScroll !== null) {
     htmlRestoreLine = null;
+    htmlEditHold = false;
     applyPendingPreviewScroll();
     updateActiveOutline();
     return;
   }
   const line = htmlRestoreLine ?? editor.cursorInfo().line;
   htmlRestoreLine = null;
+  // Rebuilds of an already-open scrollable document restore their exact
+  // scroll offset inside the guest before `ready`, so jumping to a block top
+  // here would snap away from the line being edited.
+  if (restored && !layout.paged) {
+    updateActiveOutline();
+    return;
+  }
   // A deck may still be starting here; the guest holds the line until it is.
   if (layout.anchors.length >= 2 || layout.paged) {
     suppressPreviewScrollUntil = performance.now() + SYNC_SUPPRESS_MS;
@@ -13645,9 +13677,11 @@ function handleHtmlPage(line: number, own: boolean): void {
   editor.revealLine(line);
 }
 
-function handleHtmlScroll(layout: HtmlLayout): void {
+function handleHtmlScroll(layout: HtmlLayout, own = false): void {
   htmlScrollTop = layout.top;
-  if (doc.language !== "html") return;
+  if (doc.language !== "html" || own) return;
+  if (htmlEditHold && editor.view.hasFocus) return;
+  htmlEditHold = false;
   if (performance.now() < suppressPreviewScrollUntil) return;
   queuePaneScroll("preview");
 }
@@ -15131,6 +15165,7 @@ async function boot(): Promise<void> {
     onZoomWheel: zoomFromWheel,
     onScrollInput: (dragging) => {
       htmlScrollDragging = dragging;
+      htmlEditHold = false;
       scrollOwnership.input();
       suppressPreviewScrollUntil = 0;
     },

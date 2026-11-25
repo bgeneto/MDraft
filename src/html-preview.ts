@@ -103,8 +103,8 @@ export interface HtmlPreviewCallbacks {
   onClear(): void;
   onLink(href: string, raw: string): void;
   onAction(id: string): void;
-  onScroll(layout: HtmlLayout): void;
-  onReady(layout: HtmlLayout): void;
+  onScroll(layout: HtmlLayout, own?: boolean): void;
+  onReady(layout: HtmlLayout, restored?: boolean): void;
   onError(message: string): void;
   onScrollInput?(dragging: boolean): void;
   /** A deck changed slide; `own` when the host asked for it. */
@@ -171,6 +171,8 @@ interface FrameState {
   fragments: HtmlTextFragment[];
   /** Its texts per stamp, posted to the guest on `ready`; null when too large. */
   table: HtmlTextTable | null;
+  /** Scroll offset baked into this frame's bridge before `ready`, or null on first load. */
+  initialScrollTop: number | null;
   /** Resolves the render that created this frame; a no-op once settled. */
   settle: (outcome: HtmlRenderOutcome) => void;
 }
@@ -289,6 +291,7 @@ export async function buildHtmlPreview(
   source: string,
   token: string,
   bridgeNonce: string,
+  initialScrollTop: number | null = null,
 ): Promise<HtmlPreviewBuild> {
   const { parse } = await loadParse5();
   const document: any = parse(source, { sourceCodeLocationInfo: true });
@@ -391,7 +394,7 @@ export async function buildHtmlPreview(
   };
   walk(document, null, -1);
 
-  const bridge = bridgeMarkup(token, bridgeNonce);
+  const bridge = bridgeMarkup(token, bridgeNonce, initialScrollTop);
   insertions.push({ at: bridgeInsertOffset(document, source), text: bridge });
   insertions.sort((left, right) => right.at - left.at);
 
@@ -451,9 +454,18 @@ function addsCrossOrigin(node: any): boolean {
 // classic script it is a plain function in the bridge's own scope.
 const ALIGN_CODE = alignTemplate.replace(/^export function /m, "function ");
 
-function bridgeMarkup(token: string, nonce: string): string {
+function bridgeMarkup(
+  token: string,
+  nonce: string,
+  initialScrollTop: number | null = null,
+): string {
+  const scroll =
+    initialScrollTop !== null && Number.isFinite(initialScrollTop) && initialScrollTop >= 0
+      ? String(initialScrollTop)
+      : "";
   const code = bridgeTemplate
     .replace('"__MDRAFT_TOKEN__"', JSON.stringify(token))
+    .replace('"__MDRAFT_SCROLL__"', JSON.stringify(scroll))
     .replace("/* __MDRAFT_ALIGN__ */", () => ALIGN_CODE);
   return `<script nonce="${escapeAttribute(nonce)}">\n${code}\n</script>`;
 }
@@ -629,6 +641,8 @@ export function createHtmlPreview(
   let htmlFragments: HtmlTextFragment[] = [];
   // The deck position of this document's last frame, carried into the next.
   let deckPage: HtmlPage | null = null;
+  // The scroll offset of this document's last frame, carried into rebuilds.
+  let lastScrollTop: number | null = null;
   let scrollIndex = new ScrollIndex<HtmlScrollAnchor>([]);
   let scrollRequest = 0;
   let pendingScroll: {
@@ -681,7 +695,19 @@ export function createHtmlPreview(
       // nodes (after the document's math or code scripts ran) against it.
       if (frame.table) postTo(frame, { type: "texts", ...frame.table });
       postTo(frame, { type: "keys", list: accelerators });
-      callbacks.onReady(layout);
+      const restored = data.restored === true;
+      if (!layout.paged) {
+        if (
+          frame.initialScrollTop !== null &&
+          lastScrollTop !== null &&
+          Math.abs(lastScrollTop - frame.initialScrollTop) > 1
+        ) {
+          postTo(frame, { type: "scrollTo", top: lastScrollTop });
+        } else {
+          lastScrollTop = layout.top;
+        }
+      }
+      callbacks.onReady(layout, restored);
       frame.settle("current");
       return;
     }
@@ -722,6 +748,7 @@ export function createHtmlPreview(
       if (layout) {
         currentLayout = layout;
         if (layout.paged) deckPage = layout.paged;
+        else lastScrollTop = layout.top;
       }
       return;
     }
@@ -738,7 +765,8 @@ export function createHtmlPreview(
       const layout = readLayout(data, htmlFragments, frame.frame);
       if (layout) {
         currentLayout = layout;
-        callbacks.onScroll(layout);
+        if (!layout.paged) lastScrollTop = layout.top;
+        callbacks.onScroll(layout, data.own === true);
       }
       return;
     }
@@ -878,7 +906,12 @@ export function createHtmlPreview(
     };
   }
 
-  function makeFrame(url: string, token: string, fragments: HtmlTextFragment[]): FrameState {
+  function makeFrame(
+    url: string,
+    token: string,
+    fragments: HtmlTextFragment[],
+    initialScrollTop: number | null,
+  ): FrameState {
     const frame = document.createElement("iframe");
     frame.className = "html-preview-frame pending";
     frame.title = "HTML preview";
@@ -896,6 +929,7 @@ export function createHtmlPreview(
       timer: 0,
       fragments,
       table: htmlTextTable(fragments),
+      initialScrollTop,
       source: "",
       settle: () => {},
     };
@@ -928,6 +962,7 @@ export function createHtmlPreview(
       guestBase = null;
       htmlFragments = [];
       deckPage = null;
+      lastScrollTop = null;
     },
 
     async render(source, root, filename, scripts, imageRoots = []) {
@@ -938,9 +973,10 @@ export function createHtmlPreview(
       const previewNonce = nonce;
       const bridgeNonce = randomToken();
       const token = randomToken();
+      const restoreTop = deckPage ? null : lastScrollTop;
       let built: HtmlPreviewBuild;
       try {
-        built = await buildHtmlPreview(source, token, bridgeNonce);
+        built = await buildHtmlPreview(source, token, bridgeNonce, restoreTop);
       } catch (error) {
         if (mine !== generation) return "superseded";
         callbacks.onError(`Could not prepare the HTML preview: ${String(error)}`);
@@ -968,7 +1004,7 @@ export function createHtmlPreview(
       }
       if (mine !== generation) return "superseded";
 
-      const next = makeFrame(url, token, built.fragments);
+      const next = makeFrame(url, token, built.fragments, restoreTop);
       next.source = source;
       guestBase = url;
       // A newer render supersedes a frame that has not become ready yet.
@@ -997,6 +1033,7 @@ export function createHtmlPreview(
     dispose() {
       generation += 1;
       deckPage = null;
+      lastScrollTop = null;
       dropFrames();
       guestBase = null;
       htmlFragments = [];
@@ -1010,6 +1047,7 @@ export function createHtmlPreview(
     },
 
     scrollTo(top, input) {
+      if (Number.isFinite(top)) lastScrollTop = Math.max(0, top);
       if (active) postTo(active, { type: "scrollTo", top, input });
     },
 

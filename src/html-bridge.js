@@ -34,6 +34,11 @@
   );
 
   var TOKEN = "__MDRAFT_TOKEN__";
+  var INITIAL_SCROLL = "__MDRAFT_SCROLL__";
+  var initialScrollTarget =
+    INITIAL_SCROLL !== "" && isFinite(Number(INITIAL_SCROLL))
+      ? Math.max(0, Number(INITIAL_SCROLL))
+      : null;
   var BLINK_MS = 620;
   var SYNC_MARGIN = 12;
   // Where the host's sync line crosses this viewport. It is SYNC_MARGIN until a
@@ -87,6 +92,52 @@
   var layoutEpoch = 0;
   var scrollInput = 0;
   var scrollDragging = false;
+  var ownScrollTarget = null;
+  var ownScrollUntil = 0;
+  var pendingInitialScroll = initialScrollTarget;
+
+  // Scroll instantaneously even when the document sets `scroll-behavior: smooth`,
+  // and mark the resulting scroll as host-driven until genuine user input arrives
+  // so CSS `scroll-snap` or `overflow-anchor` adjustments do not echo back.
+  function instantScrollTo(top) {
+    var target = Math.max(0, top);
+    var before = window.scrollY;
+    window.scrollTo({ left: 0, top: target, behavior: "instant" });
+    var after = window.scrollY;
+    if (Math.abs(after - before) >= 0.5) {
+      ownScrollTarget = after;
+      ownScrollUntil = performance.now() + 150;
+    }
+  }
+
+  // Viewport-pinned (`fixed`/`sticky`) and hidden subtrees do not name a
+  // readable flow position. Memoised per scan to keep layout reads O(nodes).
+  function isExcludedAnchor(element, cache) {
+    var chain = [];
+    var excluded = false;
+    for (var node = element; node && node.nodeType === 1; node = node.parentElement) {
+      var known = cache ? cache.get(node) : undefined;
+      if (known !== undefined) {
+        excluded = known;
+        break;
+      }
+      chain.push(node);
+      var style = window.getComputedStyle(node);
+      if (
+        style.position === "fixed" ||
+        style.position === "sticky" ||
+        style.visibility === "hidden" ||
+        style.visibility === "collapse"
+      ) {
+        excluded = true;
+        break;
+      }
+    }
+    if (cache) {
+      for (var j = 0; j < chain.length; j += 1) cache.set(chain[j], excluded);
+    }
+    return excluded;
+  }
 
   function post(message) {
     message.__mdraft = TOKEN;
@@ -104,15 +155,17 @@
     // the present one still have boxes, transformed far off screen. Only the
     // slide on screen has positions worth reporting.
     var slide = deck ? deck.getCurrentSlide() : null;
+    var excludedCache = slide ? null : new WeakMap();
     for (var i = 0; i < nodes.length; i += 1) {
       var element = nodes[i];
       if (slide && !slide.contains(element)) continue;
+      if (!slide && isExcludedAnchor(element, excludedCache)) continue;
       var line = parseInt(element.getAttribute("data-mdraft-line"), 10);
       if (!isFinite(line)) continue;
       var rect = element.getBoundingClientRect();
-      // Hidden elements have no position to synchronise against. Keeping them
-      // would make the interpolation jump to zero.
-      if (rect.width === 0 && rect.height === 0) continue;
+      // Hidden elements and 1x1 screen-reader helpers (`.sr-only`,
+      // `.visually-hidden`) have no visible flow box to synchronise against.
+      if (rect.width <= 1 && rect.height <= 1) continue;
       found.push({ line: line, top: rect.top + window.scrollY, element: element });
     }
     found.sort(function (left, right) {
@@ -138,9 +191,13 @@
     if (anchors.length === 0) return 1;
     var y = window.scrollY + SYNC_MARGIN;
     var line = anchors[0].line;
+    var bestTop = -Infinity;
     for (var i = 0; i < anchors.length; i += 1) {
-      if (anchors[i].top <= y) line = anchors[i].line;
-      else break;
+      var top = anchors[i].top;
+      if (top <= y + 1 && top >= bestTop) {
+        bestTop = top;
+        line = anchors[i].line;
+      }
     }
     return line;
   }
@@ -182,8 +239,13 @@
     window.requestAnimationFrame(function () {
       scrollQueued = false;
       var state = metrics();
+      var own =
+        (ownScrollTarget !== null && Math.abs(state.top - ownScrollTarget) <= 1) ||
+        performance.now() < ownScrollUntil;
+      ownScrollTarget = null;
       post({
         type: "scroll",
+        own: own,
         top: state.top,
         height: state.height,
         client: state.client,
@@ -379,12 +441,24 @@
   window.addEventListener("resize", queueLayout);
   window.addEventListener("load", function () {
     watchDeck();
+    if (!deck && !revealApi() && pendingInitialScroll !== null && scrollInput === 0) {
+      var target = pendingInitialScroll;
+      pendingInitialScroll = null;
+      instantScrollTo(target);
+    }
     queueLayout();
   });
 
   document.addEventListener("DOMContentLoaded", function () {
     installBlinkStyle();
     watchDeck();
+    var restored = false;
+    if (!deck && !revealApi() && pendingInitialScroll !== null) {
+      var target = pendingInitialScroll;
+      instantScrollTo(target);
+      restored = true;
+      if (Math.abs(window.scrollY - target) <= 1) pendingInitialScroll = null;
+    }
     layout();
     if (!readySent) {
       readySent = true;
@@ -398,6 +472,7 @@
         client: state.client,
         line: state.line,
         paged: state.paged,
+        restored: restored,
       });
     }
   });
@@ -580,11 +655,19 @@
   }
 
   function scrollProbe() {
-    for (var y of [probeY + 2, probeY + 14, probeY + 28]) {
-      for (var x of [32, window.innerWidth * 0.4, window.innerWidth * 0.7]) {
+    var excludedCache = new WeakMap();
+    // Prefer the centre column first so two- and three-column docs (left nav,
+    // main article, right TOC) probe the article instead of a sidebar.
+    var xs = [window.innerWidth * 0.5, window.innerWidth * 0.35, window.innerWidth * 0.65, 32];
+    for (var y of [probeY + 2, probeY + 14, probeY + 28, probeY + 64, probeY + 100]) {
+      if (y >= window.innerHeight) continue;
+      for (var x of xs) {
         var point = document.caretRangeFromPoint && document.caretRangeFromPoint(x, y);
         if (!point || point.startContainer.nodeType !== 3) continue;
         var node = point.startContainer;
+        if (node.parentElement && isExcludedAnchor(node.parentElement, excludedCache)) continue;
+        var box = node.parentElement ? node.parentElement.getBoundingClientRect() : null;
+        if (box && box.width <= 1 && box.height <= 1) continue;
         var entry = textEntry(node);
         if (!entry) continue;
         var offset = point.startOffset;
@@ -607,6 +690,9 @@
   }
 
   function reportScrollInput() {
+    ownScrollTarget = null;
+    ownScrollUntil = 0;
+    pendingInitialScroll = null;
     scrollInput += 1;
     post({ type: "scrollInput", dragging: scrollDragging });
   }
@@ -999,14 +1085,16 @@
       // A deck's viewport does not scroll; the host steers it by line.
       if (deck) return;
       if (data.input !== undefined && data.input !== scrollInput) return;
+      pendingInitialScroll = null;
       var top = Number(data.top);
-      if (isFinite(top)) window.scrollTo(0, Math.max(0, top));
+      if (isFinite(top)) instantScrollTo(top);
     } else if (data.type === "measureScroll") {
       measureScroll(data);
     } else if (data.type === "probeAt") {
       var height = Number(data.y);
       if (isFinite(height)) probeY = Math.max(0, Math.min(window.innerHeight, height));
     } else if (data.type === "scrollToLine") {
+      pendingInitialScroll = null;
       if (deck) {
         goToLine(Number(data.line));
         return;
@@ -1017,10 +1105,11 @@
         return;
       }
       var anchor = anchorForLine(Number(data.line));
-      if (anchor) window.scrollTo(0, Math.max(0, anchor.top - SYNC_MARGIN));
+      if (anchor) instantScrollTo(anchor.top - SYNC_MARGIN);
     } else if (data.type === "blink") {
       blink(Number(data.line));
     } else if (data.type === "hash") {
+      pendingInitialScroll = null;
       var element = document.getElementById(String(data.id));
       if (element && deck) showInDeck(element);
       else if (element) element.scrollIntoView({ block: "start" });

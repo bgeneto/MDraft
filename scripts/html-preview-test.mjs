@@ -1066,6 +1066,155 @@ check(
   rebuiltSrc,
 );
 
+console.log("\n=== smooth scroll, sticky chrome and async layout shifts ===");
+// Covers framework patterns (Bootstrap 5 default `:root { scroll-behavior: smooth }`,
+// sticky navbar + sticky TOC sidebar, 1x1 `.sr-only` helpers, CSS `order` grid,
+// `scroll-snap-type` and post-load async layout growth) during live typing.
+const styledFile = path.join(syncDir, "styled-guide.html");
+const styledSections = Array.from(
+  { length: 40 },
+  (_, index) =>
+    `<section class="card" id="sec-${index + 1}">` +
+    `<h2>Section ${index + 1} — Topic heading</h2>` +
+    `<p>Guidebody${String(index + 1).padStart(2, "0")} explains the institutional workflow in enough detail to wrap onto several visual lines inside the main column.</p>` +
+    `</section>`,
+).join("\n");
+fs.writeFileSync(
+  styledFile,
+  `<!doctype html><html lang="en"><head><meta charset="utf-8"><style>
+html { scroll-behavior: smooth; scroll-padding-top: 84px; scroll-snap-type: y proximity; }
+body { margin: 0; font: 16px/1.7 sans-serif; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); }
+header.top { position: sticky; top: 0; height: 64px; background: #fff; border-bottom: 1px solid #ccc; z-index: 20; padding: 12px 24px; box-sizing: border-box; }
+.layout { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 24px; padding: 16px 24px; }
+aside.side { position: sticky; top: 80px; align-self: start; }
+.reordered { display: flex; flex-direction: column; }
+.reordered .first-visual { order: -1; }
+.card { padding: 20px; margin-bottom: 18px; border: 1px solid #ddd; scroll-snap-align: start; }
+</style></head><body>
+<div class="sr-only">Skip to navigation helper text</div>
+<header class="top"><p>Sticky Header Navigation Title</p><div id="bar"></div></header>
+<div id="async-banner"></div>
+<div class="layout">
+  <aside class="side"><h2>Sticky Sidebar TOC</h2><ul>${Array.from({ length: 18 }, (_, i) => `<li><a href="#sec-${i + 1}">Sidebar item ${i + 1}</a></li>`).join("")}</ul></aside>
+  <main>
+    <div class="reordered"><p>Second visually, first in source.</p><p class="first-visual">First visually, second in source.</p></div>
+    ${styledSections}
+  </main>
+</div>
+<script>
+window.addEventListener("scroll", () => {
+  const bar = document.getElementById("bar");
+  if (bar) bar.style.width = Math.min(100, window.scrollY / 20) + "%";
+}, { passive: true });
+// Simulate async CDN CSS / web fonts / diagram growth after DOMContentLoaded.
+setTimeout(() => {
+  const banner = document.getElementById("async-banner");
+  if (banner) banner.style.height = "96px";
+}, 120);
+</script>
+</body></html>`,
+);
+const beforeStyled = await page.evaluate(
+  `document.querySelector('.html-preview-frame.active')?.getAttribute('src') ?? ''`,
+);
+await page.evaluate(
+  `window.__TAURI_INTERNALS__.invoke('plugin:event|emit',{event:'open-files',payload:[${JSON.stringify(styledFile)}]})`,
+);
+let styledSrc = await reconnect(beforeStyled);
+// Scroll the editor to Section 22 in the middle and click inside its paragraph.
+const targetClick = await page.evaluate(`(() => {
+  const v = document.querySelector('.cm-content').cmTile.root.view;
+  const text = v.state.doc.toString();
+  const pos = text.indexOf('Guidebody22');
+  if (pos < 0) return null;
+  v.scrollDOM.scrollTop = Math.max(0, v.lineBlockAt(pos).top - 220);
+  return pos;
+})()`);
+await sleep(300);
+const sourceCoords = await page.evaluate(`(() => {
+  const v = document.querySelector('.cm-content').cmTile.root.view;
+  const pos = v.state.doc.toString().indexOf('Guidebody22');
+  if (pos < 0) return null;
+  const c = v.coordsAtPos(pos + 5);
+  return c ? { x: c.left + 4, y: (c.top + c.bottom) / 2 } : null;
+})()`);
+if (sourceCoords) {
+  for (const type of ["mousePressed", "mouseReleased"]) {
+    await page.send("Input.dispatchMouseEvent", {
+      type,
+      x: sourceCoords.x,
+      y: sourceCoords.y,
+      button: "left",
+      clickCount: 1,
+    });
+  }
+}
+await sleep(450);
+const beforeTypingEditorTop = await page.evaluate(
+  `document.querySelector('.cm-scroller').scrollTop`,
+);
+const beforeTypingPreviewTop = await frame.evaluate(`window.scrollY`);
+check(
+  "styled guide aligns preview to the clicked mid-document paragraph",
+  targetClick !== null && beforeTypingEditorTop > 100 && beforeTypingPreviewTop > 800,
+  JSON.stringify({ beforeTypingEditorTop, beforeTypingPreviewTop }),
+);
+// Type word by word across multiple 300 ms debounced iframe rebuilds.
+let minPreviewDuringTyping = beforeTypingPreviewTop;
+let maxEditorDrift = 0;
+for (const chunk of [" alpha", " beta", " gamma"]) {
+  await page.send("Input.insertText", { text: chunk });
+  await sleep(480);
+  const currentSrc = await page.evaluate(
+    `document.querySelector('.html-preview-frame.active')?.getAttribute('src') ?? ''`,
+  );
+  if (currentSrc && currentSrc !== styledSrc) {
+    styledSrc = await reconnect(styledSrc);
+  }
+  const editorTopNow = await page.evaluate(`document.querySelector('.cm-scroller').scrollTop`);
+  const previewTopNow = await frame.evaluate(`window.scrollY`);
+  minPreviewDuringTyping = Math.min(minPreviewDuringTyping, previewTopNow);
+  maxEditorDrift = Math.max(maxEditorDrift, Math.abs(editorTopNow - beforeTypingEditorTop));
+}
+await sleep(500);
+const afterTypingEditorTop = await page.evaluate(
+  `document.querySelector('.cm-scroller').scrollTop`,
+);
+const afterTypingPreviewTop = await frame.evaluate(`window.scrollY`);
+check(
+  "typing in a smooth-scroll sticky-chrome HTML guide keeps editor scroll stable",
+  maxEditorDrift < 20 && Math.abs(afterTypingEditorTop - beforeTypingEditorTop) < 20,
+  JSON.stringify({ beforeTypingEditorTop, afterTypingEditorTop, maxEditorDrift }),
+);
+check(
+  "typing in a smooth-scroll sticky-chrome HTML guide never resets preview scroll to top",
+  minPreviewDuringTyping > 400 && Math.abs(afterTypingPreviewTop - beforeTypingPreviewTop) < 300,
+  JSON.stringify({ beforeTypingPreviewTop, minPreviewDuringTyping, afterTypingPreviewTop }),
+);
+// Real wheel scroll over the preview must release edit hold and sync the editor
+// to the article column (not the sticky header or sticky sidebar).
+const styledFrameRect = await page.evaluate(`(() => {
+  const b = document.querySelector('.html-preview-frame.active')?.getBoundingClientRect();
+  return b ? { x: b.left + b.width * 0.5, y: b.top + b.height * 0.5 } : null;
+})()`);
+if (styledFrameRect) {
+  await page.send("Input.dispatchMouseEvent", {
+    type: "mouseWheel",
+    x: styledFrameRect.x,
+    y: styledFrameRect.y,
+    deltaX: 0,
+    deltaY: 420,
+  });
+}
+await sleep(450);
+const afterWheelEditorTop = await page.evaluate(`document.querySelector('.cm-scroller').scrollTop`);
+check(
+  "wheeling the preview after typing syncs editor forward (not to sticky header/sidebar)",
+  afterWheelEditorTop > beforeTypingEditorTop + 30,
+  JSON.stringify({ beforeTypingEditorTop, afterWheelEditorTop }),
+);
+
 console.log("\n=== web source files ===");
 for (const [extension, content] of [
   ["js", "const message = 'hello';"],
