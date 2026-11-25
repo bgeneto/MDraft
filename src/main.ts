@@ -9150,14 +9150,6 @@ async function saveCompiledPdf(options: {
    * whole story.
    */
   revisions?: Array<{ id: string; revision: number; path: string | null }>;
-  /**
-   * Run the global after-export options on success.
-   *
-   * Set by File › Export › PDF, which is an export; the preview's own Save PDF
-   * button is a save, and running a configured "open the file" action there
-   * would be a surprise.
-   */
-  afterExport?: boolean;
   title?: string;
 }): Promise<boolean> {
   const chosen = await saveDialog({
@@ -9184,16 +9176,15 @@ async function saveCompiledPdf(options: {
   try {
     await api.saveCompiledPdf(chosen, options.data);
     toast(`Saved ${basename(chosen)}`);
-    // File › Export › PDF runs the global after-export actions on success only;
-    // the preview button is a save, not an export, and stays silent.
-    if (options.afterExport) {
-      const after = await api.runAfterExport(chosen);
-      if (after.afterErrors.length > 0) {
-        await message(after.afterErrors.join("\n\n"), {
-          title: "Saved, with a problem",
-          kind: "warning",
-        });
-      }
+    // The preview's PDF button and File › Export › PDF both write the compiled
+    // PDF, and readers expect the global after-export options (open the file,
+    // reveal its folder) from either; they run on success only.
+    const after = await api.runAfterExport(chosen);
+    if (after.afterErrors.length > 0) {
+      await message(after.afterErrors.join("\n\n"), {
+        title: "Saved, with a problem",
+        kind: "warning",
+      });
     }
     return true;
   } catch (error) {
@@ -9228,7 +9219,6 @@ async function exportCompiledLatexPdf(): Promise<void> {
     // The full snapshot, not just the active tab: a chapter edit invalidates the
     // PDF even though the root file's own revision did not move.
     revisions: value.revisions,
-    afterExport: true,
   });
 }
 

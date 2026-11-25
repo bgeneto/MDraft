@@ -468,7 +468,8 @@ validated, so a full `biblatex` project can compile natively.
 *File › Export › PDF* writes the PDF the preview is currently showing, byte for
 byte. It never starts a compile of its own: when the preview is stale the row is
 disabled and says why. The preview's own **Save PDF** button writes the same
-bytes. The file is named after the project's root `.tex` file even when an
+bytes. Both run the after-export options (open the file, open its folder,
+run a command) once the file is written. The file is named after the project's root `.tex` file even when an
 included chapter is the active tab, because that is the document the compile
 belongs to.
 
