@@ -349,6 +349,27 @@ for (const [label, newline] of [
   );
 }
 
+for (const [label, source, expected] of [
+  // The sanitiser parses a whole document: these land in <head> and are lost.
+  ["a leading <style>", "<style>\n.x{}\n</style>\n\none\n\ntwo", [5, 7]],
+  ["a leading <template>", "\n<template>\n<b>x</b>\n</template>\n\none", [6]],
+  // The same <style> after body content stays in the preview.
+  ["a <style> in the body", "one\n\n<style>\n.x{}\n</style>\n\ntwo", [1, 3, 7]],
+  // DOMPurify's mXSS guard removes a <style> whose text looks like markup.
+  [
+    "a <style> holding markup",
+    'one\n\n<style>\n.a::after{content:"</p>"}\n</style>\n\ntwo',
+    [1, 7],
+  ],
+]) {
+  const mapped = renderChunks(source, { map: true });
+  check(
+    `element lines follow the sanitiser: ${label}`,
+    JSON.stringify(mapped.elementLines) === JSON.stringify(expected),
+    JSON.stringify(mapped.elementLines),
+  );
+}
+
 check(
   "a document without raw HTML has no element-line fallback",
   renderChunks("one\n\ntwo", { map: true }).elementLines === undefined,

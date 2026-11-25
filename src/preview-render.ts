@@ -10,7 +10,7 @@
 //! what stops the two paths from drifting.
 
 import { Marked, Renderer, type RendererObject, type Token } from "marked";
-import { html as parse5Html, parseFragment } from "parse5";
+import { html as parse5Html, parse, parseFragment } from "parse5";
 import { analyzeMath, hasMathDelimiters } from "./math-delimiters.ts";
 import { markdownCodeSpans, markdownScanProtectedAndCode } from "./markdown-context.ts";
 import { indexOffsets, type Fragment, type Substitution } from "./source-map.ts";
@@ -1066,14 +1066,22 @@ export function elementLinesFor(
   if (chunks.length !== chunkLines.length) return null;
   const joined = chunks.join("");
   if (!joined) return [];
+  // DOMPurify parses the markup as a whole document and returns its body, so
+  // this parse must too: a fragment parse keeps a leading `<style>` that the
+  // document parse moves into `<head>`, where sanitising discards it.
   let tree: unknown;
   try {
-    tree = parseFragment(joined, { sourceCodeLocationInfo: true });
+    tree = parse(joined, { sourceCodeLocationInfo: true });
   } catch {
     return null;
   }
-  const root = tree as { childNodes?: unknown[] };
-  if (!Array.isArray(root.childNodes)) return null;
+  const htmlElement = (tree as ParsedElement).childNodes?.find(
+    (node) => (node as ParsedElement)?.tagName === "html",
+  ) as ParsedElement | undefined;
+  const root = htmlElement?.childNodes?.find(
+    (node) => (node as ParsedElement)?.tagName === "body",
+  ) as ParsedElement | undefined;
+  if (!root || !Array.isArray(root.childNodes)) return null;
 
   const starts: number[] = [];
   const indices: number[] = [];
@@ -1095,6 +1103,7 @@ export function elementLinesFor(
       const element = node as ParsedElement;
       // Text and comment nodes render nothing in `host.children`.
       if (!element.tagName) continue;
+      if (unsafeLiteralText(element)) continue;
       const fate = sanitizedFate(element.tagName, element.attrs);
       if (fate === "drop") continue;
       if (fate === "unwrap") {
@@ -1127,6 +1136,7 @@ export function elementLinesFor(
 
 type ParsedElement = {
   tagName?: string;
+  value?: string;
   attrs?: { name: string; value: string }[];
   childNodes?: unknown[];
   sourceCodeLocation?: {
@@ -1177,6 +1187,20 @@ const CONTENT_DROPPED = new Set([
   "plaintext", "script", "selectedcontent", "style", "svg", "template", "thead",
   "title", "video", "xmp",
 ]); // prettier-ignore
+
+/**
+ * DOMPurify's mXSS guard removes a `<style>` (with everything in it) whose text
+ * holds what looks like markup, such as a CSS comment naming `<details>` or
+ * `content: "</p>"`.
+ * `<script>` and `<xmp>` share the rule but are always removed anyway.
+ */
+function unsafeLiteralText(element: ParsedElement): boolean {
+  if (element.tagName?.toLowerCase() !== "style") return false;
+  const text = (element.childNodes ?? [])
+    .map((node) => (node as ParsedElement)?.value ?? "")
+    .join("");
+  return /<[/\w!]/.test(text);
+}
 
 function sanitizedFate(tagName: string, attrs: ParsedElement["attrs"]): "keep" | "unwrap" | "drop" {
   const tag = tagName.toLowerCase();
