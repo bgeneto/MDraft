@@ -310,6 +310,34 @@ for (const [label, newline] of [
   );
 }
 
+{
+  // Chat exports carry component tags the sanitiser unwraps. `<MemoryCite />`
+  // is not void in HTML, so it swallows every block after it.
+  const source = [
+    "intro", //                     1
+    "",
+    "<card gap={3}>", //            3
+    "",
+    "**inside** the card", //       5
+    "",
+    "</card>",
+    "",
+    "<MemoryCite />", //            9
+    "",
+    "## after", //                  11
+    "",
+    "<script>gone()</script>", //   13
+    "",
+    "last", //                      15
+  ].join("\n");
+  const mapped = renderChunks(source, { map: true });
+  check(
+    "unknown component tags contribute their hoisted children",
+    JSON.stringify(mapped.elementLines) === JSON.stringify([1, 5, 11, 15]),
+    JSON.stringify(mapped.elementLines),
+  );
+}
+
 check(
   "a document without raw HTML has no element-line fallback",
   renderChunks("one\n\ntwo", { map: true }).elementLines === undefined,

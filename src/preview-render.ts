@@ -10,7 +10,7 @@
 //! what stops the two paths from drifting.
 
 import { Marked, Renderer, type RendererObject, type Token } from "marked";
-import { parseFragment } from "parse5";
+import { html as parse5Html, parseFragment } from "parse5";
 import { analyzeMath, hasMathDelimiters } from "./math-delimiters.ts";
 import { markdownCodeSpans, markdownScanProtectedAndCode } from "./markdown-context.ts";
 import { indexOffsets, type Fragment, type Substitution } from "./source-map.ts";
@@ -1087,37 +1087,105 @@ export function elementLinesFor(
   }
 
   const lines: number[] = [];
-  for (const node of root.childNodes) {
-    if (!node || typeof node !== "object") continue;
-    const element = node as {
-      tagName?: string;
-      sourceCodeLocation?: {
-        startOffset?: number;
-        startTag?: { startOffset?: number } | null;
-      } | null;
-    };
-    // Text and comment nodes render nothing in `host.children`.
-    if (!element.tagName) continue;
-    const location = element.sourceCodeLocation;
-    const offset = location?.startTag?.startOffset ?? location?.startOffset;
-    if (typeof offset !== "number" || !Number.isFinite(offset)) return null;
+  // The DOM is zipped after sanitising, so an element the sanitiser unwraps
+  // contributes its child elements instead of itself, in the same order.
+  const visit = (nodes: readonly unknown[]): boolean => {
+    for (const node of nodes) {
+      if (!node || typeof node !== "object") continue;
+      const element = node as ParsedElement;
+      // Text and comment nodes render nothing in `host.children`.
+      if (!element.tagName) continue;
+      const fate = sanitizedFate(element.tagName);
+      if (fate === "drop") continue;
+      if (fate === "unwrap") {
+        if (!visit(element.childNodes ?? [])) return false;
+        continue;
+      }
+      const location = element.sourceCodeLocation;
+      const offset = location?.startTag?.startOffset ?? location?.startOffset;
+      if (typeof offset !== "number" || !Number.isFinite(offset)) return false;
 
-    let low = 0;
-    let high = starts.length - 1;
-    let found = -1;
-    while (low <= high) {
-      const mid = (low + high) >> 1;
-      if (starts[mid] <= offset) {
-        found = mid;
-        low = mid + 1;
-      } else high = mid - 1;
+      let low = 0;
+      let high = starts.length - 1;
+      let found = -1;
+      while (low <= high) {
+        const mid = (low + high) >> 1;
+        if (starts[mid] <= offset) {
+          found = mid;
+          low = mid + 1;
+        } else high = mid - 1;
+      }
+      if (found < 0) return false;
+      const line = chunkLines[indices[found]];
+      if (typeof line !== "number" || !Number.isFinite(line)) return false;
+      lines.push(line);
     }
-    if (found < 0) return null;
-    const line = chunkLines[indices[found]];
-    if (typeof line !== "number" || !Number.isFinite(line)) return null;
-    lines.push(line);
-  }
-  return lines;
+    return true;
+  };
+  return visit(root.childNodes) ? lines : null;
+}
+
+type ParsedElement = {
+  tagName?: string;
+  childNodes?: unknown[];
+  sourceCodeLocation?: {
+    startOffset?: number;
+    startTag?: { startOffset?: number } | null;
+  } | null;
+};
+
+/**
+ * Tags the preview's DOMPurify call forbids on top of its HTML profile. The
+ * sanitiser in `markdown.ts` uses this list, so the line zip cannot drift.
+ */
+export const PREVIEW_FORBID_TAGS: readonly string[] = [
+  "script",
+  "iframe",
+  "object",
+  "embed",
+  "form",
+  "textarea",
+  "select",
+  "button",
+  "base",
+];
+const PREVIEW_FORBID_TAG_SET = new Set(PREVIEW_FORBID_TAGS);
+
+// DOMPurify 3.4's HTML profile, expressed against parse5's tag table: the HTML
+// elements it does not allow, and the allowed names parse5 does not know.
+// Anything else parse5 does not know (a chat export's `<card>`, `<MemoryCite />`)
+// is removed with its content kept, which hoists its children to the top level.
+const KNOWN_TAGS_NOT_ALLOWED = new Set([
+  "annotation-xml", "applet", "base", "basefont", "bgsound", "desc", "embed",
+  "foreignobject", "frame", "frameset", "image", "iframe", "keygen", "link",
+  "listing", "malignmark", "math", "meta", "mglyph", "mi", "mo", "mn", "ms",
+  "mtext", "noframes", "noembed", "noscript", "object", "param", "plaintext",
+  "rb", "rtc", "script", "title", "svg", "xmp",
+]); // prettier-ignore
+const UNKNOWN_TAGS_ALLOWED = new Set([
+  "abbr", "acronym", "audio", "bdi", "bdo", "blink", "canvas", "cite", "content",
+  "data", "datalist", "decorator", "del", "dfn", "element", "ins", "kbd", "legend",
+  "map", "mark", "menuitem", "meter", "output", "picture", "progress", "q", "samp",
+  "shadow", "slot", "spacer", "time", "video",
+]); // prettier-ignore
+// DOMPurify's default FORBID_CONTENTS: a removed element of these kinds takes
+// its children with it.
+const CONTENT_DROPPED = new Set([
+  "annotation-xml", "audio", "colgroup", "desc", "foreignobject", "head", "iframe",
+  "math", "mi", "mn", "mo", "ms", "mtext", "noembed", "noframes", "noscript",
+  "plaintext", "script", "selectedcontent", "style", "svg", "template", "thead",
+  "title", "video", "xmp",
+]); // prettier-ignore
+
+function sanitizedFate(tagName: string): "keep" | "unwrap" | "drop" {
+  const tag = tagName.toLowerCase();
+  const allowed =
+    !PREVIEW_FORBID_TAG_SET.has(tag) &&
+    (parse5Html.getTagID(tag) === parse5Html.TAG_ID.UNKNOWN
+      ? UNKNOWN_TAGS_ALLOWED.has(tag)
+      : !KNOWN_TAGS_NOT_ALLOWED.has(tag));
+  if (allowed) return "keep";
+  return CONTENT_DROPPED.has(tag) ? "drop" : "unwrap";
 }
 
 // ---------------------------------------------------------------------------

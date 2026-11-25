@@ -13,6 +13,7 @@ import { renderKatexCached } from "./katex-cache";
 import { patchMarkdownDom } from "./keyed-dom-patch";
 import {
   escapeHtml,
+  PREVIEW_FORBID_TAGS,
   renderChunks,
   renderChunksIncremental,
   type CodeEntry,
@@ -480,17 +481,8 @@ const SANITIZE_OPTIONS = {
   ],
   // `input` has to survive sanitising so GFM task lists keep their checkbox;
   // normalizeInputs() then strips every input that is not a disabled checkbox.
-  FORBID_TAGS: [
-    "script",
-    "iframe",
-    "object",
-    "embed",
-    "form",
-    "textarea",
-    "select",
-    "button",
-    "base",
-  ],
+  // Shared with `elementLinesFor`, which predicts what sanitising unwraps.
+  FORBID_TAGS: [...PREVIEW_FORBID_TAGS],
   USE_PROFILES: { html: true },
 };
 
