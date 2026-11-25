@@ -3,6 +3,7 @@
 //! baseline and skips the precision/lifecycle assertions.
 import fs from "node:fs";
 import path from "node:path";
+import { ABSORB_MAX_SHARE } from "../src/scroll-sync.ts";
 
 const port = process.argv[2] ?? "9222";
 const baseline = process.env.MDRAFT_SYNC_BASELINE === "1";
@@ -357,7 +358,8 @@ async function paneState() {
     const p=document.getElementById('preview-pane').getBoundingClientRect();
     const pane=document.getElementById('preview-pane');
     return { top:Math.max(s.top,p.top), bottom:Math.min(s.bottom,p.bottom), source:v.scrollDOM.scrollTop,
-      sourceMax:v.scrollDOM.scrollHeight-v.scrollDOM.clientHeight, previewMax:pane.scrollHeight-pane.clientHeight };
+      sourceMax:v.scrollDOM.scrollHeight-v.scrollDOM.clientHeight, previewMax:pane.scrollHeight-pane.clientHeight,
+      sourceHeight:s.height, previewHeight:p.height };
   })()`);
   state.preview = await previewTop();
   if (currentMode === "html")
@@ -559,6 +561,8 @@ async function probeGestures(mode) {
         visible: !!other && centre(other) >= after.top && centre(other) <= after.bottom,
         ownMoved: Math.abs(after[direction] - before[direction]),
         otherMoved: Math.abs(after[otherPane] - before[otherPane]),
+        // The clicked pane's absorb is a nudge of at most this much (absorbShift).
+        absorbCap: ABSORB_MAX_SHARE * after[`${direction}Height`],
       });
     }
     const reachable = samples.filter((sample) => !sample.clamped);
@@ -573,13 +577,25 @@ async function probeGestures(mode) {
       p95: percentile(errors, 0.95),
       max: errors.length ? Math.max(...errors) : null,
       counterpartVisible: samples.filter((sample) => sample.visible).length,
-      // Only a clamped other pane lets the clicked pane move, and then it must
-      // have finished the level the other pane could not.
+      // Only a clamped other pane lets the clicked pane move. The move is a
+      // nudge capped at a fifth of the pane: under the cap it must finish the
+      // level the other pane could not; at the cap the rest stays as calibration
+      // for the next scroll, and it must never go past the cap.
       ownPaneMoved: samples.filter((sample) => !sample.clamped && sample.ownMoved > 0.5).length,
       absorbed: samples.filter((sample) => sample.clamped && sample.ownMoved > 0.5).length,
+      absorbedCapped: samples.filter(
+        (sample) =>
+          sample.clamped && sample.ownMoved > 0.5 && sample.ownMoved >= sample.absorbCap - 1,
+      ).length,
       absorbedUnlevel: samples.filter(
         (sample) =>
-          sample.clamped && sample.ownMoved > 0.5 && (sample.error === null || sample.error > 1),
+          sample.clamped &&
+          sample.ownMoved > 0.5 &&
+          sample.ownMoved < sample.absorbCap - 1 &&
+          (sample.error === null || sample.error > 1),
+      ).length,
+      absorbedOverCap: samples.filter(
+        (sample) => sample.clamped && sample.ownMoved > sample.absorbCap + 1,
       ).length,
       otherPaneMoved: samples.filter((sample) => sample.otherMoved > 0.5).length,
       repeatMoved: samples.filter((sample) => sample.repeatMoved > 0.5).length,
@@ -638,8 +654,17 @@ async function probeGestures(mode) {
     );
     check(
       summary.absorbedUnlevel === 0,
-      `${label} that moved its own pane leaves the counterpart level (<= 1px)`,
-      JSON.stringify({ absorbed: summary.absorbed, unlevel: summary.absorbedUnlevel }),
+      `${label} whose own-pane nudge stayed under the cap leaves the counterpart level (<= 1px)`,
+      JSON.stringify({
+        absorbed: summary.absorbed,
+        capped: summary.absorbedCapped,
+        unlevel: summary.absorbedUnlevel,
+      }),
+    );
+    check(
+      summary.absorbedOverCap === 0,
+      `${label} never nudges its own pane past a fifth of it`,
+      JSON.stringify({ absorbed: summary.absorbed, overCap: summary.absorbedOverCap }),
     );
     check(
       summary.repeatMoved === 0,
