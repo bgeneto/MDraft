@@ -87,6 +87,7 @@
     "samples/latex-texmf/main.tex": "LaTeX compilation/root/engine/library/project regression fixture and its include closure",
     "samples/latex-texmf/second/main.tex": "LaTeX compilation/root/engine/library/project regression fixture and its include closure",
     "samples/latex-two-column.tex": "LaTeX compilation/root/engine/library/project regression fixture and its include closure",
+    "samples/markdown-extensions.md": "Footnotes, highlight/sub/sup, Obsidian callouts and math fences: extensions unit suite and preview DOM checks",
     "samples/math-render.md": "292 synthetic math cases for formatting, parser inventory, rendering and performance",
     "samples/pdf-quality-blocks.png": "Colour/block raster dependency of the PDF quality fixture",
     "samples/pdf-quality.md": "PDF layout, text, table, math and image quality assertions",

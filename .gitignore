@@ -184,6 +184,7 @@ Thumbs.db
 !/samples/latex-texmf/main.tex
 !/samples/latex-texmf/second/main.tex
 !/samples/latex-two-column.tex
+!/samples/markdown-extensions.md
 !/samples/math-render.md
 !/samples/pdf-quality-blocks.png
 !/samples/pdf-quality.md

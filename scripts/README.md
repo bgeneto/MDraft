@@ -168,6 +168,7 @@ here with its public purpose and, for owner sessions, to the private catalog.
 | `npm run single:instance` | `node scripts/single-instance-test.mjs` |
 | `npm run preview:zoom` | `node scripts/preview-zoom-test.mjs` |
 | `npm run preview:unit` | `node scripts/preview-render-unit.mjs` |
+| `npm run md-extensions:unit` | `node scripts/markdown-extensions-unit.mjs` — footnotes, highlight/subscript/superscript and ```` ```math ```` fences in the preview pipeline, including incremental re-renders of `samples/markdown-extensions.md`. |
 | `npm run preview:worker:unit` | `node scripts/preview-worker-unit.mjs` |
 | `npm run preview-owner:unit` | `node scripts/preview-owner-unit.mjs` |
 | `npm run preview-freshness:unit` | `node scripts/preview-freshness-unit.mjs` |

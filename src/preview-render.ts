@@ -12,7 +12,11 @@
 import { Marked, Renderer, type RendererObject, type Token } from "marked";
 import { html as parse5Html, parse, parseFragment } from "parse5";
 import { analyzeMath, hasMathDelimiters } from "./math-delimiters.ts";
-import { markdownCodeSpans, markdownScanProtectedAndCode } from "./markdown-context.ts";
+import {
+  hasMathFence,
+  markdownCodeSpans,
+  markdownScanProtectedAndCode,
+} from "./markdown-context.ts";
 import { indexOffsets, type Fragment, type Substitution } from "./source-map.ts";
 import { legacyImageCandidate } from "./legacy-image-paths.ts";
 import { renderKatexCached } from "./katex-cache.ts";
@@ -1310,7 +1314,7 @@ function compileMarkdownSource(
 ): CompiledMarkdownResult {
   const mathEnabled = options.math ?? true;
   const mapEnabled = options.map ?? false;
-  const mayHaveMath = mathEnabled && hasMathDelimiters(source);
+  const mayHaveMath = mathEnabled && (hasMathDelimiters(source) || hasMathFence(source));
 
   const codes: CodeEntry[] = [];
   const maths: MathEntry[] = [];
@@ -1319,7 +1323,12 @@ function compileMarkdownSource(
   if (mayHaveMath) {
     const scan = markdownScanProtectedAndCode(source, source.includes("`"));
     codeSpans = scan.codeSpans;
-    mathRanges = analyzeMath(source, true, false, scan.protectedRanges).math;
+    // A ```math fence is protected code to the delimiter scan, so the two lists
+    // never overlap; the fence becomes one display formula like `$…$`.
+    mathRanges = [
+      ...analyzeMath(source, true, false, scan.protectedRanges).math,
+      ...scan.mathFences.map((fence) => ({ ...fence, display: true })),
+    ];
   } else {
     codeSpans = markdownCodeSpans(source);
     mathRanges = [];
