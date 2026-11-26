@@ -8902,7 +8902,11 @@ async function buildExportArticle(
   // The same class the preview's Typst view uses, so the rules written for it
   // apply to the export too.
   const classes = source.language === "typst" ? "markdown-body typst-document" : "markdown-body";
-  if (options.print) keepHeadingsWithNext(holder);
+  if (options.print) {
+    // A folded callout must not hide its body on paper.
+    for (const details of Array.from(holder.querySelectorAll("details"))) details.open = true;
+    keepHeadingsWithNext(holder);
+  }
   return { html: `<article class="${classes}">${holder.innerHTML}</article>`, css };
 }
 

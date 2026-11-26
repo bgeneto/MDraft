@@ -598,32 +598,130 @@ function describePreview(
   };
 }
 
-/** GitHub-style `> [!NOTE]` blockquotes get a class and a visible title. */
-const ALERT_KINDS: Record<string, string> = {
-  NOTE: "Note",
-  TIP: "Tip",
-  IMPORTANT: "Important",
-  WARNING: "Warning",
-  CAUTION: "Caution",
+/**
+ * GitHub alerts and Obsidian callouts: `> [!type]±? Optional title`.
+ *
+ * Each type maps to the class that colours it; aliases share their canonical
+ * type's colour, and an unknown type is drawn as a note under its own name, as
+ * Obsidian does. GitHub's IMPORTANT and CAUTION keep their own colours rather
+ * than Obsidian's tip/warning aliases.
+ */
+const CALLOUT_KINDS: Record<string, [kind: string, label: string]> = {
+  note: ["note", "Note"],
+  tip: ["tip", "Tip"],
+  hint: ["tip", "Hint"],
+  important: ["important", "Important"],
+  warning: ["warning", "Warning"],
+  attention: ["warning", "Attention"],
+  caution: ["caution", "Caution"],
+  abstract: ["abstract", "Abstract"],
+  summary: ["abstract", "Summary"],
+  tldr: ["abstract", "TL;DR"],
+  info: ["info", "Info"],
+  todo: ["todo", "Todo"],
+  success: ["success", "Success"],
+  check: ["success", "Check"],
+  done: ["success", "Done"],
+  question: ["question", "Question"],
+  help: ["question", "Help"],
+  faq: ["question", "FAQ"],
+  failure: ["failure", "Failure"],
+  fail: ["failure", "Fail"],
+  missing: ["failure", "Missing"],
+  danger: ["danger", "Danger"],
+  error: ["danger", "Error"],
+  bug: ["bug", "Bug"],
+  example: ["example", "Example"],
+  quote: ["quote", "Quote"],
+  cite: ["quote", "Cite"],
 };
 
+const CALLOUT_MARKER = /^\s*\[!([A-Za-z][\w-]*)\]([+-]?)[ \t]*/;
+
+/** Text a reader sees: the hidden marker and whitespace do not count. */
+function visibleText(root: Node): string {
+  let text = "";
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!node.parentElement?.closest("[hidden]")) text += node.nodeValue ?? "";
+  }
+  return text.trim();
+}
+
+/**
+ * Turn `> [!type]` block quotes into alerts/callouts.
+ *
+ * The pass never deletes or rewrites source text: the word map records each
+ * text node's offset inside its `[data-f]` fragment, so the marker is wrapped
+ * in a hidden span where it stands, and the title's nodes move whole into the
+ * title element. The worker ends every fragment at a line break, so the first
+ * line's nodes end exactly where the title does. The block quote itself stays
+ * the top-level element, keeping the count `elementLinesFor` predicts.
+ */
 function decorateAlerts(host: HTMLElement): void {
   for (const quote of Array.from(host.querySelectorAll("blockquote"))) {
-    const first = quote.querySelector("p");
-    const text = first?.textContent ?? "";
-    const match = /^\s*\[!(\w+)\]\s*/.exec(text);
-    if (!match) continue;
-    const kind = ALERT_KINDS[match[1].toUpperCase()];
-    if (!kind) continue;
+    if (quote.classList.contains("md-alert")) continue;
+    const first = quote.firstElementChild;
+    if (!(first instanceof HTMLParagraphElement)) continue;
+    const walker = document.createTreeWalker(first, NodeFilter.SHOW_TEXT);
+    const head = walker.nextNode() as Text | null;
+    const match = head ? CALLOUT_MARKER.exec(head.data) : null;
+    if (!head || !match) continue;
+    const type = match[1].toLowerCase();
+    const [kind, defaultLabel] = CALLOUT_KINDS[type] ?? [
+      "note",
+      type.charAt(0).toUpperCase() + type.slice(1),
+    ];
 
-    quote.classList.add("md-alert", `md-alert-${kind.toLowerCase()}`);
-    if (first) {
-      const title = document.createElement("p");
-      title.className = "md-alert-title";
-      title.textContent = kind;
-      // Drop the marker itself, keeping whatever followed it on that line.
-      first.textContent = text.slice(match[0].length);
-      if ((first.textContent ?? "").trim().length === 0) first.remove();
+    head.splitText(match[0].length);
+    const marker = document.createElement("span");
+    marker.className = "md-alert-marker";
+    marker.hidden = true;
+    head.replaceWith(marker);
+    marker.appendChild(head);
+
+    // The title runs to the first line break of the paragraph. A text node is
+    // split there; an element that ends with the break moves whole; one that
+    // spans the break (emphasis across two lines) stays in the body.
+    const titleNodes: Node[] = [];
+    for (let node = first.firstChild; node; node = node.nextSibling) {
+      if (node instanceof HTMLBRElement) {
+        node.remove();
+        break;
+      }
+      const text = node.textContent ?? "";
+      const lf = node === marker ? -1 : text.indexOf("\n");
+      if (lf < 0) {
+        titleNodes.push(node);
+        continue;
+      }
+      if (node instanceof Text) {
+        if (lf > 0) titleNodes.push(node.splitText(lf).previousSibling as Text);
+      } else if (text.slice(lf + 1).trim() === "") {
+        titleNodes.push(node);
+      }
+      break;
+    }
+
+    quote.classList.add("md-alert", `md-alert-${kind}`);
+    const fold = match[2];
+    const title = document.createElement(fold ? "summary" : "p");
+    title.className = "md-alert-title";
+    for (const node of titleNodes) title.appendChild(node);
+    if (!visibleText(title)) title.appendChild(document.createTextNode(defaultLabel));
+    if (!visibleText(first) && !first.querySelector("img,svg,.katex,input")) {
+      // Keep fragment spans in the tree so the map's counts still hold.
+      if (first.querySelector("[data-f]")) first.hidden = true;
+      else first.remove();
+    }
+    if (fold) {
+      const details = document.createElement("details");
+      details.className = "md-alert-fold";
+      details.open = fold === "+";
+      details.appendChild(title);
+      while (quote.firstChild) details.appendChild(quote.firstChild);
+      quote.appendChild(details);
+    } else {
       quote.insertBefore(title, quote.firstChild);
     }
   }
@@ -828,7 +926,15 @@ export const GITHUB_ALERT_CSS = `
 .markdown-body .md-alert-tip{border-left-color:#3fb950;background:rgba(63,185,80,.09)}
 .markdown-body .md-alert-important{border-left-color:#a371f7;background:rgba(163,113,247,.09)}
 .markdown-body .md-alert-warning{border-left-color:#d29922;background:rgba(210,153,34,.1)}
-.markdown-body .md-alert-caution{border-left-color:#f85149;background:rgba(248,81,73,.09)}
+.markdown-body .md-alert-caution,.markdown-body .md-alert-failure,.markdown-body .md-alert-danger,.markdown-body .md-alert-bug{border-left-color:#f85149;background:rgba(248,81,73,.09)}
+.markdown-body .md-alert-info,.markdown-body .md-alert-todo{border-left-color:#4a90d9;background:rgba(74,144,217,.09)}
+.markdown-body .md-alert-abstract{border-left-color:#00b8d4;background:rgba(0,184,212,.09)}
+.markdown-body .md-alert-success{border-left-color:#3fb950;background:rgba(63,185,80,.09)}
+.markdown-body .md-alert-question{border-left-color:#ec7500;background:rgba(236,117,0,.09)}
+.markdown-body .md-alert-example{border-left-color:#a371f7;background:rgba(163,113,247,.09)}
+.markdown-body .md-alert-quote{border-left-color:#9e9e9e;background:rgba(158,158,158,.1)}
+.markdown-body .md-alert-fold>summary.md-alert-title{cursor:pointer}
+.markdown-body .md-alert-fold:not([open])>summary.md-alert-title{margin-bottom:0}
 `;
 
 export function decorateCodeBlocks(host: HTMLElement, mermaidEnabled = true): void {
