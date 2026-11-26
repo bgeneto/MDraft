@@ -232,6 +232,38 @@ const inlineOn = { math: true, highlight: true, subscript: true, superscript: tr
 }
 
 // ---------------------------------------------------------------------------
+// Help › Markdown Reference shows every extension as a live example
+// ---------------------------------------------------------------------------
+
+{
+  // `content.ts` imports assets Node cannot load; read the array literally, as
+  // preview-render-unit does.
+  const content = fs.readFileSync(path.join(root, "src/content.ts"), "utf8");
+  const literal = content.match(/const REFERENCE_LINES: string\[\] = \[([\s\S]*?)\n\];/);
+  const REFERENCE = literal ? Function(`return [${literal[1]}]`)().join("\n") : "";
+  const data = renderChunks(REFERENCE, inlineOn);
+  const out = html(data);
+  const section = out.slice(out.indexOf('<section class="footnotes"'));
+  check(
+    "reference: highlight, subscript and superscript",
+    out.includes("<mark>") && out.includes("H<sub>") && out.includes("mc<sup>"),
+  );
+  check(
+    "reference: a math fence is display math",
+    data.maths.some((m) => m.display && m.body.startsWith("\\int_0^1")),
+  );
+  check(
+    "reference: two footnotes listed, the second with two paragraphs and math",
+    count(section, /<li id="fn-/g) === 2 &&
+      section.includes("second paragraph of the same note") &&
+      section.includes("@@MATH"),
+  );
+  // Its raw HTML table puts it on the raw-HTML path; preview:dom checks that
+  // every element is anchored there.
+  check("reference: lines are mapped", data.lines !== null && data.hasRawHtml);
+}
+
+// ---------------------------------------------------------------------------
 // The fixture and the incremental paths
 // ---------------------------------------------------------------------------
 

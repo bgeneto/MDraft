@@ -578,6 +578,21 @@ try {
     calloutEdge.only,
   );
   check("callouts: a marker after text is not a callout", calloutEdge.late);
+  const referenceCallouts = await evaluate(`(async()=>{
+    const { REFERENCE } = await import('/src/content.ts');
+    const host=document.createElement('div');document.body.replaceChildren(host);
+    const rendered=window.previewTest.renderPreview(REFERENCE,{baseDir:null,math:true,mermaid:false});
+    host.innerHTML=rendered.html;
+    if(!rendered.linesMapped) return 'lines not mapped';
+    return [...host.querySelectorAll('blockquote.md-alert')].map(q=>q.className.split(' ')[1]+
+      (q.querySelector(':scope > details')?(q.querySelector(':scope > details').open?'+':'-'):'')).join(',');
+  })()`);
+  check(
+    "callouts: the Markdown Reference shows alerts, folds and a nested callout",
+    referenceCallouts ===
+      "md-alert-note,md-alert-warning,md-alert-tip-,md-alert-question+,md-alert-example",
+    referenceCallouts,
+  );
 
   // Footnotes, math fences and inline syntax from the same fixture: the
   // footnotes section is one more anchored top-level element in both paths.
