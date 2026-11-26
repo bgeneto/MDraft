@@ -4102,6 +4102,15 @@ label.optional-tools-row:hover {
   background: rgba(158, 158, 158, 0.1);
 }
 
+/* `==text==`. The tint reads on both themes; the text keeps its colour.
+   MARKDOWN_EXTENSION_CSS in src/markdown.ts carries the export copy. */
+.markdown-body mark {
+  background: rgba(255, 212, 0, 0.4);
+  color: inherit;
+  padding: 0 0.1em;
+  border-radius: 2px;
+}
+
 /* A foldable callout (`[!type]-` or `[!type]+`). */
 .markdown-body .md-alert-fold > summary.md-alert-title {
   cursor: pointer;

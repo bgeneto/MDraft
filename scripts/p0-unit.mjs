@@ -896,6 +896,8 @@ function exportHarness(language, delay) {
     nativePrintArticle: async () => null,
     wrapNativePrintHtml: (title, html) => `${title}\n${html}`,
     keepHeadingsWithNext: () => {},
+    openFoldsForPrint: () => {},
+    inlineSyntaxSettings: () => ({}),
     document: { createElement: () => ({ innerHTML: "" }), getElementById: () => null },
     renderPreview: (text) => ({ html: `<p>${text}</p>` }),
     resolveLegacyImagesForExport: async (_holder, _images, path) => legacyPaths.push(path),

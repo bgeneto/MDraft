@@ -18,6 +18,7 @@ import {
   markdownScanProtectedAndCode,
 } from "./markdown-context.ts";
 import { indexOffsets, type Fragment, type Substitution } from "./source-map.ts";
+import { inlineSyntaxExtension, type InlineSyntaxOptions } from "./markdown-extensions.ts";
 import { legacyImageCandidate } from "./legacy-image-paths.ts";
 import { renderKatexCached } from "./katex-cache.ts";
 import {
@@ -33,6 +34,12 @@ export interface ChunkOptions {
   math?: boolean;
   /** Emit the source fragments word-level sync needs. */
   map?: boolean;
+  /** `==text==` as <mark>. Off unless asked for, like the next two. */
+  highlight?: boolean;
+  /** `H~2~O` as <sub>; a single `~x~` is then no longer strikethrough. */
+  subscript?: boolean;
+  /** `x^2^` as <sup>. */
+  superscript?: boolean;
 }
 
 /** A code span protected from the parser, with the source range it came from. */
@@ -822,6 +829,7 @@ function setupMarkedTokens(
   mapEnabled: boolean,
   substitutions: readonly Substitution[],
   lineSubstitutions: readonly Substitution[],
+  syntax: InlineSyntaxOptions,
 ): MarkedSetupResult {
   const allFragments: Fragment[] = [];
   let activeSink: Fragment[] | null = null;
@@ -944,6 +952,9 @@ function setupMarkedTokens(
       },
     });
   }
+
+  const inlineSyntax = inlineSyntaxExtension(syntax);
+  if (inlineSyntax) instance.use(inlineSyntax);
 
   const tokens = instance.lexer(normalized);
   if (normalized.includes("\\")) legacy.definitions(tokens);
@@ -1381,7 +1392,13 @@ function compileMarkdownSource(
       ? collectSubstitutions(preparedSegments, isCode, codes, maths)
       : [];
 
-  const setup = setupMarkedTokens(normalized, mapEnabled, substitutions, lineSubstitutions);
+  const setup = setupMarkedTokens(
+    normalized,
+    mapEnabled,
+    substitutions,
+    lineSubstitutions,
+    options,
+  );
   const tokens = setup.tokens;
   const hasRawHtml = setup.hasRawHtml;
 
@@ -1445,7 +1462,10 @@ function compileMarkdownSource(
   let linesFailed = false;
   let codeCursor = 0;
   let mathCursor = 0;
-  const optPrefix = `${mathEnabled ? "1" : "0"}\0${mapEnabled ? "1" : "0"}\0`;
+  const optPrefix =
+    [mathEnabled, mapEnabled, options.highlight, options.subscript, options.superscript]
+      .map((on) => (on ? "1" : "0"))
+      .join("\0") + "\0";
 
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i];

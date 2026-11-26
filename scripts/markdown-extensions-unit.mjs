@@ -24,6 +24,8 @@ function check(label, ok, detail = "") {
 }
 const html = (data) => data.chunks.join("");
 const count = (text, pattern) => text.match(pattern)?.length ?? 0;
+// One line anchor per block that renders an element.
+const visible = (data) => data.blocks?.filter((block) => !block.silent).length ?? -1;
 
 // ---------------------------------------------------------------------------
 // Math fences
@@ -168,7 +170,7 @@ const inlineOn = { math: true, highlight: true, subscript: true, superscript: tr
   );
   check(
     "footnote: every block is anchored",
-    data.lines !== null && data.lines.length === data.chunks.length,
+    data.lines !== null && data.lines.length === visible(data),
     `${data.lines?.length}/${data.chunks.length}`,
   );
   check(
@@ -228,7 +230,7 @@ const inlineOn = { math: true, highlight: true, subscript: true, superscript: tr
   const out = html(full);
   check(
     "fixture: every block anchored",
-    full.lines !== null && full.lines.length === full.chunks.length,
+    full.lines !== null && full.lines.length === visible(full),
   );
   check("fixture: footnote section present", out.includes('<section class="footnotes"'));
   check(

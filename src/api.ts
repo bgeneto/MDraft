@@ -385,6 +385,12 @@ export interface Settings {
 
   enableMath: boolean;
   enableMermaid: boolean;
+  /** `==text==` as <mark>. */
+  enableHighlight: boolean;
+  /** `H~2~O` as <sub>; off, a single `~x~` strikes through as in GFM. */
+  enableSubscript: boolean;
+  /** `x^2^` as <sup>. */
+  enableSuperscript: boolean;
 
   /**
    * Run the document's own scripts in the sandboxed HTML preview.

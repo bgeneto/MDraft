@@ -54,7 +54,15 @@ export function proseKey(
   language: "markdown" | "asciidoc",
   doc: DocumentIdentity,
   source: string,
-  options: { baseDir: string | null; documentPath: string | null; math: boolean; mermaid: boolean },
+  options: {
+    baseDir: string | null;
+    documentPath: string | null;
+    math: boolean;
+    mermaid: boolean;
+    highlight?: boolean;
+    subscript?: boolean;
+    superscript?: boolean;
+  },
 ): string {
   return JSON.stringify([
     language,
@@ -65,6 +73,9 @@ export function proseKey(
     options.documentPath,
     options.math,
     options.mermaid,
+    options.highlight ?? false,
+    options.subscript ?? false,
+    options.superscript ?? false,
   ]);
 }
 

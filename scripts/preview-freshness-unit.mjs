@@ -75,7 +75,7 @@ check("swapped characters do not collide", () => {
 
 const prose = { baseDir: "/d", documentPath: "/d/a.md", math: true, mermaid: true };
 distinct(
-  "Markdown: text, identity, folder, path, math and mermaid are inputs",
+  "Markdown: text, identity, folder, path, math, mermaid and inline syntax are inputs",
   () => proseKey("markdown", doc, "x", prose),
   [
     () => proseKey("markdown", doc, "y", prose),
@@ -85,6 +85,9 @@ distinct(
     () => proseKey("markdown", doc, "x", { ...prose, documentPath: "/d/b.md" }),
     () => proseKey("markdown", doc, "x", { ...prose, math: false }),
     () => proseKey("markdown", doc, "x", { ...prose, mermaid: false }),
+    () => proseKey("markdown", doc, "x", { ...prose, highlight: true }),
+    () => proseKey("markdown", doc, "x", { ...prose, subscript: true }),
+    () => proseKey("markdown", doc, "x", { ...prose, superscript: true }),
     () => proseKey("asciidoc", doc, "x", prose),
   ],
 );

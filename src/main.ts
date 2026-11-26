@@ -124,6 +124,7 @@ import { escapeMarkdownCurrency, markdownProseSelection } from "./math-delimiter
 import {
   ASCIIDOC_CSS,
   GITHUB_ALERT_CSS,
+  MARKDOWN_EXTENSION_CSS,
   KATEX_STYLESHEET_URL,
   renderMermaidIn,
   renderPreview,
@@ -1600,6 +1601,9 @@ function applySettingsPatch(
   const affectsRendering =
     patch.enableMath !== undefined ||
     patch.enableMermaid !== undefined ||
+    patch.enableHighlight !== undefined ||
+    patch.enableSubscript !== undefined ||
+    patch.enableSuperscript !== undefined ||
     patch.htmlPreviewScripts !== undefined ||
     // The bundled engine of a project (stage 6.2): another engine, another PDF.
     patch.latexBundledEngine !== undefined ||
@@ -7073,6 +7077,7 @@ async function doRender(force = false): Promise<void> {
     documentPath: language === "markdown" ? doc.path : null,
     math: settings.enableMath,
     mermaid: settings.enableMermaid,
+    ...(language === "markdown" ? inlineSyntaxSettings() : {}),
   });
   if (
     key === committedKey &&
@@ -7167,6 +7172,7 @@ async function doRender(force = false): Promise<void> {
       documentPath: doc.path,
       math: settings.enableMath,
       mermaid: settings.enableMermaid,
+      ...inlineSyntaxSettings(),
       map: wantsMap,
     },
     () => token !== renderToken,
@@ -8862,6 +8868,15 @@ interface ExportArticleOptions {
   theme: "light" | "dark";
 }
 
+/** The Markdown inline-syntax preferences, as render options. */
+function inlineSyntaxSettings(): { highlight: boolean; subscript: boolean; superscript: boolean } {
+  return {
+    highlight: settings.enableHighlight,
+    subscript: settings.enableSubscript,
+    superscript: settings.enableSuperscript,
+  };
+}
+
 async function buildExportArticle(
   source: ReturnType<typeof exportSource>,
   options: ExportArticleOptions,
@@ -8887,6 +8902,7 @@ async function buildExportArticle(
       documentPath: source.path,
       math: settings.enableMath,
       mermaid: settings.enableMermaid,
+      ...inlineSyntaxSettings(),
     });
     holder.innerHTML = rendered.html;
     await resolveLegacyImagesForExport(holder, rendered.legacyImages, source.path);
@@ -8903,11 +8919,15 @@ async function buildExportArticle(
   // apply to the export too.
   const classes = source.language === "typst" ? "markdown-body typst-document" : "markdown-body";
   if (options.print) {
-    // A folded callout must not hide its body on paper.
-    for (const details of Array.from(holder.querySelectorAll("details"))) details.open = true;
+    openFoldsForPrint(holder);
     keepHeadingsWithNext(holder);
   }
   return { html: `<article class="${classes}">${holder.innerHTML}</article>`, css };
+}
+
+/** A folded callout must not hide its body on paper. */
+function openFoldsForPrint(host: HTMLElement): void {
+  for (const details of Array.from(host.querySelectorAll("details"))) details.open = true;
 }
 
 /**
@@ -8973,7 +8993,7 @@ function exportTypographyCss(): string {
   // stylesheet of its own, and without this the formula in a printed PDF would
   // stay at KaTeX's 1.21em while the preview showed the reader's scale.
   const mathScale = ".math-inline,.math-display{font-size:calc(1em * var(--math-scale))}";
-  return `:root{${declarations.join(";")}}\n${emphasis}\n${mathScale}\n${ASCIIDOC_CSS}\n${GITHUB_ALERT_CSS}`;
+  return `:root{${declarations.join(";")}}\n${emphasis}\n${mathScale}\n${ASCIIDOC_CSS}\n${GITHUB_ALERT_CSS}\n${MARKDOWN_EXTENSION_CSS}`;
 }
 
 /** Basename of the open document, without its extension. */

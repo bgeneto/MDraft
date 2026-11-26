@@ -8,6 +8,7 @@
 //! cannot start.
 
 import DOMPurify from "dompurify";
+import type { InlineSyntaxOptions } from "./markdown-extensions.ts";
 import hljs from "highlight.js/lib/common";
 import { renderKatexCached } from "./katex-cache";
 import { patchMarkdownDom } from "./keyed-dom-patch";
@@ -50,7 +51,7 @@ import { resolveLegacyLocalImage } from "./api";
 export const KATEX_STYLESHEET_URL = "https://cdn.jsdelivr.net/npm/katex@0.19.0/dist/katex.min.css";
 export { escapeHtml };
 
-export interface RenderOptions {
+export interface RenderOptions extends InlineSyntaxOptions {
   /** Directory of the document being edited, used to resolve relative images. */
   baseDir: string | null;
   /** Saved document used to resolve a legacy relative image candidate. */
@@ -165,6 +166,9 @@ function markdownOptionsKey(options: RenderOptions): string {
     options.math ?? true,
     options.mermaid ?? true,
     options.map ?? false,
+    options.highlight ?? false,
+    options.subscript ?? false,
+    options.superscript ?? false,
   ]);
 }
 
@@ -935,6 +939,14 @@ export const GITHUB_ALERT_CSS = `
 .markdown-body .md-alert-quote{border-left-color:#9e9e9e;background:rgba(158,158,158,.1)}
 .markdown-body .md-alert-fold>summary.md-alert-title{cursor:pointer}
 .markdown-body .md-alert-fold:not([open])>summary.md-alert-title{margin-bottom:0}
+`;
+
+/**
+ * Highlight and footnotes in an exported document, for the same reason as
+ * `GITHUB_ALERT_CSS`: the export never loads `src/styles.css`.
+ */
+export const MARKDOWN_EXTENSION_CSS = `
+.markdown-body mark{background:rgba(255,212,0,.4);color:inherit;padding:0 .1em;border-radius:2px}
 `;
 
 export function decorateCodeBlocks(host: HTMLElement, mermaidEnabled = true): void {
