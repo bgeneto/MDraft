@@ -143,7 +143,7 @@ const inlineOn = { math: true, highlight: true, subscript: true, superscript: tr
   const out = html(data);
   check(
     "footnote: reference is a numbered link",
-    /<sup class="footnote-ref"><a href="#fn-a" id="fnref-a"[^>]*>1<\/a><\/sup>/.test(out),
+    /<sup class="footnote-ref"[^>]*><a href="#fn-a" id="fnref-a"[^>]*>1<\/a><\/sup>/.test(out),
     out,
   );
   check("footnote: second label numbered 2", /<a href="#fn-b" id="fnref-b"[^>]*>2<\/a>/.test(out));
@@ -199,13 +199,24 @@ const inlineOn = { math: true, highlight: true, subscript: true, superscript: tr
     !inCode.includes("footnote") && inCode.includes("[^a]: no"),
   );
 
-  const hostile = html(
-    renderChunks(
-      'A[^"><img src=x onerror=alert(1)>]\n\n[^"><img src=x onerror=alert(1)>]: x\n',
-      {},
-    ),
+  // A label holds no whitespace, but quotes and angle brackets are allowed; the
+  // id derived from it must keep them out of every attribute.
+  const hostile = html(renderChunks('A[^"><b>x</b>]\n\n[^"><b>x</b>]: note\n', {}));
+  const attributes = [...hostile.matchAll(/\s(?:id|href)="([^"]*)"/g)].map((m) => m[1]);
+  check(
+    "footnote: a hostile label cannot break out of an attribute",
+    hostile.includes('class="footnote-ref"') &&
+      attributes.length >= 4 &&
+      attributes.every((value) => /^#?[\w-]+$/.test(value)),
+    attributes.join(" "),
   );
-  check("footnote: a hostile label cannot break out of an attribute", !/<img src=x/.test(hostile));
+  const twins = html(
+    renderChunks("A[^a b] and [^a-b] and [^a.b]\n\n[^a-b]: one\n[^a.b]: two\n", {}),
+  );
+  check(
+    "footnote: labels that slug alike get distinct ids",
+    new Set([...twins.matchAll(/<li id="([^"]+)"/g)].map((m) => m[1])).size === 2,
+  );
 
   const caseLabel = html(renderChunks("A[^Note].\n\n[^note]: Case-insensitive.\n", {}));
   check("footnote: labels match case-insensitively", caseLabel.includes("Case-insensitive."));

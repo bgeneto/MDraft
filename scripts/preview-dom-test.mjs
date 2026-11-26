@@ -579,6 +579,69 @@ try {
   );
   check("callouts: a marker after text is not a callout", calloutEdge.late);
 
+  // Footnotes, math fences and inline syntax from the same fixture: the
+  // footnotes section is one more anchored top-level element in both paths.
+  const notes = await evaluate(`(async()=>{
+    const source=await (await fetch('/samples/markdown-extensions.md')).text();
+    const opts={baseDir:null,math:true,mermaid:false,map:true,highlight:true,subscript:true,superscript:true};
+    const host=document.createElement('div');document.body.replaceChildren(host);
+    const live=await window.previewTest.renderPreviewInto(host,source,opts,()=>false);
+    const sync=window.previewTest.renderPreview(source,{...opts,map:false});
+    const syncHost=document.createElement('div');syncHost.innerHTML=sync.html;
+    const strip=(html)=>html.replace(/ data-(?:f|line)="[^"]*"/g,'').replace(/<\\/?span>/g,'');
+    const section=host.querySelector(':scope > section.footnotes');
+    const raw='<div class="box">raw</div>\\n\\nCite[^r].\\n\\n[^r]: Raw path note with $x$.\\n';
+    const rawHost=document.createElement('div');document.body.appendChild(rawHost);
+    const rawLive=await window.previewTest.renderPreviewInto(rawHost,raw,opts,()=>false);
+    const hrefOf=(a)=>a.getAttribute('data-href')??a.getAttribute('href')??'';
+    const target=(a)=>host.querySelector('[id="'+hrefOf(a).slice(1)+'"]');
+    return {
+      liveMapped:live.linesMapped, syncMapped:sync.linesMapped,
+      last:host.lastElementChild===section, sectionLine:section?.getAttribute('data-line') ?? null,
+      items:[...(section?.querySelectorAll('li[id]')??[])].map(li=>li.id),
+      refs:[...host.querySelectorAll('sup.footnote-ref a')].map(a=>hrefOf(a)+'>'+a.textContent),
+      targets:[...host.querySelectorAll('sup.footnote-ref a')].every(target),
+      backs:[...host.querySelectorAll('a.footnote-backref')].every(target),
+      noteF:!!section?.querySelector('[data-f]'), noteCode:!!section?.querySelector('code'),
+      parity:strip(syncHost.querySelector('section.footnotes')?.outerHTML??'x')===strip(section?.outerHTML??'y'),
+      fence:!!host.querySelector('.katex-display') && !host.querySelector('code.language-math'),
+      inline:['mark','sub',':not(.footnote-backref) > sup:not(.footnote-ref)'].map(sel=>host.querySelectorAll(sel).length).join(','),
+      rawMapped:rawLive.linesMapped, rawNote:!!rawHost.querySelector('section.footnotes li .katex'),
+    };
+  })()`);
+  check(
+    "footnotes: every top-level element anchored in the worker and export paths",
+    notes.liveMapped && notes.syncMapped,
+    JSON.stringify([notes.liveMapped, notes.syncMapped]),
+  );
+  check(
+    "footnotes: the section is the last element and anchored",
+    notes.last && notes.sectionLine !== null,
+  );
+  check(
+    "footnotes: cited notes listed in citation order, unused ones left out",
+    JSON.stringify(notes.items) === JSON.stringify(["fn-boil", "fn-alt", "fn-code", "fn-long"]),
+    JSON.stringify(notes.items),
+  );
+  check(
+    "footnotes: references are numbered by first citation",
+    JSON.stringify(notes.refs) ===
+      JSON.stringify(["#fn-boil>1", "#fn-alt>2", "#fn-boil>1", "#fn-code>3", "#fn-long>4"]),
+    JSON.stringify(notes.refs),
+  );
+  check(
+    "footnotes: every reference and back-reference has its target",
+    notes.targets && notes.backs,
+  );
+  check("footnotes: note text keeps word fragments and code", notes.noteF && notes.noteCode);
+  check("footnotes: the worker and the export draw the same section", notes.parity);
+  check("math fence: KaTeX display, no code block", notes.fence);
+  check("inline syntax: mark, sub and sup drawn", notes.inline === "1,1,1", notes.inline);
+  check(
+    "footnotes: the raw-HTML path anchors the section and renders its math",
+    notes.rawMapped && notes.rawNote,
+  );
+
   // A separate page creates a fresh channel so the constructor failure really
   // exercises the synchronous fallback rather than an already-running worker.
   await navigate();

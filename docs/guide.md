@@ -20,7 +20,12 @@ highlighting, blockquotes, rules and local images. On top of that it renders:
 - KaTeX for `$…$`, `$$…$$`, `\(…\)` and `\[…\]`, including the space-padded
   delimiters common in documents converted from PDF;
 - Mermaid diagrams from ` ```mermaid ` fences;
-- GitHub alerts such as `> [!NOTE]` and `> [!WARNING]`;
+- KaTeX display math from ` ```math ` fences;
+- GitHub alerts such as `> [!NOTE]` and `> [!WARNING]`, and Obsidian callouts
+  with a custom title and a fold marker, such as `> [!tip]- Title`;
+- footnotes (`[^1]` and `[^1]: note`), listed at the end in citation order;
+- `==highlight==`, subscript `H~2~O` and superscript `x^2^`, each of which
+  can be switched off in Preferences → Markdown;
 - `[TOC]`, expanded into links to the document's headings.
 
 Math inside code spans and fences is left alone. Local image links resolve

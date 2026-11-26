@@ -18,7 +18,15 @@ import {
   markdownScanProtectedAndCode,
 } from "./markdown-context.ts";
 import { indexOffsets, type Fragment, type Substitution } from "./source-map.ts";
-import { inlineSyntaxExtension, type InlineSyntaxOptions } from "./markdown-extensions.ts";
+import {
+  footnoteExtension,
+  footnoteSignature,
+  inlineSyntaxExtension,
+  newFootnoteState,
+  renderFootnoteSection,
+  type FootnoteState,
+  type InlineSyntaxOptions,
+} from "./markdown-extensions.ts";
 import { legacyImageCandidate } from "./legacy-image-paths.ts";
 import { renderKatexCached } from "./katex-cache.ts";
 import {
@@ -526,7 +534,8 @@ function clearPlacement(token: Positioned): null {
 function contentFrame(token: Positioned, own: Lexed): Lexed | null {
   const text = token.text;
   if (typeof text !== "string" || text === own.text) return own;
-  if (token.type !== "list_item" && token.type !== "blockquote") return own;
+  if (token.type !== "list_item" && token.type !== "blockquote" && token.type !== "footnoteDef")
+    return own;
   return suffixFrame(own, text);
 }
 
@@ -821,6 +830,7 @@ interface MarkedSetupResult {
   hasRawHtml: boolean;
   legacy: ReturnType<typeof legacyImagesForRender>;
   allFragments: Fragment[];
+  notes: FootnoteState;
   setFragmentSink: (sink: Fragment[] | null) => void;
 }
 
@@ -953,6 +963,9 @@ function setupMarkedTokens(
     });
   }
 
+  const notes = newFootnoteState();
+  // Before the inline syntaxes, so `[^a]` is a citation before `^a]` is anything.
+  if (normalized.includes("[^")) instance.use(footnoteExtension(notes));
   const inlineSyntax = inlineSyntaxExtension(syntax);
   if (inlineSyntax) instance.use(inlineSyntax);
 
@@ -966,6 +979,7 @@ function setupMarkedTokens(
     hasRawHtml,
     legacy,
     allFragments,
+    notes,
     setFragmentSink: (sink) => {
       activeSink = sink;
     },
@@ -989,7 +1003,7 @@ function containsRawHtml(instance: Marked, tokens: Token[]): boolean {
 // ---------------------------------------------------------------------------
 
 /** Tokens that render no element, so they cannot be zipped with the DOM. */
-const SILENT_TOKENS = new Set(["space", "def"]);
+const SILENT_TOKENS = new Set(["space", "def", "footnoteDef"]);
 
 /**
  * DOMPurify removes HTML comments, so a `<!-- Page 1 -->` marker produces no
@@ -1315,6 +1329,85 @@ interface CompiledMarkdownResult extends PreviewChunks {
   defSignature: string;
 }
 
+type LinkTable = Record<string, { href: string | null; title: string | null }>;
+
+/** The reference-link table `marked` hangs on the token list. */
+function linksOf(tokens: Token[]): LinkTable {
+  return (tokens as Token[] & { links?: LinkTable }).links ?? {};
+}
+
+/**
+ * The footnotes section as one more top-level block, or null when nothing is
+ * cited. Its notes come from definitions anywhere in the document, so the
+ * placeholders it holds are not one contiguous run: they are renumbered in
+ * the order they appear, exactly as a block's own would be.
+ */
+function footnoteBlock(
+  setup: MarkedSetupResult,
+  tokens: Token[],
+  codes: readonly CodeEntry[],
+  maths: readonly MathEntry[],
+  baseOrigOffset: number,
+  lineStart: number,
+  sourceLength: number,
+  optPrefix: string,
+): MarkdownBlockChunk | null {
+  const fragments: Fragment[] = [];
+  setup.setFragmentSink(fragments);
+  const rawHtml = renderFootnoteSection(setup.notes, (list) =>
+    setup.instance.parser(Object.assign(list, { links: linksOf(tokens) })),
+  );
+  setup.setFragmentSink(null);
+  if (!rawHtml) return null;
+  const codeIndex = new Map<number, number>();
+  const mathIndex = new Map<number, number>();
+  const localCodes: CodeEntry[] = [];
+  const localMaths: MathEntry[] = [];
+  const localize = (text: string) =>
+    text.replace(PLACEHOLDER_PIECE, (full, kind: string, num: string) => {
+      const global = Number(num);
+      if (kind === "CODE") {
+        const entry = codes[global];
+        if (!entry) return full;
+        if (!codeIndex.has(global)) {
+          codeIndex.set(global, localCodes.length);
+          localCodes.push(entry);
+        }
+        return `@@CODE${codeIndex.get(global)}@@`;
+      }
+      const entry = maths[global];
+      if (!entry) return full;
+      if (!mathIndex.has(global)) {
+        mathIndex.set(global, localMaths.length);
+        localMaths.push(entry);
+      }
+      return `@@MATH${mathIndex.get(global)}@@`;
+    });
+  const html = localize(rawHtml);
+  const origin = baseOrigOffset + sourceLength;
+  return {
+    key: "footnotes",
+    digest: fnv1aHash(`footnotes\0${optPrefix}${html}`),
+    tokenType: "footnotes",
+    silent: false,
+    html,
+    origStart: origin,
+    origEnd: origin,
+    lineStart,
+    newlineCount: 0,
+    codes: baseOrigOffset !== 0 ? shiftCodeEntries(localCodes, baseOrigOffset) : localCodes,
+    maths: renderMath(localMaths),
+    fragments: setup.notes.order.length
+      ? fragments.map((f) => ({
+          src0: f.src0 + baseOrigOffset,
+          src1: f.src1 + baseOrigOffset,
+          raw: f.kind === "code" || f.kind === "math" ? localize(f.raw) : f.raw,
+          kind: f.kind,
+        }))
+      : undefined,
+  };
+}
+
 function compileMarkdownSource(
   source: string,
   baseOrigOffset: number,
@@ -1414,6 +1507,19 @@ function compileMarkdownSource(
     setup.setFragmentSink(null);
     const chunks = tokens.map((token) => setup.instance.parser([token]) as string);
     const lineInfo = blockLines(source, true, tokens, normalized, toLocalOrig);
+    // The footnotes render last, so their fragments follow every block's, and
+    // keep the global placeholder numbers this path uses throughout.
+    const notesHtml = renderFootnoteSection(setup.notes, (list) =>
+      setup.instance.parser(Object.assign(list, { links: linksOf(tokens) })),
+    );
+    if (notesHtml) {
+      chunks.push(notesHtml);
+      if (lineInfo) {
+        const last = lineInfo.chunkLines[lineInfo.chunkLines.length - 1] ?? baseLineStart;
+        lineInfo.chunkLines.push(last);
+        lineInfo.lines.push(last);
+      }
+    }
     const elementLines = lineInfo ? elementLinesFor(chunks, lineInfo.chunkLines) : undefined;
     const shiftedCodes = baseOrigOffset !== 0 ? shiftCodeEntries(codes, baseOrigOffset) : codes;
     const shiftedFrags = mapEnabled
@@ -1445,6 +1551,10 @@ function compileMarkdownSource(
   for (const token of tokens) {
     if (token.type === "def") defRawParts.push(token.raw ?? "");
   }
+  // Footnote numbers depend on every citation before a block, so a change to
+  // them must not reuse a block rendered under the old numbering.
+  const notesSignature = footnoteSignature(setup.notes);
+  if (notesSignature) defRawParts.push(notesSignature);
   const defSignature = defRawParts.length > 0 ? fnv1aHash(defRawParts.join("\n")) : "";
   const canReuse = Boolean(
     reuseMap && prevDefSignature !== undefined && defSignature === prevDefSignature,
@@ -1462,6 +1572,7 @@ function compileMarkdownSource(
   let linesFailed = false;
   let codeCursor = 0;
   let mathCursor = 0;
+  let lastNoteLine = 0;
   const optPrefix =
     [mathEnabled, mapEnabled, options.highlight, options.subscript, options.superscript]
       .map((on) => (on ? "1" : "0"))
@@ -1494,6 +1605,7 @@ function compileMarkdownSource(
     const origEnd = baseOrigOffset + localOrigEnd;
     const lineStart = baseLineStart - 1 + lineOf(starts, localOrigStart);
     const silent = rendersNothing(token);
+    if (token.type === "footnoteDef") lastNoteLine = lineStart;
 
     if (!linesFailed && !silent) {
       lines.push(lineStart);
@@ -1535,19 +1647,15 @@ function compileMarkdownSource(
 
     const perBlockFragments: Fragment[] = [];
     setup.setFragmentSink(mapEnabled ? perBlockFragments : null);
-    const tokenLinks =
-      (
-        tokens as Token[] & {
-          links?: Record<string, { href: string | null; title: string | null }>;
-        }
-      ).links ?? {};
+    const tokenLinks = linksOf(tokens);
     const rawHtml = setup.instance.parser(Object.assign([token], { links: tokenLinks })) as string;
     const blockHtml = localizePlaceholders(rawHtml, codeFrom, codeTo, mathFrom, mathTo);
+    const ownedCodes = token.type === "footnoteDef" ? [] : codes.slice(codeFrom, codeTo);
     const localCodes =
-      baseOrigOffset !== 0
-        ? shiftCodeEntries(codes.slice(codeFrom, codeTo), baseOrigOffset)
-        : codes.slice(codeFrom, codeTo);
-    const localMaths = renderMath(maths.slice(mathFrom, mathTo));
+      baseOrigOffset !== 0 ? shiftCodeEntries(ownedCodes, baseOrigOffset) : ownedCodes;
+    // A definition renders in the footnotes section, which takes its own copy.
+    const owned = token.type !== "footnoteDef";
+    const localMaths = owned ? renderMath(maths.slice(mathFrom, mathTo)) : [];
     const mappedBlockFragments = perBlockFragments.map((f) => ({
       src0: f.src0 + baseOrigOffset,
       src1: f.src1 + baseOrigOffset,
@@ -1581,6 +1689,28 @@ function compileMarkdownSource(
     };
     chunks[i] = blockHtml;
     blocks[i] = block;
+  }
+
+  const notesBlock = footnoteBlock(
+    setup,
+    tokens,
+    codes,
+    maths,
+    baseOrigOffset,
+    // After the last block's anchor, so the line list stays ascending.
+    Math.max(lines[lines.length - 1] ?? baseLineStart, lastNoteLine),
+    source.length,
+    optPrefix,
+  );
+  if (notesBlock) {
+    chunks.push(notesBlock.html);
+    blocks.push(notesBlock);
+    if (!linesFailed) lines.push(notesBlock.lineStart);
+    for (const c of notesBlock.codes) flatCodes.push(c);
+    for (const m of notesBlock.maths) flatMaths.push(m);
+    if (mapEnabled && notesBlock.fragments) {
+      for (const f of notesBlock.fragments) flatFragments.push(f);
+    }
   }
 
   return {
@@ -1729,6 +1859,8 @@ function tryWindowedIncremental(
 ): PreviewChunks | null {
   const prevBlocks = prevChunks.blocks;
   if (!prevBlocks || prevBlocks.length === 0) return null;
+  // A window cannot renumber footnotes cited or defined outside it.
+  if (prevSource.includes("[^") || nextSource.includes("[^")) return null;
 
   const prevEditStart = prefix;
   const prevEditEnd = prevSource.length - suffix;

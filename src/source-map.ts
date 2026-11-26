@@ -1408,6 +1408,10 @@ function appendTextNodeAnchors(
   if (!record || (record.fragment >= 0 && map.fragments[record.fragment].kind !== "text")) {
     return;
   }
+  // A footnote is drawn at the end of the preview but written wherever its
+  // definition is. As a scroll anchor it would pull the preview to the end each
+  // time the editor passes a definition; it still answers clicks.
+  if (node.parentElement?.closest("[data-footnotes]")) return;
   // Large escaped exact fragments retain the coarse path. Re-scanning their
   // raw prefix for every word would make a pathological paragraph quadratic.
   if (

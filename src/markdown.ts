@@ -947,6 +947,10 @@ export const GITHUB_ALERT_CSS = `
  */
 export const MARKDOWN_EXTENSION_CSS = `
 .markdown-body mark{background:rgba(255,212,0,.4);color:inherit;padding:0 .1em;border-radius:2px}
+.markdown-body sup.footnote-ref{line-height:0}
+.markdown-body sup.footnote-ref a,.markdown-body .footnote-backref{text-decoration:none}
+.markdown-body .footnotes{margin-top:2em;padding-top:.6em;border-top:1px solid rgba(127,127,127,.35);font-size:.9em}
+.markdown-body .footnotes ol{padding-left:1.6em}
 `;
 
 export function decorateCodeBlocks(host: HTMLElement, mermaidEnabled = true): void {

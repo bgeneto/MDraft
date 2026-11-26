@@ -4102,6 +4102,24 @@ label.optional-tools-row:hover {
   background: rgba(158, 158, 158, 0.1);
 }
 
+/* Footnotes. MARKDOWN_EXTENSION_CSS in src/markdown.ts carries the export copy. */
+.markdown-body sup.footnote-ref {
+  line-height: 0;
+}
+.markdown-body sup.footnote-ref a,
+.markdown-body .footnote-backref {
+  text-decoration: none;
+}
+.markdown-body .footnotes {
+  margin-top: 2em;
+  padding-top: 0.6em;
+  border-top: 1px solid var(--rule);
+  font-size: 0.9em;
+}
+.markdown-body .footnotes ol {
+  padding-left: 1.6em;
+}
+
 /* `==text==`. The tint reads on both themes; the text keeps its colour.
    MARKDOWN_EXTENSION_CSS in src/markdown.ts carries the export copy. */
 .markdown-body mark {
