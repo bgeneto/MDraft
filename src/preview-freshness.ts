@@ -54,7 +54,13 @@ export function proseKey(
   language: "markdown" | "asciidoc",
   doc: DocumentIdentity,
   source: string,
-  options: { baseDir: string | null; documentPath: string | null; math: boolean; mermaid: boolean },
+  options: {
+    baseDir: string | null;
+    documentPath: string | null;
+    math: boolean;
+    mermaid: boolean;
+    widgets?: boolean;
+  },
 ): string {
   return JSON.stringify([
     language,
@@ -65,6 +71,7 @@ export function proseKey(
     options.documentPath,
     options.math,
     options.mermaid,
+    options.widgets ?? true,
   ]);
 }
 

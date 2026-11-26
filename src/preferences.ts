@@ -2264,6 +2264,13 @@ function buildSections(
           set: (value) => host.update({ enableMermaid: value }),
         },
         {
+          kind: "checkbox",
+          label: "Render Chat Figures",
+          help: "Draws figures that chat assistants write as ```svg fences or <card>/<box> markup. Interactive controls are shown at their starting values.",
+          get: () => s().enableWidgets,
+          set: (value) => host.update({ enableWidgets: value }),
+        },
+        {
           kind: "note",
           label: "Extensions",
           text: "GitHub alerts (> [!NOTE]), task lists, tables, [TOC] and YAML front matter are always enabled. Math inside code spans and fenced blocks is never transformed.",

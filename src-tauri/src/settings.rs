@@ -706,6 +706,10 @@ pub struct Settings {
     // ---- Preferences: Markdown -------------------------------------------
     pub enable_math: bool,
     pub enable_mermaid: bool,
+    /// Render chat-assistant figure fences (`svg`, `<card>`, `<box>`) as
+    /// graphics. Missing in settings written before the option existed.
+    #[serde(default = "default_true")]
+    pub enable_widgets: bool,
 
     // ---- Preferences: HTML -----------------------------------------------
     /// Run the document's own scripts in the sandboxed HTML preview.
@@ -952,6 +956,7 @@ impl Default for Settings {
 
             enable_math: true,
             enable_mermaid: true,
+            enable_widgets: true,
             html_preview_scripts: true,
 
             spellcheck: true,
@@ -1934,6 +1939,16 @@ mod tests {
         assert_eq!(settings.spellcheck_string_mode, "human");
         assert!(!settings.spellcheck_identifiers);
         assert!(settings.spellcheck_document_languages.is_empty());
+    }
+
+    #[test]
+    fn chat_figures_default_on_and_an_older_file_keeps_them_on() {
+        assert!(Settings::default().enable_widgets);
+        let settings = parse_settings(r#"{"enableMermaid":false}"#).expect("older settings load");
+        assert!(settings.enable_widgets);
+        assert!(!settings.enable_mermaid);
+        let off = parse_settings(r#"{"enableWidgets":false}"#).expect("the switch loads");
+        assert!(!off.enable_widgets);
     }
 
     #[test]

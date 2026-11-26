@@ -385,6 +385,8 @@ export interface Settings {
 
   enableMath: boolean;
   enableMermaid: boolean;
+  /** Render chat-assistant figure fences (`svg`, `<card>`, `<box>`) as graphics. */
+  enableWidgets: boolean;
 
   /**
    * Run the document's own scripts in the sandboxed HTML preview.
