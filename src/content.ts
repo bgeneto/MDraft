@@ -230,6 +230,21 @@ const REFERENCE_LINES: string[] = [
   "  Bob-->>Alice: Hi",
   "```",
   "",
+  "## Chat assistant figures",
+  "",
+  "Figures that chat assistants write as markup are drawn in the preview: an",
+  "`svg` fence, or a fence whose first tag is `<svg>`, `<card>`, `<box>`, `<row>`",
+  "or `<grid>`. Loops and expressions in the markup are evaluated without running",
+  "any script, interactive controls are shown at their starting values, and a",
+  "figure MDraft cannot draw stays a code block with the reason underneath.",
+  "",
+  "```",
+  '<box border radius="md" padding={2} align="center">',
+  "  **Ranked results**",
+  "  <caption>Drawn as a figure</caption>",
+  "</box>",
+  "```",
+  "",
 ];
 
 const SHORTCUTS_LINES: string[] = [

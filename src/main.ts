@@ -133,6 +133,7 @@ import {
   wrapPrintHtml,
   wrapStandaloneHtml,
 } from "./markdown";
+import { WIDGET_CSS } from "./widgets/dom.ts";
 import { cancelPreviewWorkers } from "./preview-worker-client";
 import {
   covers,
@@ -1600,6 +1601,7 @@ function applySettingsPatch(
   const affectsRendering =
     patch.enableMath !== undefined ||
     patch.enableMermaid !== undefined ||
+    patch.enableWidgets !== undefined ||
     patch.htmlPreviewScripts !== undefined ||
     // The bundled engine of a project (stage 6.2): another engine, another PDF.
     patch.latexBundledEngine !== undefined ||
@@ -7073,6 +7075,7 @@ async function doRender(force = false): Promise<void> {
     documentPath: language === "markdown" ? doc.path : null,
     math: settings.enableMath,
     mermaid: settings.enableMermaid,
+    widgets: settings.enableWidgets,
   });
   if (
     key === committedKey &&
@@ -7116,6 +7119,7 @@ async function doRender(force = false): Promise<void> {
         baseDir: doc.directory ?? null,
         math: settings.enableMath,
         mermaid: settings.enableMermaid,
+        widgets: settings.enableWidgets,
         isDark,
         onMermaidSettled: () => {
           if (token !== renderToken || epoch !== themeEpoch) return;
@@ -7167,6 +7171,7 @@ async function doRender(force = false): Promise<void> {
       documentPath: doc.path,
       math: settings.enableMath,
       mermaid: settings.enableMermaid,
+      widgets: settings.enableWidgets,
       map: wantsMap,
     },
     () => token !== renderToken,
@@ -8874,6 +8879,7 @@ async function buildExportArticle(
       baseDir: source.directory ?? null,
       math: settings.enableMath,
       mermaid: settings.enableMermaid,
+      widgets: settings.enableWidgets,
       isDark: themeIsDark,
     });
     holder.innerHTML = result.html;
@@ -8887,6 +8893,7 @@ async function buildExportArticle(
       documentPath: source.path,
       math: settings.enableMath,
       mermaid: settings.enableMermaid,
+      widgets: settings.enableWidgets,
     });
     holder.innerHTML = rendered.html;
     await resolveLegacyImagesForExport(holder, rendered.legacyImages, source.path);
@@ -8969,7 +8976,7 @@ function exportTypographyCss(): string {
   // stylesheet of its own, and without this the formula in a printed PDF would
   // stay at KaTeX's 1.21em while the preview showed the reader's scale.
   const mathScale = ".math-inline,.math-display{font-size:calc(1em * var(--math-scale))}";
-  return `:root{${declarations.join(";")}}\n${emphasis}\n${mathScale}\n${ASCIIDOC_CSS}\n${GITHUB_ALERT_CSS}`;
+  return `:root{${declarations.join(";")}}\n${emphasis}\n${mathScale}\n${ASCIIDOC_CSS}\n${GITHUB_ALERT_CSS}\n${WIDGET_CSS}`;
 }
 
 /** Basename of the open document, without its extension. */
@@ -14176,7 +14183,7 @@ let readAloudPending = false;
  * spoken twice and as symbols; a Mermaid block would read its node labels; and a
  * code fence read character by character is noise, not a sentence.
  */
-const SILENT_IN_PREVIEW = ".katex, .mermaid, pre";
+const SILENT_IN_PREVIEW = ".katex, .mermaid, .md-widget, pre";
 
 function blockText(block: HTMLElement): string {
   const clone = block.cloneNode(true) as HTMLElement;

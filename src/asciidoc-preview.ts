@@ -44,6 +44,8 @@ export interface AsciidocRenderOptions {
   baseDir: string | null;
   math: boolean;
   mermaid: boolean;
+  /** Render chat-assistant figure fences; see `RenderOptions.widgets`. */
+  widgets?: boolean;
   isDark: boolean;
   onMermaidSettled?: () => void;
 }
@@ -75,7 +77,13 @@ interface AsciidocHostState {
 const asciidocHostState = new WeakMap<HTMLElement, AsciidocHostState>();
 
 function asciidocOptionsKey(options: AsciidocRenderOptions): string {
-  return JSON.stringify([options.baseDir ?? "", options.math, options.mermaid, options.isDark]);
+  return JSON.stringify([
+    options.baseDir ?? "",
+    options.math,
+    options.mermaid,
+    options.widgets ?? true,
+    options.isDark,
+  ]);
 }
 
 /** Asciidoctor separates AsciiMath lines with `<br>` inside the block. */
@@ -294,7 +302,7 @@ function decorateAsciidocSubtree(
       renderMathIn(root);
     }
   }
-  decorateCodeBlocks(root, options.mermaid);
+  decorateCodeBlocks(root, options.mermaid, options.widgets ?? true);
   decorateLinks(root, options.baseDir);
 }
 
@@ -488,7 +496,7 @@ async function finalizeAsciidocDom(
       await renderAsciiMathIn(host);
     }
   }
-  decorateCodeBlocks(host, options.mermaid);
+  decorateCodeBlocks(host, options.mermaid, options.widgets ?? true);
   decorateLinks(host, options.baseDir);
 
   return { linesMapped: host.querySelectorAll("[data-line]").length >= 2, blocks };
