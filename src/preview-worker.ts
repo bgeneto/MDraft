@@ -40,7 +40,13 @@ interface CachedWorkerRender {
 let lastRender: CachedWorkerRender | null = null;
 
 function chunkOptionsKey(options: ChunkOptions): string {
-  return JSON.stringify([options.math ?? true, options.map ?? false]);
+  return JSON.stringify([
+    options.math ?? true,
+    options.map ?? false,
+    options.highlight ?? false,
+    options.subscript ?? false,
+    options.superscript ?? false,
+  ]);
 }
 
 const scope = self as unknown as {

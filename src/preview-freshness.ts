@@ -59,6 +59,9 @@ export function proseKey(
     documentPath: string | null;
     math: boolean;
     mermaid: boolean;
+    highlight?: boolean;
+    subscript?: boolean;
+    superscript?: boolean;
     widgets?: boolean;
   },
 ): string {
@@ -71,6 +74,9 @@ export function proseKey(
     options.documentPath,
     options.math,
     options.mermaid,
+    options.highlight ?? false,
+    options.subscript ?? false,
+    options.superscript ?? false,
     options.widgets ?? true,
   ]);
 }

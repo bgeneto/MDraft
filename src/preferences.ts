@@ -2265,6 +2265,27 @@ function buildSections(
         },
         {
           kind: "checkbox",
+          label: "Highlight",
+          help: "Renders ==text== as highlighted text.",
+          get: () => s().enableHighlight,
+          set: (value) => host.update({ enableHighlight: value }),
+        },
+        {
+          kind: "checkbox",
+          label: "Subscript",
+          help: "Renders H~2~O as subscript. When off, ~text~ is strikethrough, as on GitHub.",
+          get: () => s().enableSubscript,
+          set: (value) => host.update({ enableSubscript: value }),
+        },
+        {
+          kind: "checkbox",
+          label: "Superscript",
+          help: "Renders x^2^ as superscript.",
+          get: () => s().enableSuperscript,
+          set: (value) => host.update({ enableSuperscript: value }),
+        },
+        {
+          kind: "checkbox",
           label: "Render Chat Figures",
           help: "Draws figures that chat assistants write as ```svg fences or <card>/<box> markup. Interactive controls are shown at their starting values.",
           get: () => s().enableWidgets,
@@ -2273,7 +2294,7 @@ function buildSections(
         {
           kind: "note",
           label: "Extensions",
-          text: "GitHub alerts (> [!NOTE]), task lists, tables, [TOC] and YAML front matter are always enabled. Math inside code spans and fenced blocks is never transformed.",
+          text: "Footnotes ([^1]), GitHub alerts and Obsidian callouts (> [!NOTE], > [!tip]- Title), task lists, tables, [TOC] and YAML front matter are always enabled. A ```math fence follows Enable Math. Math inside code spans and other fenced blocks is never transformed.",
         },
       ],
     },

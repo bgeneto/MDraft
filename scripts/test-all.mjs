@@ -175,6 +175,14 @@ const SUITES = [
     script: "preview-render-unit.mjs",
   },
   {
+    // Footnotes, ==highlight==, H~2~O, x^2^ and ```math fences through the
+    // same pipeline, including incremental re-renders that renumber notes.
+    id: "md-extensions-unit",
+    title: "Markdown extensions (unit)",
+    kind: "node",
+    script: "markdown-extensions-unit.mjs",
+  },
+  {
     id: "preview-worker-unit",
     title: "Preview worker ownership (unit)",
     kind: "node",

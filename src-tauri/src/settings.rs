@@ -706,6 +706,12 @@ pub struct Settings {
     // ---- Preferences: Markdown -------------------------------------------
     pub enable_math: bool,
     pub enable_mermaid: bool,
+    /// `==text==` as highlighted text.
+    pub enable_highlight: bool,
+    /// `H~2~O` as subscript. Off, a single `~x~` is GFM strikethrough again.
+    pub enable_subscript: bool,
+    /// `x^2^` as superscript.
+    pub enable_superscript: bool,
     /// Render chat-assistant figure fences (`svg`, `<card>`, `<box>`) as
     /// graphics. Missing in settings written before the option existed.
     #[serde(default = "default_true")]
@@ -956,6 +962,9 @@ impl Default for Settings {
 
             enable_math: true,
             enable_mermaid: true,
+            enable_highlight: true,
+            enable_subscript: true,
+            enable_superscript: true,
             enable_widgets: true,
             html_preview_scripts: true,
 
@@ -2658,5 +2667,21 @@ mod tests {
         // The flag round-trips, so the second launch takes the "tabs" path.
         let seen = parse_settings(r#"{"welcomeSeen":true}"#).expect("the flag loads");
         assert!(seen.welcome_seen);
+    }
+
+    #[test]
+    fn inline_markdown_extensions_default_on_and_an_older_file_keeps_them_on() {
+        let fresh = Settings::default();
+        assert!(fresh.enable_highlight && fresh.enable_subscript && fresh.enable_superscript);
+        // A file written before the three preferences existed turns them on.
+        let older = parse_settings(r#"{"enableMath":false}"#).expect("an older file loads");
+        assert!(older.enable_highlight && older.enable_subscript && older.enable_superscript);
+        let off = parse_settings(
+            r#"{"enableHighlight":false,"enableSubscript":false,"enableSuperscript":false}"#,
+        )
+        .expect("the preferences load");
+        assert!(!off.enable_highlight && !off.enable_subscript && !off.enable_superscript);
+        let json = serde_json::to_string(&off).unwrap();
+        assert!(json.contains(r#""enableSubscript":false"#));
     }
 }

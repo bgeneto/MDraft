@@ -333,11 +333,9 @@ console.log("\n=== atomic spans ===");
   const alertSpans = await evaluate(
     `document.querySelectorAll("#preview .md-alert [data-f]").length`,
   );
-  check(
-    "the alert paragraph has no fragments (documented fallback)",
-    alertSpans === 0,
-    `${alertSpans}`,
-  );
+  // The callout pass hides the marker in place instead of rewriting the
+  // paragraph's text, so the alert keeps its word fragments.
+  check("the alert paragraph keeps its fragments", alertSpans > 0, `${alertSpans}`);
 }
 
 console.log("\n=== across blocks ===");

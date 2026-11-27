@@ -570,6 +570,186 @@ try {
     JSON.stringify(workers),
   );
 
+  // Obsidian callouts and GitHub alerts from samples/markdown-extensions.md,
+  // through the worker with the word map and through the synchronous export.
+  const callouts = await evaluate(`(async()=>{
+    const source=await (await fetch('/samples/markdown-extensions.md')).text();
+    const opts={baseDir:null,math:true,mermaid:false,map:true};
+    const host=document.createElement('div');document.body.replaceChildren(host);
+    await window.previewTest.renderPreviewInto(host,source,opts,()=>false);
+    const sync=document.createElement('div');document.body.appendChild(sync);
+    sync.innerHTML=window.previewTest.renderPreview(source,{...opts,map:false}).html;
+    const describe=(root)=>Array.from(root.querySelectorAll('blockquote.md-alert')).map(q=>{
+      const title=q.querySelector(':scope > .md-alert-title, :scope > details > .md-alert-title');
+      const fold=q.querySelector(':scope > details');
+      return {cls:q.className,title:title?.innerText.trim(),strong:!!title?.querySelector('strong'),
+        tag:title?.tagName,fold:fold?(fold.open?'open':'closed'):'none',
+        titleF:!!title?.querySelector('[data-f]'),body:q.innerText.replace(title?.innerText??'','').trim()};
+    });
+    const firstBody=host.querySelector('blockquote.md-alert-note > p:not(.md-alert-title)');
+    return {live:describe(host),sync:describe(sync),
+      markerLeak:host.innerText.includes('[!')||sync.innerText.includes('[!'),
+      noteBold:!!firstBody?.querySelector('strong'),noteF:!!firstBody?.querySelector('[data-f]'),
+      markers:host.querySelectorAll('.md-alert-marker[hidden]').length};
+  })()`);
+  const byTitle = (list, title) => list.find((entry) => entry.title === title);
+  check(
+    "callouts: six alerts in the fixture",
+    callouts.live.length === 6,
+    JSON.stringify(callouts.live),
+  );
+  check(
+    "callouts: worker and synchronous export agree",
+    JSON.stringify(callouts.live.map(({ titleF, ...rest }) => rest)) ===
+      JSON.stringify(callouts.sync.map(({ titleF, ...rest }) => rest)),
+  );
+  check("callouts: no marker text is visible", !callouts.markerLeak);
+  check(
+    "callouts: each marker is hidden in place",
+    callouts.markers === 6,
+    String(callouts.markers),
+  );
+  const note = byTitle(callouts.live, "Note");
+  check(
+    "callouts: a GitHub alert keeps its first-line formatting and fragments",
+    note?.cls === "md-alert md-alert-note" && callouts.noteBold && callouts.noteF,
+    JSON.stringify(note),
+  );
+  const tip = byTitle(callouts.live, "Custom title");
+  check(
+    "callouts: [!tip]- is a closed fold with a formatted, mapped title",
+    tip?.tag === "SUMMARY" &&
+      tip.fold === "closed" &&
+      tip.strong &&
+      tip.titleF &&
+      tip.cls === "md-alert md-alert-tip",
+    JSON.stringify(tip),
+  );
+  const faq = byTitle(callouts.live, "Open question");
+  check(
+    "callouts: [!faq]+ is an open fold coloured as a question",
+    faq?.fold === "open" &&
+      faq.cls === "md-alert md-alert-question" &&
+      faq.body === "Expanded by default.",
+    JSON.stringify(faq),
+  );
+  const example = byTitle(callouts.live, "Example");
+  check(
+    "callouts: a type without a title shows its name",
+    example?.tag === "P" && example.fold === "none" && example.body === "No custom title.",
+    JSON.stringify(example),
+  );
+  const inner = byTitle(callouts.live, "Inner");
+  check(
+    "callouts: a nested callout keeps its own kind",
+    byTitle(callouts.live, "Nested")?.cls === "md-alert md-alert-quote" &&
+      inner?.cls === "md-alert md-alert-warning" &&
+      inner.body === "Inside the quote.",
+    JSON.stringify(inner),
+  );
+  const calloutEdge = await evaluate(`(()=>{
+    const render=(source)=>{const div=document.createElement('div');
+      div.innerHTML=window.previewTest.renderPreview(source,{baseDir:null,math:false,mermaid:false}).html;document.body.appendChild(div);return div;};
+    const unknown=render('> [!custom-thing] Mine\\n> Body');
+    const plain=render('> [!not a marker]\\n> Body');
+    const only=render('> [!WARNING] Just a title');
+    const late=render('> Text first\\n> [!NOTE]');
+    return {unknown:unknown.querySelector('blockquote')?.className+'|'+unknown.querySelector('.md-alert-title')?.innerText.trim(),
+      plain:plain.querySelector('.md-alert')===null,
+      only:only.querySelector('.md-alert-title')?.innerText.trim()+'|'+only.querySelectorAll('blockquote > p:not([hidden])').length,
+      late:late.querySelector('.md-alert')===null};
+  })()`);
+  check(
+    "callouts: an unknown type is a note under its own title",
+    calloutEdge.unknown === "md-alert md-alert-note|Mine",
+    calloutEdge.unknown,
+  );
+  check("callouts: a marker with spaces stays a plain quote", calloutEdge.plain);
+  check(
+    "callouts: a title-only callout has no empty body paragraph",
+    calloutEdge.only === "Just a title|1",
+    calloutEdge.only,
+  );
+  check("callouts: a marker after text is not a callout", calloutEdge.late);
+  const referenceCallouts = await evaluate(`(async()=>{
+    const { REFERENCE } = await import('/src/content.ts');
+    const host=document.createElement('div');document.body.replaceChildren(host);
+    const rendered=window.previewTest.renderPreview(REFERENCE,{baseDir:null,math:true,mermaid:false});
+    host.innerHTML=rendered.html;
+    if(!rendered.linesMapped) return 'lines not mapped';
+    return [...host.querySelectorAll('blockquote.md-alert')].map(q=>q.className.split(' ')[1]+
+      (q.querySelector(':scope > details')?(q.querySelector(':scope > details').open?'+':'-'):'')).join(',');
+  })()`);
+  check(
+    "callouts: the Markdown Reference shows alerts, folds and a nested callout",
+    referenceCallouts ===
+      "md-alert-note,md-alert-warning,md-alert-tip-,md-alert-question+,md-alert-example",
+    referenceCallouts,
+  );
+
+  // Footnotes, math fences and inline syntax from the same fixture: the
+  // footnotes section is one more anchored top-level element in both paths.
+  const notes = await evaluate(`(async()=>{
+    const source=await (await fetch('/samples/markdown-extensions.md')).text();
+    const opts={baseDir:null,math:true,mermaid:false,map:true,highlight:true,subscript:true,superscript:true};
+    const host=document.createElement('div');document.body.replaceChildren(host);
+    const live=await window.previewTest.renderPreviewInto(host,source,opts,()=>false);
+    const sync=window.previewTest.renderPreview(source,{...opts,map:false});
+    const syncHost=document.createElement('div');syncHost.innerHTML=sync.html;
+    const strip=(html)=>html.replace(/ data-(?:f|line)="[^"]*"/g,'').replace(/<\\/?span>/g,'');
+    const section=host.querySelector(':scope > section.footnotes');
+    const raw='<div class="box">raw</div>\\n\\nCite[^r].\\n\\n[^r]: Raw path note with $x$.\\n';
+    const rawHost=document.createElement('div');document.body.appendChild(rawHost);
+    const rawLive=await window.previewTest.renderPreviewInto(rawHost,raw,opts,()=>false);
+    const hrefOf=(a)=>a.getAttribute('data-href')??a.getAttribute('href')??'';
+    const target=(a)=>host.querySelector('[id="'+hrefOf(a).slice(1)+'"]');
+    return {
+      liveMapped:live.linesMapped, syncMapped:sync.linesMapped,
+      last:host.lastElementChild===section, sectionLine:section?.getAttribute('data-line') ?? null,
+      items:[...(section?.querySelectorAll('li[id]')??[])].map(li=>li.id),
+      refs:[...host.querySelectorAll('sup.footnote-ref a')].map(a=>hrefOf(a)+'>'+a.textContent),
+      targets:[...host.querySelectorAll('sup.footnote-ref a')].every(target),
+      backs:[...host.querySelectorAll('a.footnote-backref')].every(target),
+      noteF:!!section?.querySelector('[data-f]'), noteCode:!!section?.querySelector('code'),
+      parity:strip(syncHost.querySelector('section.footnotes')?.outerHTML??'x')===strip(section?.outerHTML??'y'),
+      fence:!!host.querySelector('.katex-display') && !host.querySelector('code.language-math'),
+      inline:['mark','sub',':not(.footnote-backref) > sup:not(.footnote-ref)'].map(sel=>host.querySelectorAll(sel).length).join(','),
+      rawMapped:rawLive.linesMapped, rawNote:!!rawHost.querySelector('section.footnotes li .katex'),
+    };
+  })()`);
+  check(
+    "footnotes: every top-level element anchored in the worker and export paths",
+    notes.liveMapped && notes.syncMapped,
+    JSON.stringify([notes.liveMapped, notes.syncMapped]),
+  );
+  check(
+    "footnotes: the section is the last element and anchored",
+    notes.last && notes.sectionLine !== null,
+  );
+  check(
+    "footnotes: cited notes listed in citation order, unused ones left out",
+    JSON.stringify(notes.items) === JSON.stringify(["fn-boil", "fn-alt", "fn-code", "fn-long"]),
+    JSON.stringify(notes.items),
+  );
+  check(
+    "footnotes: references are numbered by first citation",
+    JSON.stringify(notes.refs) ===
+      JSON.stringify(["#fn-boil>1", "#fn-alt>2", "#fn-boil>1", "#fn-code>3", "#fn-long>4"]),
+    JSON.stringify(notes.refs),
+  );
+  check(
+    "footnotes: every reference and back-reference has its target",
+    notes.targets && notes.backs,
+  );
+  check("footnotes: note text keeps word fragments and code", notes.noteF && notes.noteCode);
+  check("footnotes: the worker and the export draw the same section", notes.parity);
+  check("math fence: KaTeX display, no code block", notes.fence);
+  check("inline syntax: mark, sub and sup drawn", notes.inline === "1,1,1", notes.inline);
+  check(
+    "footnotes: the raw-HTML path anchors the section and renders its math",
+    notes.rawMapped && notes.rawNote,
+  );
+
   // A separate page creates a fresh channel so the constructor failure really
   // exercises the synchronous fallback rather than an already-running worker.
   await navigate();

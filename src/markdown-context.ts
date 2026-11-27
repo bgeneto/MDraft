@@ -40,20 +40,52 @@ export function markdownProtectedRanges(source: string): SourceRange[] {
   return markdownScanProtectedAndCode(source, false).protectedRanges;
 }
 
+/** A ```math fence: display math written the way GitHub and GitLab accept it. */
+export interface MathFence {
+  from: number;
+  to: number;
+  body: string;
+}
+
+/** Cheap gate: could the source hold a ```math fence at all? */
+export function hasMathFence(source: string): boolean {
+  return /^[ \t>]*(?:`{3,}|~{3,})[ \t]*math[ \t]*$/im.test(source);
+}
+
 /**
- * Extract both inline code spans and math-protected ranges in a single Lezer parse
- * so `renderChunks` never parses the source twice.
+ * Extract inline code spans, math-protected ranges and ```math fences in a
+ * single Lezer parse so `renderChunks` never parses the source twice.
  */
 export function markdownScanProtectedAndCode(
   source: string,
   collectCode = true,
-): { codeSpans: SourceRange[]; protectedRanges: SourceRange[] } {
+): { codeSpans: SourceRange[]; protectedRanges: SourceRange[]; mathFences: MathFence[] } {
   const codeSpans: SourceRange[] = [];
   const ranges: SourceRange[] = [];
+  const mathFences: MathFence[] = [];
   markdownLanguage.parser.parse(source).iterate({
     enter(node) {
       if (collectCode && node.name === "InlineCode") {
         codeSpans.push({ from: node.from, to: node.to });
+      }
+      if (node.name === "FencedCode") {
+        const info = node.node.getChild("CodeInfo");
+        if (info && source.slice(info.from, info.to).trim().toLowerCase() === "math") {
+          // Inside a block quote every body line still carries its `>` prefix;
+          // such a fence stays a code block rather than feed TeX a quote marker.
+          let quoted = false;
+          for (let up = node.node.parent; up; up = up.parent) {
+            if (up.name === "Blockquote") quoted = true;
+          }
+          if (!quoted) {
+            const text = node.node.getChild("CodeText");
+            mathFences.push({
+              from: node.from,
+              to: node.to,
+              body: text ? source.slice(text.from, text.to).trim() : "",
+            });
+          }
+        }
       }
       if (PROTECTED.has(node.name)) {
         ranges.push({
@@ -83,5 +115,5 @@ export function markdownScanProtectedAndCode(
       last.barrier = last.barrier !== false || range.barrier !== false;
     } else merged.push({ ...range });
   }
-  return { codeSpans, protectedRanges: merged };
+  return { codeSpans, protectedRanges: merged, mathFences };
 }

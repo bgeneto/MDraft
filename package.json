@@ -94,6 +94,7 @@
     "single:instance": "node scripts/single-instance-test.mjs",
     "preview:zoom": "node scripts/preview-zoom-test.mjs",
     "preview:unit": "node scripts/preview-render-unit.mjs",
+    "md-extensions:unit": "node scripts/markdown-extensions-unit.mjs",
     "preview:worker:unit": "node scripts/preview-worker-unit.mjs",
     "preview-owner:unit": "node scripts/preview-owner-unit.mjs",
     "preview-freshness:unit": "node scripts/preview-freshness-unit.mjs",
