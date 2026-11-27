@@ -79,6 +79,7 @@
     "latex:native": "node scripts/latex-native-test.mjs",
     "html:map:unit": "node scripts/html-source-map-unit.mjs",
     "block:map:unit": "node scripts/block-map-unit.mjs",
+    "widgets:unit": "node scripts/widgets-unit.mjs",
     "ai": "node scripts/ai-assistant-test.mjs",
     "ai:unit": "node scripts/ai-unit.mjs",
     "ai:live": "node scripts/ai-live-test.mjs",

@@ -24,6 +24,7 @@
   ],
   "samples": {
     "samples/asciidoc-include.adoc": "AsciiDoc relative include regression dependency",
+    "samples/chat-figures.md": "Chat-assistant figure fences: widgets unit suite and preview/export checks",
     "samples/asciidoc-reference.adoc": "Built-in AsciiDoc reference behavior and regression corpus",
     "samples/asciidoc-tour.adoc": "AsciiDoc rendering/export/include UI regression corpus",
     "samples/export-tour.adoc": "AsciiDoc native/browser/PDF export regression fixture",

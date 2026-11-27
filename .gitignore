@@ -121,6 +121,7 @@ Thumbs.db
 !/samples/asciidoc-include.adoc
 !/samples/asciidoc-reference.adoc
 !/samples/asciidoc-tour.adoc
+!/samples/chat-figures.md
 !/samples/export-tour.adoc
 !/samples/export-tour.md
 !/samples/feature-tour.md

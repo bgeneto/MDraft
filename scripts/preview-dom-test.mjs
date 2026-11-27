@@ -317,6 +317,99 @@ try {
     "the worker path strips scripts, event handlers and javascript URLs",
     security.scripts === 0 && security.badAttributes === 0 && security.ran === 0 && security.safe,
   );
+  // Chat-assistant figures (samples/chat-figures.md): five render, one falls
+  // back with its reason, and two genuine code samples stay code.
+  const figures = await evaluate(`(async()=>{
+    const source=await (await fetch('/samples/chat-figures.md')).text();
+    const host=document.createElement('div');host.style.width='760px';document.body.replaceChildren(host);
+    const live=await window.previewTest.renderPreviewInto(host,source,{baseDir:null,math:false,mermaid:false,map:true},()=>false);
+    const sync=window.previewTest.renderPreview(source,{baseDir:null,math:false,mermaid:false});
+    const exported=document.createElement('div');exported.innerHTML=sync.html;
+    const figs=[...host.querySelectorAll('figure.md-widget')];
+    const svgs=figs.map(f=>f.querySelector('svg'));
+    const count=(f,sel)=>f?f.querySelectorAll(sel).length:-1;
+    const bad=figs.flatMap(f=>[...f.querySelectorAll('*')]).flatMap(e=>[...e.attributes]).filter(a=>/^on/i.test(a.name)||a.name==='href'||a.name==='src'||/javascript:/i.test(a.value));
+    const fallback=host.querySelector('.mdw-fallback');
+    const gradient=figs[4]?.querySelector('linearGradient');
+    const rectFill=figs[4]?.querySelector('rect')?.getAttribute('fill')??'';
+    const label=figs[0]?.querySelector('text');
+    host.style.color='rgb(10, 20, 30)';const darkFill=getComputedStyle(label).fill;
+    host.style.color='rgb(240, 241, 242)';const lightFill=getComputedStyle(label).fill;
+    const off=document.createElement('div');
+    await window.previewTest.renderPreviewInto(off,source,{baseDir:null,math:false,mermaid:false,widgets:false,map:true},()=>false);
+    return {
+      figures:figs.length,exportFigures:exported.querySelectorAll('figure.md-widget').length,
+      pres:host.querySelectorAll('pre').length,linesMapped:live.linesMapped,
+      anchored:figs.every(f=>f.hasAttribute('data-f')),
+      svgNamespace:svgs.filter(Boolean).every(s=>s instanceof SVGSVGElement),
+      width:Math.round(svgs[0]?.getBoundingClientRect().width??0),
+      rects1:count(figs[0],'rect'),rects3:count(figs[2],'rect'),paths3:count(figs[2],'path'),
+      icons2:count(figs[1],'.mdw-icon svg'),
+      text4:figs[3]?.textContent.replace(/\\s+/g,' ')??'',bold4:figs[3]?.querySelector('strong')?.textContent??'',
+      controls:figs.reduce((n,f)=>n+f.querySelectorAll('input,button,select,textarea').length,0),
+      bad:bad.length,styles:!!document.getElementById('mdraft-widget-styles'),
+      note:fallback?.querySelector('.mdw-error')?.textContent??'',fallbackPre:!!fallback?.querySelector('pre'),
+      gradientId:gradient?.id??'',rectFill,
+      referenced:!!(gradient&&rectFill==='url(#'+gradient.id+')'),
+      darkFill,lightFill,
+      offFigures:off.querySelectorAll('figure.md-widget').length,offPres:off.querySelectorAll('pre').length,
+    };
+  })()`);
+  check(
+    "five chat figures render in the live preview",
+    figures.figures === 5,
+    String(figures.figures),
+  );
+  check("the export path renders the same figures", figures.exportFigures === 5);
+  check("unsupported and ordinary code stays code", figures.pres === 3, String(figures.pres));
+  check(
+    "figures keep the block map",
+    figures.linesMapped && figures.anchored,
+    JSON.stringify({ linesMapped: figures.linesMapped, anchored: figures.anchored }),
+  );
+  check(
+    "figure SVG is real SVG with a laid-out width",
+    figures.svgNamespace && figures.width > 300,
+    String(figures.width),
+  );
+  check(
+    "{#each} expands in the DOM",
+    figures.rects1 === 10 && figures.rects3 === 10 && figures.paths3 === 9,
+  );
+  check("layout icons draw", figures.icons2 === 5, String(figures.icons2));
+  check(
+    "interactive figure shows its starting values",
+    figures.text4.includes("10,240") && figures.text4.includes("2.0×") && figures.bold4 === "20",
+    figures.text4.slice(0, 120),
+  );
+  check("figures contain no form controls", figures.controls === 0);
+  check(
+    "figures carry no handler, link or source attribute",
+    figures.bad === 0,
+    String(figures.bad),
+  );
+  check("figure styles are installed", figures.styles);
+  check(
+    "an unsupported figure keeps its code and states the reason",
+    figures.fallbackPre && /<tabs>.*line 2/.test(figures.note),
+    figures.note,
+  );
+  check(
+    "gradient ids are prefixed and still referenced",
+    /^mdw\d+-fade$/.test(figures.gradientId) && figures.referenced,
+    `${figures.gradientId} ${figures.rectFill}`,
+  );
+  check(
+    "currentColor follows the preview text colour",
+    figures.darkFill === "rgb(10, 20, 30)" && figures.lightFill === "rgb(240, 241, 242)",
+    `${figures.darkFill} / ${figures.lightFill}`,
+  );
+  check(
+    "the preference off leaves every fence as code",
+    figures.offFigures === 0 && figures.offPres === 8,
+    `${figures.offFigures}/${figures.offPres}`,
+  );
+
   const empty =
     await evaluate(`(async()=>{const host=document.createElement('div');const opts={baseDir:null,math:false,mermaid:false,map:true};
     const sync=window.previewTest.renderPreview('',opts);const live=await window.previewTest.renderPreviewInto(host,'',opts,()=>false);

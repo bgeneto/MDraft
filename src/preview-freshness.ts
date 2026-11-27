@@ -62,6 +62,7 @@ export function proseKey(
     highlight?: boolean;
     subscript?: boolean;
     superscript?: boolean;
+    widgets?: boolean;
   },
 ): string {
   return JSON.stringify([
@@ -76,6 +77,7 @@ export function proseKey(
     options.highlight ?? false,
     options.subscript ?? false,
     options.superscript ?? false,
+    options.widgets ?? true,
   ]);
 }
 

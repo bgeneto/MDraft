@@ -612,6 +612,14 @@ const SUITES = [
     script: "block-map-unit.mjs",
   },
   {
+    // Chat-assistant figure fences: template SVG loops, layout components,
+    // interactive blocks drawn at their initial state, and hostile markup.
+    id: "widgets-unit",
+    title: "Chat figures (unit)",
+    kind: "node",
+    script: "widgets-unit.mjs",
+  },
+  {
     // Quoting and parsing an arbitrary installed family name into a CSS stack:
     // commas, quotes, backslashes and generic keywords. Pure, no application.
     id: "typography-unit",

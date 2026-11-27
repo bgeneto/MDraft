@@ -154,6 +154,7 @@ here with its public purpose and, for owner sessions, to the private catalog.
 | `npm run latex:ondemand` | `node scripts/latex-on-demand-test.mjs` |
 | `npm run html:map:unit` | `node scripts/html-source-map-unit.mjs` |
 | `npm run block:map:unit` | `node scripts/block-map-unit.mjs` |
+| `npm run widgets:unit` | `node scripts/widgets-unit.mjs` — chat-assistant figure fences: fixtures in `samples/chat-figures.md`, expression evaluation, and hostile markup that must stay a code block. |
 | `npm run ai` | `node scripts/ai-assistant-test.mjs` |
 | `npm run ai:unit` | `node scripts/ai-unit.mjs` |
 | `npm run ai:live` | `node scripts/ai-live-test.mjs` |

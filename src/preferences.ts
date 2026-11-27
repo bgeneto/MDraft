@@ -2285,6 +2285,13 @@ function buildSections(
           set: (value) => host.update({ enableSuperscript: value }),
         },
         {
+          kind: "checkbox",
+          label: "Render Chat Figures",
+          help: "Draws figures that chat assistants write as ```svg fences or <card>/<box> markup. Interactive controls are shown at their starting values.",
+          get: () => s().enableWidgets,
+          set: (value) => host.update({ enableWidgets: value }),
+        },
+        {
           kind: "note",
           label: "Extensions",
           text: "Footnotes ([^1]), GitHub alerts and Obsidian callouts (> [!NOTE], > [!tip]- Title), task lists, tables, [TOC] and YAML front matter are always enabled. A ```math fence follows Enable Math. Math inside code spans and other fenced blocks is never transformed.",

@@ -33,6 +33,8 @@ import "katex/dist/katex.min.css";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { PRINT_READY_SCRIPT } from "./print-ready";
 import { resolveLegacyLocalImage } from "./api";
+import { compileWidgetCached } from "./widgets/index.ts";
+import { buildWidget, buildWidgetFallback } from "./widgets/dom.ts";
 
 /**
  * The KaTeX stylesheet, for exported documents that no longer live inside the
@@ -60,6 +62,11 @@ export interface RenderOptions extends InlineSyntaxOptions {
   math?: boolean;
   /** Render `mermaid` fences as diagrams. When false they stay code blocks. */
   mermaid?: boolean;
+  /**
+   * Render chat-assistant figures (`svg` fences and the `<card>`/`<box>`
+   * component dialect) as graphics. When false they stay code blocks.
+   */
+  widgets?: boolean;
   /**
    * Emit the source fragments word-level sync needs. Off for exports: they have
    * no source pane to point at, and the wrapper spans are only weight.
@@ -165,6 +172,7 @@ function markdownOptionsKey(options: RenderOptions): string {
     options.documentPath ?? "",
     options.math ?? true,
     options.mermaid ?? true,
+    options.widgets ?? true,
     options.map ?? false,
     options.highlight ?? false,
     options.subscript ?? false,
@@ -266,7 +274,7 @@ function buildSingleMarkdownBlockElements(
   holder.innerHTML = DOMPurify.sanitize(block.html, SANITIZE_OPTIONS);
   normalizeInputs(holder);
   restorePlaceholders(holder, block.codes, block.maths);
-  decorateCodeBlocks(holder, options.mermaid ?? true);
+  decorateCodeBlocks(holder, options.mermaid ?? true, options.widgets ?? true);
   decorateLinks(holder, options.baseDir, undefined, options.documentPath ?? null, false);
   decorateAlerts(holder);
   return Array.from(holder.children) as HTMLElement[];
@@ -523,7 +531,7 @@ function insertBlockBatch(
   holder.innerHTML = DOMPurify.sanitize(htmlParts.join(""), SANITIZE_OPTIONS);
   normalizeInputs(holder);
   restorePlaceholders(holder, batchCodes, batchMaths);
-  decorateCodeBlocks(holder, options.mermaid ?? true);
+  decorateCodeBlocks(holder, options.mermaid ?? true, options.widgets ?? true);
   if (grouping) grouping.append(holder);
   else while (holder.firstChild) host.appendChild(holder.firstChild);
 }
@@ -539,7 +547,7 @@ function insertBatch(
   holder.innerHTML = DOMPurify.sanitize(batch.join(""), SANITIZE_OPTIONS);
   normalizeInputs(holder);
   restorePlaceholders(holder, data.codes, data.maths);
-  decorateCodeBlocks(holder, options.mermaid ?? true);
+  decorateCodeBlocks(holder, options.mermaid ?? true, options.widgets ?? true);
   if (grouping) grouping.append(holder);
   else while (holder.firstChild) host.appendChild(holder.firstChild);
 }
@@ -953,7 +961,11 @@ export const MARKDOWN_EXTENSION_CSS = `
 .markdown-body .footnotes ol{padding-left:1.6em}
 `;
 
-export function decorateCodeBlocks(host: HTMLElement, mermaidEnabled = true): void {
+export function decorateCodeBlocks(
+  host: HTMLElement,
+  mermaidEnabled = true,
+  widgetsEnabled = true,
+): void {
   for (const pre of Array.from(host.querySelectorAll("pre"))) {
     const code = pre.querySelector("code");
     if (!code) continue;
@@ -972,6 +984,21 @@ export function decorateCodeBlocks(host: HTMLElement, mermaidEnabled = true): vo
     }
 
     const source = code.textContent ?? "";
+    if (widgetsEnabled && !pre.closest(".md-widget")) {
+      const widget = compileWidgetCached(source, language ?? "");
+      if (widget.kind === "ok") {
+        const figure = buildWidget(widget.nodes);
+        // The fence's source fragment and line anchor belong to the figure now,
+        // so scroll sync and click-to-source treat it as the block it replaced.
+        for (const name of ["data-f", "data-line"]) {
+          const value = pre.getAttribute(name);
+          if (value !== null) figure.setAttribute(name, value);
+        }
+        pre.replaceWith(figure);
+        continue;
+      }
+      if (widget.kind === "error") buildWidgetFallback(pre, widget.message, widget.line);
+    }
     try {
       if (language && hljs.getLanguage(language)) {
         code.innerHTML = hljs.highlight(source, { language, ignoreIllegals: true }).value;
